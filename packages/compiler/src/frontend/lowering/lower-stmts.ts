@@ -1216,26 +1216,52 @@ export function lowerStmt(lowerer: Lowerer, stmt: ts.Statement): IrStmt | IrStmt
   }
   if (ts.isIfStatement(stmt)) {
     const cond = lowerer.lowerCondition(stmt.expression);
+    // A condition the lowerer folded (`typeof x === "number"` on a string
+    // specialization, `arr instanceof Date`) still used to lower the dead
+    // arm. Those arms fence under the live specialization and keep the
+    // whole function deferred. Skip them, but keep the condition's own
+    // effects and any hoisted `var` (its binding exists even when the
+    // assignment does not run).
+    const folded = foldedCondition(cond);
+    const deadBranch = folded
+      ? folded.value
+        ? stmt.elseStatement
+        : stmt.thenStatement
+      : undefined;
+    const skipDead =
+      folded !== null && (deadBranch === undefined || !statementHasHoistedVar(deadBranch));
     // Aliased-typeof narrows (ms's `var type = typeof val` guard): the
     // then-branch lowers under what a TRUE condition proves, the
     // else-branch under a FALSE one — the var/let alias narrowing the
     // checker only performs for consts (aliasTypeofNarrows).
-    const then = lowerer.narrowingAliases(aliasTypeofNarrows(lowerer, stmt.expression, true), () =>
-      withRuntimeOptionalNarrowed(lowerer, runtimeOptionalTrueIds(lowerer, stmt.expression), () =>
-        lowerer.lowerScopedBlock(stmt.thenStatement),
-      ),
-    );
-    const else_ = stmt.elseStatement
-      ? lowerer.narrowingAliases(aliasTypeofNarrows(lowerer, stmt.expression, false), () =>
-          withRuntimeOptionalNarrowed(
-            lowerer,
-            runtimeOptionalGuardIds(lowerer, stmt.expression, false),
-            () => lowerer.lowerScopedBlock(stmt.elseStatement!),
-          ),
-        )
-      : null;
+    const then =
+      skipDead && folded !== null && !folded.value
+        ? []
+        : lowerer.narrowingAliases(aliasTypeofNarrows(lowerer, stmt.expression, true), () =>
+            withRuntimeOptionalNarrowed(
+              lowerer,
+              runtimeOptionalTrueIds(lowerer, stmt.expression),
+              () => lowerer.lowerScopedBlock(stmt.thenStatement),
+            ),
+          );
+    const else_ =
+      stmt.elseStatement === undefined
+        ? null
+        : skipDead && folded !== null && folded.value
+          ? null
+          : lowerer.narrowingAliases(aliasTypeofNarrows(lowerer, stmt.expression, false), () =>
+              withRuntimeOptionalNarrowed(
+                lowerer,
+                runtimeOptionalGuardIds(lowerer, stmt.expression, false),
+                () => lowerer.lowerScopedBlock(stmt.elseStatement!),
+              ),
+            );
     for (const local of falsyExitRuntimeOptionalLocals(lowerer, stmt)) {
       lowerer.runtimeOptionalLocals.delete(lowerer.runtimeOptionalRootOf(local));
+    }
+    if (skipDead && folded) {
+      const live = folded.value ? then : (else_ ?? []);
+      return { kind: "block", body: [...folded.effects, ...live], loc: locOf(stmt) };
     }
     return { kind: "if", cond, then, else_, loc: locOf(stmt) };
   }
@@ -3743,7 +3769,6 @@ export function checkBindingElement(
   }
 }
 
-
 /** A JavaScript default such as `maxFieldSize = 1024 * 1024` types the
  * binding as that number. A present value can still be a bigint. The
  * default already replaced undefined, so the present value stays checked
@@ -3958,10 +3983,7 @@ function inferredEvolvingLetType(lowerer: Lowerer, decl: ts.VariableDeclaration)
       while (ts.isParenthesizedExpression(left)) left = left.expression;
       if (ts.isIdentifier(left) && lowerer.checker.getSymbolAtLocation(left) === symbol) {
         const op = node.operatorToken.kind;
-        if (
-          op !== ts.SyntaxKind.EqualsToken &&
-          op !== ts.SyntaxKind.QuestionQuestionEqualsToken
-        ) {
+        if (op !== ts.SyntaxKind.EqualsToken && op !== ts.SyntaxKind.QuestionQuestionEqualsToken) {
           invalid = true;
           return "stop";
         }
@@ -5427,6 +5449,93 @@ function falsyExitRuntimeOptionalLocals(lowerer: Lowerer, stmt: ts.IfStatement):
  * bodies, lazy source-order test evaluation, fall-through. tsc has already
  * checked case-test comparability (TS2678) — the kind check below is the
  * backstop for cases tsc lets through (e.g. `unknown as` casts). */
+/** A condition lowered to a boolean constant, including `seqExpr` wrappers
+ * that still evaluate their operand (`value instanceof Date` on an array
+ * folds false and keeps the read). Null when the test is dynamic. */
+function foldedCondition(expr: IrExpr): { value: boolean; effects: IrStmt[] } | null {
+  if (expr.kind === "boolLit") return { value: expr.value, effects: [] };
+  if (expr.kind === "seqExpr") {
+    const inner = foldedCondition(expr.result);
+    if (inner === null) return null;
+    return { value: inner.value, effects: [...expr.stmts, ...inner.effects] };
+  }
+  return null;
+}
+
+/** String a folded discriminant names, through effect-preserving sequences. */
+function constantString(expr: IrExpr): string | null {
+  if (expr.kind === "strLit") return expr.value;
+  if (expr.kind === "seqExpr") return constantString(expr.result);
+  return null;
+}
+
+/** True when `root` declares a function-scoped `var`. Nested functions keep
+ * their own vars. A dead arm with a hoisted `var` still lowers: the binding
+ * exists for the rest of the function even though the initializer does not run. */
+function statementHasHoistedVar(root: ts.Node): boolean {
+  const visit = (node: ts.Node): boolean | undefined => {
+    if (node !== root && (ts.isFunctionLikeDeclaration(node) || ts.isClassLikeDeclaration(node)))
+      return undefined;
+    if (
+      ts.isVariableDeclarationList(node) &&
+      (ts.getCombinedNodeFlags(node) & (ts.NodeFlags.Let | ts.NodeFlags.Const)) === 0
+    ) {
+      return true;
+    }
+    return ts.forEachChild(node, visit);
+  };
+  return visit(root) === true;
+}
+
+function statementCompletes(stmt: ts.Statement): boolean {
+  if (
+    ts.isReturnStatement(stmt) ||
+    ts.isThrowStatement(stmt) ||
+    ts.isBreakStatement(stmt) ||
+    ts.isContinueStatement(stmt)
+  ) {
+    return true;
+  }
+  if (ts.isBlock(stmt)) return statementsComplete(stmt.statements);
+  if (ts.isLabeledStatement(stmt)) return statementCompletes(stmt.statement);
+  if (ts.isIfStatement(stmt) && stmt.elseStatement !== undefined) {
+    return statementCompletes(stmt.thenStatement) && statementCompletes(stmt.elseStatement);
+  }
+  return false;
+}
+
+function statementsComplete(statements: readonly ts.Statement[]): boolean {
+  const last = statements[statements.length - 1];
+  return last !== undefined && statementCompletes(last);
+}
+
+/** Which clauses a constant string discriminant can enter, including
+ * fallthrough until a clause returns, throws, or breaks. Null when a case
+ * label is not a string literal (it might match at runtime). */
+function reachableSwitchClauses(stmt: ts.SwitchStatement, value: string): boolean[] | null {
+  const clauses = stmt.caseBlock.clauses;
+  const labels: (string | null)[] = [];
+  for (const clause of clauses) {
+    if (!ts.isCaseClause(clause)) {
+      labels.push(null);
+      continue;
+    }
+    let expression: ts.Expression = clause.expression;
+    while (ts.isParenthesizedExpression(expression)) expression = expression.expression;
+    if (!ts.isStringLiteralLikeNode(expression)) return null;
+    labels.push(expression.text);
+  }
+  let start = labels.indexOf(value);
+  if (start < 0) start = labels.indexOf(null);
+  const mask = clauses.map(() => false);
+  if (start < 0) return mask;
+  for (let i = start; i < clauses.length; i++) {
+    mask[i] = true;
+    if (statementsComplete(clauses[i]!.statements)) break;
+  }
+  return mask;
+}
+
 export function lowerSwitch(lowerer: Lowerer, stmt: ts.SwitchStatement): IrStmt {
   // Consume labels before a nested statement can claim them. All switch
   // forms keep their own break target, including union comparisons.
@@ -5447,7 +5556,14 @@ export function lowerSwitch(lowerer: Lowerer, stmt: ts.SwitchStatement): IrStmt 
       lowerer.scopes.push(new Map());
       try {
         const cases: { test: IrExpr | null; body: IrStmt[] }[] = [];
-        for (const clause of stmt.caseBlock.clauses) {
+        // `switch (typeof value)` on a monomorphic specialization folds the
+        // discriminant to one string. Arms that cannot match still fenced
+        // under that specialization (Hash.hash("x") reporting string.getTime
+        // from the Date arm). Lower only the matching arm and its fallthrough.
+        const foldedDisc = constantString(disc);
+        const reachable = foldedDisc === null ? null : reachableSwitchClauses(stmt, foldedDisc);
+        for (let i = 0; i < stmt.caseBlock.clauses.length; i++) {
+          const clause = stmt.caseBlock.clauses[i]!;
           let test: IrExpr | null = null;
           if (ts.isCaseClause(clause)) {
             test = lowerer.lowerExpr(clause.expression);
@@ -5459,13 +5575,20 @@ export function lowerSwitch(lowerer: Lowerer, stmt: ts.SwitchStatement): IrStmt 
               );
             }
           }
+          const dead =
+            reachable !== null &&
+            reachable[i] !== true &&
+            !clause.statements.some((statement) => statementHasHoistedVar(statement));
           cases.push({
             test,
-            body: lowerer.inCtl(
-              "switch",
-              () => withRuntimeOptionalScope(lowerer, () => lowerer.lowerStmts(clause.statements)),
-              labels,
-            ),
+            body: dead
+              ? []
+              : lowerer.inCtl(
+                  "switch",
+                  () =>
+                    withRuntimeOptionalScope(lowerer, () => lowerer.lowerStmts(clause.statements)),
+                  labels,
+                ),
           });
         }
         return { kind: "switch", disc, cases, ...(labels && { labels }), loc: locOf(stmt) };
@@ -6188,8 +6311,11 @@ export function lowerExprStatement(lowerer: Lowerer, expr: ts.Expression): IrStm
   // statically selected arm when the condition folded without effects.
   if (ts.isConditionalExpression(expr)) {
     const cond = lowerer.lowerCondition(expr.condition);
-    if (cond.kind === "boolLit") {
-      return lowerExprStatement(lowerer, cond.value ? expr.whenTrue : expr.whenFalse);
+    const folded = foldedCondition(cond);
+    if (folded) {
+      const live = lowerExprStatement(lowerer, folded.value ? expr.whenTrue : expr.whenFalse);
+      if (folded.effects.length === 0) return live;
+      return { kind: "block", body: [...folded.effects, live], loc: locOf(expr) };
     }
     const then = lowerer.narrowingAliases(aliasTypeofNarrows(lowerer, expr.condition, true), () =>
       withRuntimeOptionalNarrowed(lowerer, runtimeOptionalTrueIds(lowerer, expr.condition), () => [

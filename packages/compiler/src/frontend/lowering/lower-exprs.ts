@@ -3164,9 +3164,7 @@ function patternBindingHost(
   let host: ts.Node | undefined = decl.parent;
   while (
     host !== undefined &&
-    (ts.isObjectBindingPattern(host) ||
-      ts.isArrayBindingPattern(host) ||
-      ts.isBindingElement(host))
+    (ts.isObjectBindingPattern(host) || ts.isArrayBindingPattern(host) || ts.isBindingElement(host))
   ) {
     host = host.parent;
   }
@@ -11997,10 +11995,12 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
         type: BOOL,
         loc,
       };
+    // Any other static kind is not a Map or Set. Folding keeps the operand
+    // and lets the dead arm drop instead of fencing under this specialization.
     return {
-      kind: "libCall",
-      fn: collection === "map" ? "dyn.nativeMapIs" : "dyn.nativeSetIs",
-      args: [lowerer.coerceInto(expr.left, value, DYN)],
+      kind: "seqExpr",
+      stmts: [{ kind: "exprStmt", expr: value, loc }],
+      result: { kind: "boolLit", value: false, type: BOOL, loc },
       type: BOOL,
       loc,
     };
@@ -12161,9 +12161,10 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
     // `x instanceof RegExp` over a union with a regex arm (the
     // skip-utility `string | RegExp` dispatch): a union tag test — the
     // socket-narrowing shape; the checker types the branches and
-    // maybeNarrow bridges the reads. A plain regex-typed LHS folds
-    // true; the fold keeps the operand-purity rule of the class folds
-    // (identifier reads only).
+    // maybeNarrow bridges the reads. A regex-typed LHS folds true and
+    // every other static kind folds false. Both folds keep the operand
+    // so a computed left-hand side still runs. Checked-dynamic values
+    // stay a runtime brand test.
     if (
       ts.isIdentifier(expr.right) &&
       lowerer.isStdlibGlobal(expr.right, "RegExp") &&
@@ -12188,9 +12189,9 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
         }
       }
       return {
-        kind: "libCall",
-        fn: "dyn.nativeRegexIs",
-        args: [lowerer.coerceInto(expr.left, left, DYN)],
+        kind: "seqExpr",
+        stmts: [{ kind: "exprStmt", expr: left, loc }],
+        result: { kind: "boolLit", value: left.type.kind === "regex", type: BOOL, loc },
         type: BOOL,
         loc,
       };
@@ -12648,12 +12649,7 @@ function lowerPrivateIn(
 /** `"k" in aString` throws TypeError. The operand is still evaluated. A
  * `typeof === "object" &&` guard must keep this throw on the right-hand
  * side so a string instantiation is not a function-level fence. */
-function lowerStringKeyIn(
-  recv: IrExpr,
-  key: string,
-  loc: SrcLoc,
-  pureNode: boolean,
-): IrExpr {
+function lowerStringKeyIn(recv: IrExpr, key: string, loc: SrcLoc, pureNode: boolean): IrExpr {
   const shown = recv.kind === "strLit" ? recv.value : "a string";
   const thrown = nodeThrowExpr(
     1,

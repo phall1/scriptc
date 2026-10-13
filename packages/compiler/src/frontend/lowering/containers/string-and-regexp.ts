@@ -7,6 +7,7 @@ import {
   type IrExpr,
   type IrStmt,
   type IrType,
+  NULL_T,
   STRING,
   type SrcLoc,
   UNDEFINED_T,
@@ -291,7 +292,107 @@ function lowerMethodReceiver(
   const optional = lowerer.runtimeOptionalPropertyReceiver(node, lowered, expected, member);
   if (optional) return optional;
   if (typeEquals(lowered.type, expected)) return lowered;
+  if (expected.kind === "string") {
+    const extracted = lowerNullableStringReceiver(lowerer, lowered, member, lowered.loc);
+    if (extracted) return extracted;
+  }
   return lowerer.coerceInto(node, lowered, expected);
+}
+
+/** String.prototype member of the string arm of a nullable-string union.
+ * The union itself has no property symbol, so isStdlibMember declines it. */
+function nullableStringStdlibMember(
+  lowerer: Lowerer,
+  access: ts.PropertyAccessExpression,
+): boolean {
+  const type = lowerer.typeOf(access.expression);
+  if (!type.isUnionType()) return false;
+  const stringPart = ts
+    .constituentTypes(type)
+    .find((part) => (part.flags & ts.TypeFlags.StringLike) !== 0);
+  if (!stringPart) return false;
+  const prop = lowerer.checker.getPropertyOfType(stringPart, access.name.text);
+  return lowerer.isStdlibSymbol(prop);
+}
+
+/** `string | null | undefined` receiver of a string method. Nullish arms
+ * throw Node's property-read TypeError before the call; the string arm is
+ * what the intrinsic sees. */
+function lowerNullableStringReceiver(
+  lowerer: Lowerer,
+  value: IrExpr,
+  member: string,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (value.type.kind !== "union") return null;
+  const unionId = value.type.unionId;
+  const arms = lowerer.unions.get(unionId)?.arms ?? [];
+  if (
+    !arms.some((arm) => arm.kind === "string") ||
+    !arms.every((arm) => arm.kind === "string" || isUnitType(arm))
+  ) {
+    return null;
+  }
+  const stringTag = lowerer.armTag(unionId, STRING);
+  if (stringTag < 0) return null;
+  // A throw cannot sit in a seqExpr. The helper returns the string arm or
+  // throws the nullish property-read TypeError.
+  const key = `nullableStr:${unionId}:${member}`;
+  let helper = lowerer.valueHelpers.get(key);
+  if (!helper) {
+    helper = `%nullable.str.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, helper);
+    const receiver = varRef("v.0", value.type, loc);
+    const body: IrStmt[] = [];
+    for (const [unit, unitType] of [
+      ["undefined", UNDEFINED_T],
+      ["null", NULL_T],
+    ] as const) {
+      const tag = lowerer.armTag(unionId, unitType);
+      if (tag < 0) continue;
+      body.push({
+        kind: "if",
+        cond: {
+          kind: "unionIsTag",
+          unionId,
+          tag,
+          negated: false,
+          value: receiver,
+          type: BOOL,
+          loc,
+        },
+        then: [
+          {
+            kind: "throw",
+            value: nodeThrowExpr(
+              1,
+              "",
+              `Cannot read properties of ${unit} (reading '${member}')`,
+              STRING,
+              loc,
+            ),
+            loc,
+          },
+        ],
+        else_: null,
+        loc,
+      });
+    }
+    body.push({
+      kind: "return",
+      value: { kind: "unionNarrow", unionId, tag: stringTag, value: receiver, type: STRING, loc },
+      loc,
+    });
+    lowerer.liftedFns.push({
+      name: helper,
+      params: [{ localId: "v.0", name: "v", type: value.type }],
+      returnType: STRING,
+      locals: [{ id: "v.0", name: "v", type: value.type, mutable: false }],
+      body,
+      loc,
+    });
+  }
+  return { kind: "call", callee: helper, args: [value], type: STRING, loc };
 }
 
 /** Relative string indexing and code-point decoding over the UTF-16 intrinsics. */
@@ -987,7 +1088,14 @@ export function lowerStringMethodCall(
       !isRequireMainFilename(lowerer, access.expression)
     )
       return null;
-    if (!lowerer.isStdlibMember(access)) return null;
+    // A `string | undefined` receiver has no startsWith symbol of its own
+    // (undefined doesn't). The string arm's stdlib method is the one the
+    // call names; nullish arms throw in lowerNullableStringReceiver.
+    if (
+      !lowerer.isStdlibMember(access) &&
+      !(nullableString && nullableStringStdlibMember(lowerer, access))
+    )
+      return null;
   }
   // The lib declares optional parameters beyond some lowered forms; fence
   // those arities instead of passing arguments the runtime doesn't take.
