@@ -8102,6 +8102,17 @@ function lowerDynStoredMemberCall(
   };
 }
 
+/** Element type of `nodes[i]` when `nodes` is a stored array. Index reads
+ * may add undefined; the caller accepts either the element or that union. */
+function indexedElementType(lowerer: Lowerer, expr: ts.Expression): IrType | null {
+  if (!ts.isElementAccessExpression(expr) || expr.questionDotToken) return null;
+  const base = expr.expression;
+  const arrayType = ts.isIdentifier(base)
+    ? (lowerer.peekLocal(base)?.type ?? lowerer.globalOf(base)?.type)
+    : lowerer.mapTypeOf(lowerer.typeOf(base));
+  return arrayType?.kind === "array" ? arrayType.elem : null;
+}
+
 export function lowerRecordFieldCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -8113,30 +8124,37 @@ export function lowerRecordFieldCall(
     : undefined;
   const receiverType =
     stored?.kind === "record" ? stored : lowerer.mapTypeOf(lowerer.typeOf(access.expression));
-  // `nodes[0].get(s)` stores a record|undefined element. The checker still
-  // says `any` for the local, so the record path never sees the field.
-  // Box the value and call the own member: a missing element throws, and a
-  // present record answers the function stored in that field.
+  // `nodes[0].get(s)` and `nodes[i].set(a)` store a record or
+  // record|undefined element. The checker still says `any`, so the record
+  // path never sees the field. Box the value and call the own member: a
+  // missing element throws, and a present record answers the stored function.
   if (
-    stored?.kind === "union" &&
     isJsSourceFile(call.getSourceFile()) &&
     !call.questionDotToken &&
     !access.questionDotToken &&
-    !call.arguments.some(ts.isSpreadElement) &&
-    lowerer.dynConvertible(stored)
+    !call.arguments.some(ts.isSpreadElement)
   ) {
-    const present = lowerer.stripUndefinedArm(stored);
-    const field =
-      present.kind === "record"
-        ? lowerer.shapes.get(present.shapeId)?.fields.find((item) => item.name === access.name.text)
-        : undefined;
-    if (field?.type.kind === "dyn" || field?.type.kind === "func") {
-      return lowerDynStoredMemberCall(
-        lowerer,
-        call,
-        access,
-        lowerer.coerceToExpected(lowerer.lowerExpr(access.expression), DYN),
-      );
+    const indexed = indexedElementType(lowerer, access.expression);
+    const boxed = stored?.kind === "union" || stored?.kind === "record" ? stored : indexed;
+    if (boxed && lowerer.dynConvertible(boxed)) {
+      const present = boxed.kind === "union" ? lowerer.stripUndefinedArm(boxed) : boxed;
+      const field =
+        present.kind === "record"
+          ? lowerer.shapes
+              .get(present.shapeId)
+              ?.fields.find((item) => item.name === access.name.text)
+          : undefined;
+      if (field?.type.kind === "dyn" || field?.type.kind === "func") {
+        const raw = lowerer.lowerExpr(access.expression);
+        if (lowerer.dynConvertible(raw.type)) {
+          return lowerDynStoredMemberCall(
+            lowerer,
+            call,
+            access,
+            lowerer.coerceToExpected(raw, DYN),
+          );
+        }
+      }
     }
   }
   if (receiverType?.kind !== "record" && receiverType?.kind !== "union") return null;

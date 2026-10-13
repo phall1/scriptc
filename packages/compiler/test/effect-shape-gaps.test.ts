@@ -186,18 +186,25 @@ export function fromIterator(iterator) {
   const state = iter.next();
   return state.done ? "done" : state.value;
 }
+export function compileSet(nodes) {
+  return (a) => {
+    for (let i = nodes.length - 1; i >= 0; i--) a = nodes[i].set(a);
+    return a;
+  };
+}
 `;
 
 const memberProgram = `
-import { compileGet, fromIterator } from "member-call-fixture/probe.js";
+import { compileGet, compileSet, fromIterator } from "member-call-fixture/probe.js";
 
 const step: { _tag: string; get: unknown; kind: unknown; set: unknown } = {
   _tag: "Iso",
   get: (s: number) => s + 1,
   kind: "Iso",
-  set: (a: number) => a,
+  set: (a: number) => a + 2,
 };
 console.log(compileGet([step])(3));
+console.log(compileSet([step])(3));
 console.log(fromIterator(() => [7][Symbol.iterator]()));
 `;
 
