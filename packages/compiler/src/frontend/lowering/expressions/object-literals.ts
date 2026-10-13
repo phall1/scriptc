@@ -1508,6 +1508,19 @@ export function lowerObjectLiteral(
       );
     })
   ) {
+    // `{ ...this }` inside Schema.Class's toString is typed with prototype
+    // methods. Object spread copies enumerable own properties only, so a
+    // required `toString` field is not a key the runtime source can supply.
+    // Copy own properties instead of fencing the method field.
+    if (
+      isJsSourceFile(expr.getSourceFile()) &&
+      shape.fields.some(
+        (field) =>
+          field.type.kind !== "union" || lowerer.armTag(field.type.unionId, UNDEFINED_T) < 0,
+      )
+    ) {
+      return lowerDynObjectLiteral(lowerer, expr);
+    }
     return lowerDeclaredSpreadMerge(lowerer, expr, type, shape, loc);
   }
 

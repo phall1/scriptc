@@ -614,3 +614,24 @@ console.log(makeParser().feed("ab"));
 test("a let array assigned in a nested function accepts push and join", async () => {
   await matchesNode("pending-fixture", pendingProbe, pendingProgram);
 });
+
+const classSpreadProbe = `
+export function formatInstance(identifier, value) {
+  const methods = {
+    toString() {
+      return identifier + "(" + JSON.stringify({ ...this }) + ")";
+    },
+  };
+  return methods.toString.call(value);
+}
+`;
+
+const classSpreadProgram = `
+import { formatInstance } from "class-spread-fixture/probe.js";
+
+console.log(formatInstance("Person", { name: "Alice", age: 30 }));
+`;
+
+test("spreading a class instance omits prototype toString", async () => {
+  await matchesNode("class-spread-fixture", classSpreadProbe, classSpreadProgram);
+});
