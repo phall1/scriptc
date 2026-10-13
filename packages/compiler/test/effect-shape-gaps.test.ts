@@ -987,3 +987,22 @@ console.log(of("kB", 0));
 test("a byte quantity multiplies a bigint factor", async () => {
   await matchesNode("quantity-fixture", quantityProbe, quantityProgram);
 });
+
+const recursiveDeclProbe = `
+export function mergeLeaves(shift, left, right) {
+  if (shift > 2 || left === right) return left;
+  const child = mergeLeaves(shift + 1, left.slice(1), right.slice(1));
+  return left[0] + child + right[0];
+}
+`;
+
+const recursiveDeclProgram = `
+import { mergeLeaves } from "recursive-decl-fixture/probe.js";
+
+console.log(mergeLeaves(0, "ab", "cd"));
+console.log(mergeLeaves(0, "aa", "aa"));
+`;
+
+test("a function declaration can call itself", async () => {
+  await matchesNode("recursive-decl-fixture", recursiveDeclProbe, recursiveDeclProgram);
+});

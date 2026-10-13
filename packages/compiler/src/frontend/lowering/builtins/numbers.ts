@@ -2,6 +2,7 @@ import * as ts from "../../ts7/adapter.js";
 import { type Lowerer, own } from "../lowerer.js";
 import { lowerCheckedPredicateValue } from "../lower-builtin-values.js";
 import { locOf } from "../../program.js";
+import { numLit } from "../../../ir/build.js";
 import { BOOL, F64, STRING, type IrExpr, type IrLibFn } from "../../../ir/ir.js";
 import { lowerBuiltinValuePreservingUndefined, lowerOptionalNumberPredicate } from "./arguments.js";
 import { tryLowerExpression } from "../expressions/try-lower-expression.js";
@@ -104,7 +105,7 @@ export function lowerNumberStaticCall(
       };
       const radix = call.arguments[1]
         ? lowerer.lowerExprExpecting(call.arguments[1], F64)
-        : { kind: "numLit", value: 0, type: F64, loc };
+        : numLit(0, loc);
       return { kind: "libCall", fn: "num.parseInt", args: [text, radix], type: F64, loc };
     }
     const argText =

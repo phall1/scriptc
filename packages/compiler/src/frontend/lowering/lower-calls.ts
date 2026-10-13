@@ -1117,7 +1117,18 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
   // Direct call of a top-level declared function: the fast path (no
   // closure object, plain C call). Generic functions route through
   // monomorphization (the call targets a per-instantiation instance).
-  if (ts.isIdentifier(expr.expression) && !lowerer.isSelfReference(expr.expression)) {
+  // A plain generic instance's own name is a self-reference, but the
+  // recursive call is still a direct call of that instance. Routing it
+  // through a closure uses the pre-inference signature and the validator
+  // rejects the mismatch (`mergeLeaves` calling itself).
+  const plainSelfCall =
+    ts.isIdentifier(expr.expression) &&
+    lowerer.isSelfReference(expr.expression) &&
+    lowerer.ctx.plainSelfName != null;
+  if (
+    ts.isIdentifier(expr.expression) &&
+    (!lowerer.isSelfReference(expr.expression) || plainSelfCall)
+  ) {
     // A JS spread argument the compile-time completion cannot take (a
     // fixed position, a dynamic rest slot) sends the call down the
     // VALUE path — the runtime-arity lane (lowerSpreadArgsCall) boxes
@@ -2513,7 +2524,7 @@ function lowerBufferPrototypeBorrowCall(
   };
   const from = call.arguments[2]
     ? lowerer.lowerExprExpecting(call.arguments[2], F64)
-    : { kind: "numLit", value: 0, type: F64, loc };
+    : numLit(0, loc);
   return {
     kind: "bytesIntrinsic",
     method: "indexOf",
