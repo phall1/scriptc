@@ -8411,6 +8411,49 @@ export function lowerRecordFieldCall(
         };
     return init ? { kind: "seqExpr", stmts: [init], result, type: result.type, loc } : result;
   }
+  // `options.releaseSavepoint?.(…)` is spelled as a truthy test plus a
+  // call. The field stays `func | undefined`; extract the function or
+  // throw Node's "is not a function" when the slot is empty.
+  if (callee.type.kind === "union" && !call.arguments.some(ts.isSpreadElement)) {
+    const arms = lowerer.unions.get(callee.type.unionId)?.arms ?? [];
+    const funcs = arms.filter((arm) => arm.kind === "func");
+    const func = funcs[0];
+    if (
+      funcs.length === 1 &&
+      func?.kind === "func" &&
+      arms.every((arm) => arm.kind === "func" || isUnitType(arm))
+    ) {
+      const inPlace = checkedArmExtraction(
+        lowerer,
+        callee,
+        lowerer.armTag(callee.type.unionId, func),
+        func,
+        () => `${access.getText()} is not a function`,
+      );
+      const helper = inPlace
+        ? null
+        : lowerer.narrowedArmHelper(callee.type.unionId, func, loc);
+      const fn = inPlace
+        ? inPlace
+        : helper
+          ? lowerer.checkedNarrowCall(helper, callee, func, loc)
+          : null;
+      if (fn) {
+        const args = completeFuncValueArgs(lowerer, call, func, loc);
+        const result: IrExpr = {
+          kind: "callValue",
+          callee: fn,
+          ...(target && receiverLocal
+            ? { receiver: lowerer.coerceToExpected(target.obj, DYN) }
+            : {}),
+          args,
+          type: func.ret,
+          loc,
+        };
+        return init ? { kind: "seqExpr", stmts: [init], result, type: result.type, loc } : result;
+      }
+    }
+  }
   if (callee.type.kind !== "func") lowerer.badType(access, lowerer.typeOf(access));
   const args = completeFuncValueArgs(lowerer, call, callee.type, locOf(call));
   const result: IrExpr = {

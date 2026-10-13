@@ -1,4 +1,5 @@
 import { dynUndefinedExpr, numLit, varRef } from "../../ir/build.js";
+import { isSafeToDiscard } from "./expressions/evaluation-safety.js";
 import { lowerDynObjectLiteral } from "./expressions/object-literals.js";
 import { importMetaBindingSource } from "./import-meta.js";
 import { iteratorCanStep, iteratorValue } from "./iterator-consumption.js";
@@ -5467,6 +5468,22 @@ function falsyExitRuntimeOptionalLocals(lowerer: Lowerer, stmt: ts.IfStatement):
  * must not lower the call in that arm. */
 function constantFalsy(expr: IrExpr): { effects: IrStmt[] } | null {
   if (expr.kind === "boolLit") return expr.value ? null : { effects: [] };
+  // `id > 0 && options.releaseSavepoint` is falsy for every specialization
+  // that omitted the callback. The right operand's read is unobservable
+  // (a missing field is undefined), so the call in that arm must not lower.
+  if (expr.kind === "logical" && expr.op === "&&") {
+    const right = constantFalsy(expr.right);
+    if (
+      right !== null &&
+      right.effects.every((stmt) => stmt.kind === "exprStmt" && isSafeToDiscard(stmt.expr))
+    ) {
+      return {
+        effects: isSafeToDiscard(expr.left)
+          ? []
+          : [{ kind: "exprStmt", expr: expr.left, loc: expr.loc }],
+      };
+    }
+  }
   if (expr.kind === "seqExpr") {
     const inner = constantFalsy(expr.result);
     if (inner === null) return null;

@@ -692,3 +692,33 @@ console.log(joinEmpty(["b", "c"]));
 test("pushing a spread of unknown values checks them into the array", async () => {
   await matchesNode("push-spread-fixture", pushSpreadProbe, pushSpreadProgram);
 });
+
+const savepointProbe = `
+export function wrap(options, conn, id) {
+  let effect = "base";
+  const finish = (exit) => {
+    if (id > 0 && options.releaseSavepoint) {
+      effect = effect + ":" + options.releaseSavepoint(conn, id);
+    }
+    return effect + ":" + exit;
+  };
+  return finish("ok");
+}
+`;
+
+const savepointProgram = `
+import { wrap } from "savepoint-fixture/probe.js";
+
+const optional: {
+  releaseSavepoint?: (name: string, n: number) => string;
+} = {};
+console.log(wrap({}, "c", 1));
+console.log(wrap(optional, "c", 2));
+optional.releaseSavepoint = (name: string, n: number) => name + n;
+console.log(wrap(optional, "c", 2));
+console.log(wrap(optional, "c", 0));
+`;
+
+test("an optional callback runs only after a truthy check", async () => {
+  await matchesNode("savepoint-fixture", savepointProbe, savepointProgram);
+});
