@@ -322,6 +322,7 @@ export function lowerDynInvokePushApply(
     const src = varRef(srcLocal.id, items.type, loc);
     const len: IrExpr = { kind: "arrIntrinsic", method: "length", receiver: src, args: [], type: F64, loc };
     const indexLocal = lowerer.declareHiddenLocal("%applyIndex", F64);
+    indexLocal.mutable = true;
     const index = varRef(indexLocal.id, F64, loc);
     stmts.push({ kind: "varDecl", localId: srcLocal.id, init: items, loc });
     stmts.push({
@@ -342,6 +343,7 @@ export function lowerDynInvokePushApply(
     const src = varRef(srcLocal.id, DYN, loc);
     const lenLocal = lowerer.declareHiddenLocal("%applyLen", F64);
     const indexLocal = lowerer.declareHiddenLocal("%applyIndex", F64);
+    indexLocal.mutable = true;
     const index = varRef(indexLocal.id, F64, loc);
     const len = varRef(lenLocal.id, F64, loc);
     const coerced = lowerer.coerceToExpected(items, DYN);
@@ -407,6 +409,7 @@ export function lowerDynPushSpread(
   const srcLocal = lowerer.declareHiddenLocal("%spreadSrc", DYN);
   const lenLocal = lowerer.declareHiddenLocal("%spreadLen", F64);
   const indexLocal = lowerer.declareHiddenLocal("%spreadIndex", F64);
+  indexLocal.mutable = true;
   const recv = varRef(recvLocal.id, receiver.type, loc);
   const src = varRef(srcLocal.id, DYN, loc);
   const len = varRef(lenLocal.id, F64, loc);

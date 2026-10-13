@@ -1612,6 +1612,7 @@ function validateFunction(
           "block",
           "if",
           "while",
+          "for",
         ]);
         if (e.generatorDelegate) {
           if (!fn.generator || fn.async)
@@ -1645,6 +1646,16 @@ function validateFunction(
             if (s.kind === "while") {
               expectType(s.cond, BOOL, "seqExpr while condition");
               checkExpr(s.cond);
+              flat(s.body);
+              continue;
+            }
+            if (s.kind === "for") {
+              if (s.init) flat([s.init]);
+              if (s.cond) {
+                expectType(s.cond, BOOL, "seqExpr for condition");
+                checkExpr(s.cond);
+              }
+              if (s.update) flat([s.update]);
               flat(s.body);
               continue;
             }

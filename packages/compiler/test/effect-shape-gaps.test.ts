@@ -722,9 +722,11 @@ export function joinEmpty(parts) {
 const pushSpreadProgram = `
 import { joinApply, joinEmpty, joinParts } from "push-spread-fixture/probe.js";
 
-console.log(joinParts(["b", "c"]));
-console.log(joinApply(["d"]));
-console.log(joinEmpty(["b", "c"]));
+const parts: unknown = ["b", "c"];
+const one: unknown = ["d"];
+console.log(joinParts(parts));
+console.log(joinApply(one));
+console.log(joinEmpty(parts));
 `;
 
 test("pushing a spread of unknown values checks them into the array", async () => {
