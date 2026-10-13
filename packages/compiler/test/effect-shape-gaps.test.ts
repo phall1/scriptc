@@ -145,3 +145,31 @@ console.log(kind("ab"));
 test("boxed primitive valueOf probes match Node", async () => {
   await matchesNode("primitive-wrapper-fixture", wrapperProbe, wrapperProgram);
 });
+
+const callbackProbe = `
+export function joined(transform) {
+  return ["a", "b"].map(transform).join(",");
+}
+export function kept(predicate) {
+  return [1, 2, 3, 4].filter(predicate).join(",");
+}
+export function visited(visit) {
+  ["x", "y"].forEach(visit);
+}
+`;
+
+const callbackProgram = `
+import { joined, kept, visited } from "array-callback-fixture/probe.js";
+
+const seen: string[] = [];
+visited((part: string) => {
+  seen.push(part);
+});
+console.log(joined((part: string) => part.toUpperCase()));
+console.log(kept((value: number) => value % 2 === 0));
+console.log(seen.join(","));
+`;
+
+test("unknown array callbacks match Node", async () => {
+  await matchesNode("array-callback-fixture", callbackProbe, callbackProgram);
+});

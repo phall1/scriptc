@@ -71,6 +71,26 @@ export function lowerArrayHofCall(
   const receiver = lowerer.lowerExpr(access.expression);
   const argNode = call.arguments[0];
   if (!argNode) lowerer.unsupported("SC1090", call, "this call form"); // tsc-guarded
+  // An unknown callback (`words.map(transform)` when transform stayed
+  // unknown) has no static signature. The runtime map/filter/forEach
+  // calls it with the element, index, and array, and map/filter answer
+  // a checked-dynamic array.
+  const callbackTs = lowerer.typeOf(argNode);
+  if (
+    (callbackTs.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0 &&
+    call.arguments.length <= 2 &&
+    call.arguments.every((arg) => !ts.isSpreadElement(arg))
+  ) {
+    return {
+      kind: "dynInvoke",
+      recv: lowerer.coerceToExpected(receiver, DYN),
+      method,
+      calleeName: access.getText(),
+      args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)),
+      type: DYN,
+      loc,
+    };
+  }
   const booleanFilter =
     method === "filter" &&
     ts.isIdentifier(argNode) &&
