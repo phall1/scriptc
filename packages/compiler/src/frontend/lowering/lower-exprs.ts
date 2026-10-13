@@ -697,6 +697,11 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     if (searchParamsIterator) return searchParamsIterator;
     if (lowerer.isStdlibGlobal(expr.expression, "process"))
       return { kind: "strLit", value: "object", type: STRING, loc };
+    if (
+      ts.isPropertyAccessExpression(expr.expression) &&
+      lowerer.stdlibGlobalMember(expr.expression, "process") === "cwd"
+    )
+      return { kind: "strLit", value: "function", type: STRING, loc };
     if (lowerer.isStdlibGlobal(expr.expression, "fetch"))
       return { kind: "strLit", value: "function", type: STRING, loc };
     const performance = lowerPerfHooksTypeof(lowerer, expr.expression);
@@ -1363,7 +1368,11 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     }
     if (lowerer.isStdlibGlobal(expr, "ArrayBuffer"))
       return { kind: "libCall", fn: "arrayBuffer.constructor", args: [], type: DYN, loc };
-    if (isJsSourceFile(expr.getSourceFile()) && lowerer.isStdlibGlobal(expr, "Array"))
+    // The Array constructor value, including `export const Array =
+    // globalThis.Array` read back through a namespace import. TypeScript
+    // and JavaScript share the interned native constructor, so
+    // `Array.Array === globalThis.Array` holds.
+    if (lowerer.isStdlibGlobal(expr, "Array"))
       return { kind: "libCall", fn: "dyn.arrayConstructor", args: [], type: DYN, loc };
     if (
       Object.values(BYTES_ELEMENT_NAME).includes(expr.text) &&
@@ -1942,6 +1951,9 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     }
     if (lowerer.stdlibGlobalMember(expr, "globalThis") === "console") {
       return { kind: "libCall", fn: "console.native", args: [], type: DYN, loc };
+    }
+    if (lowerer.stdlibGlobalMember(expr, "globalThis") === "Array") {
+      return { kind: "libCall", fn: "dyn.arrayConstructor", args: [], type: DYN, loc };
     }
     if (lowerer.stdlibGlobalMember(expr, "console") !== null) {
       return {
@@ -9619,6 +9631,24 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
   const cacheHas = lowerRequireCacheHas(lowerer, expr);
   if (cacheHas) return cacheHas;
 
+  // Node's process object is never null. Browser-style guards
+  // (`process !== null`) fold without materializing the object.
+  if (
+    (op === ts.SyntaxKind.EqualsEqualsEqualsToken ||
+      op === ts.SyntaxKind.ExclamationEqualsEqualsToken) &&
+    ((lowerer.isStdlibGlobal(expr.left, "process") &&
+      expr.right.kind === ts.SyntaxKind.NullKeyword) ||
+      (lowerer.isStdlibGlobal(expr.right, "process") &&
+        expr.left.kind === ts.SyntaxKind.NullKeyword))
+  ) {
+    return {
+      kind: "boolLit",
+      value: op === ts.SyntaxKind.ExclamationEqualsEqualsToken,
+      type: BOOL,
+      loc,
+    };
+  }
+
   if (lowerer.nanCodedReads?.needsUndefinedEquality(expr)) {
     const undefinedEquality = lowerNanCodedEquality(lowerer, expr);
     if (undefinedEquality) return undefinedEquality;
@@ -12829,6 +12859,16 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
   // AND for side-effect-free expressions (an object literal of literals
   // — the `"a" in { a: true }` shape).
   const pureRecvNode = sideEffectFreeOptionValue(expr.right);
+  // `"process" in globalThis` — Node always installs the process global.
+  // The global object record has no process field, so the record fold
+  // below would answer false and skip process.cwd().
+  if (
+    key === "process" &&
+    (lowerer.isStdlibGlobal(expr.right, "globalThis") ||
+      lowerer.isStdlibGlobal(expr.right, "global"))
+  ) {
+    return { kind: "boolLit", value: true, type: BOOL, loc };
+  }
   if (lowerer.isProcessEnv(expr.right)) {
     // `"NO_COLOR" in process.env`: presence via the one envGet intrinsic —
     // getenv(3) returning non-NULL is Node's `in` on process.env exactly.

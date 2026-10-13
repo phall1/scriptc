@@ -545,3 +545,45 @@ console.log(expand("n", { token: "n", value: 7 }));
 test("string replace accepts a RegExp search and a callback replacement", async () => {
   await matchesNode("replace-fixture", replaceProbe, replaceProgram);
 });
+
+const arrayExportProbe = `
+export const Array = globalThis.Array;
+`;
+
+const arrayExportProgram = `
+import * as Arrays from "array-export-fixture/probe.js";
+
+console.log(Arrays.Array === globalThis.Array);
+console.log(new Arrays.Array(1, 2).join(","));
+`;
+
+test("an exported Array constructor matches globalThis.Array", async () => {
+  await matchesNode("array-export-fixture", arrayExportProbe, arrayExportProgram);
+});
+
+const cwdProbe = `
+export function here() {
+  let cwd = undefined;
+  const process = globalThis.process;
+  if (
+    cwd === undefined &&
+    "process" in globalThis &&
+    typeof process === "object" &&
+    process !== null &&
+    typeof process.cwd === "function"
+  ) {
+    cwd = process.cwd();
+  }
+  return cwd;
+}
+`;
+
+const cwdProgram = `
+import { here } from "cwd-fixture/probe.js";
+
+console.log(here() === process.cwd());
+`;
+
+test("a guarded process.cwd call matches Node", async () => {
+  await matchesNode("cwd-fixture", cwdProbe, cwdProgram);
+});
