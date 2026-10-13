@@ -1776,6 +1776,10 @@ export class Lowerer {
    * (NaN for an absent read) or a string. Preserve that result union at bare
    * reads instead of applying the checker-bare string narrowing adapter. */
   readonly runtimeOptionalArithmeticLocals = new Set<IrLocal>();
+  /** JS `let` bindings the checker calls `number` while the initializer is
+   * checked-dynamic and the function combines the name with a bigint.
+   * Reads stay dyn so a bigint result is not forced through a number slot. */
+  readonly jsBigintArithmeticSymbols = new Set<ts.Symbol>();
   readonly runtimeOptionalArithmeticGlobals = new Set<IrGlobal>();
   /** Binding symbols whose IR storage type was widened by the indexed-read
    * prepass. This includes explicit annotations: unchecked TS annotations do

@@ -24,7 +24,7 @@ const DATE_GETTER_FNS: Readonly<Record<string, IrLibFn>> = {
 };
 
 const DATE_METHOD_HINT =
-  "getTime(), valueOf(), toISOString(), the local/UTC calendar getters, getTimezoneOffset(), and UTC setters on a local Date are supported; local-time setters and locale/string formatters have no lowering";
+  "getTime(), valueOf(), toISOString(), toJSON(), the local/UTC calendar getters, getTimezoneOffset(), and UTC setters on a local Date are supported; local-time setters and locale/string formatters have no lowering";
 
 const DATE_UTC_SETTERS: Readonly<
   Record<string, { fn: IrLibFn; min: number; max: number; slots: number }>
@@ -113,7 +113,10 @@ export function lowerDateCall(
       loc,
     };
   }
-  if (name === "toISOString") {
+  if (name === "toISOString" || name === "toJSON") {
+    // Date.prototype.toJSON is toISOString for a finite time. A non-finite
+    // Date returns null from toJSON and throws from toISOString; that split
+    // is still the toISOString path.
     return { kind: "libCall", fn: "date.toISOStringValue", args: [receiver], type: STRING, loc };
   }
   const fn = own(DATE_GETTER_FNS, name);

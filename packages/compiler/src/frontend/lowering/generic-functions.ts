@@ -1512,10 +1512,22 @@ function bindableImplicitIr(t: IrType | null): t is IrType {
   );
 }
 
+/** TypeScript types `-value` as `number` when `value` is `any`. JavaScript
+ * keeps a bigint, so an implicit-any parameter must stay checked-dynamic. */
+function jsPrefixMinusStaysDynamic(lowerer: Lowerer, arg: ts.Expression): IrType | null {
+  if (!isJsSourceFile(arg.getSourceFile()) || !ts.isPrefixUnaryExpression(arg)) return null;
+  if (arg.operator !== ts.SyntaxKind.MinusToken) return null;
+  const represented = tryLowerExpression(lowerer, arg);
+  if (represented?.type.kind !== "dyn") return null;
+  return DYN;
+}
+
 /** A represented binding or direct callable result can be wider than the
  * checker's inferred shape. Preserve that boundary when specializing JS. */
 function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrType | null {
   while (ts.isParenthesizedExpression(arg)) arg = arg.expression;
+  const prefixMinus = jsPrefixMinusStaysDynamic(lowerer, arg);
+  if (prefixMinus) return prefixMinus;
   if (
     isJsSourceFile(arg.getSourceFile()) &&
     (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg))

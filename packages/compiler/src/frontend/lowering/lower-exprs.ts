@@ -3235,6 +3235,13 @@ export function maybeNarrow(lowerer: Lowerer, expr: IrExpr, node: ts.Node): IrEx
   // instead of misreading the payload (the dyn boundary's usual stance).
   // Object/array narrowings stay dyn-typed and keep their fences.
   if (expr.type.kind === "dyn") {
+    // `let quotient = num / den` is a number to the checker and a bigint at
+    // runtime. The declaration recorded the symbol; a number check here
+    // throws before `quotient * bigint10`.
+    if (ts.isIdentifier(node)) {
+      const symbol = lowerer.resolveValueSymbol(node);
+      if (symbol && lowerer.jsBigintArithmeticSymbols.has(symbol)) return expr;
+    }
     // An inferred JS member's storage may be deliberately wider than its
     // declaration (prototype-selected buffers, null-initialized scratch
     // objects). Extract at the consuming operation, not at the read.
@@ -9100,6 +9107,49 @@ export function lowerAsExpression(
   return { kind: "dynCheck", value: inner, type: target, loc: locOf(expr) };
 }
 
+/** Unary minus of a checked-dynamic value. Bigint stays bigint; every other
+ * kind keeps the number check. */
+function negateDynamic(lowerer: Lowerer, value: IrExpr, loc: SrcLoc): IrExpr {
+  const slot = lowerer.declareHiddenLocal("%negated", DYN);
+  const current = varRef(slot.id, DYN, loc);
+  const isBigint: IrExpr = {
+    kind: "strEq",
+    negated: false,
+    left: { kind: "libCall", fn: "dyn.typeof", args: [current], type: STRING, loc },
+    right: strLit("bigint", loc),
+    type: BOOL,
+    loc,
+  };
+  const asBigint: IrExpr = { kind: "dynCheck", value: current, type: BIGINT_T, loc };
+  const negatedBigint: IrExpr = {
+    kind: "dynFrom",
+    value: { kind: "libCall", fn: "bigint.neg", args: [asBigint], type: BIGINT_T, loc },
+    type: DYN,
+    loc,
+  };
+  const asNumber: IrExpr = { kind: "dynCheck", value: current, type: F64, loc };
+  const negatedNumber: IrExpr = {
+    kind: "dynFrom",
+    value: { kind: "unary", op: "-", operand: asNumber, type: F64, loc },
+    type: DYN,
+    loc,
+  };
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "varDecl", localId: slot.id, init: value, loc }],
+    result: {
+      kind: "ternary",
+      cond: isBigint,
+      then: negatedBigint,
+      else_: negatedNumber,
+      type: DYN,
+      loc,
+    },
+    type: DYN,
+    loc,
+  };
+}
+
 export function lowerPrefixUnary(lowerer: Lowerer, expr: ts.PrefixUnaryExpression): IrExpr {
   const loc = locOf(expr);
   switch (expr.operator) {
@@ -9109,11 +9159,12 @@ export function lowerPrefixUnary(lowerer: Lowerer, expr: ts.PrefixUnaryExpressio
       if (raw.type.kind === "bigint") {
         return { kind: "libCall", fn: "bigint.neg", args: [raw], type: BIGINT_T, loc };
       }
-      // Match the checked numeric boundary used by JS binary arithmetic.
-      const operand =
-        raw.type.kind === "dyn" && isJsSourceFile(expr.getSourceFile())
-          ? { kind: "dynCheck" as const, value: raw, type: F64, loc }
-          : lowerOptionalNumber(lowerer, raw, loc, expr.operand);
+      // `-value` on an untyped JS operand follows ToNumeric. A number check
+      // throws for a bigint, which JavaScript negates.
+      if (raw.type.kind === "dyn" && isJsSourceFile(expr.getSourceFile())) {
+        return negateDynamic(lowerer, raw, loc);
+      }
+      const operand = lowerOptionalNumber(lowerer, raw, loc, expr.operand);
       if (operand.type.kind !== "f64") lowerer.unsupported("SC1043", expr);
       if (operand.kind === "numLit") return { ...operand, value: -operand.value, loc };
       return { kind: "unary", op: "-", operand, type: F64, loc };

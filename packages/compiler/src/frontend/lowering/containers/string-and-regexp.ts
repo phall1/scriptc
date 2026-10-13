@@ -32,6 +32,135 @@ import {
   positionNumber,
 } from "../optional-arguments.js";
 
+const REGEX_T: IrType = { kind: "regex" };
+
+/** `new RegExp(ToString(pattern))` — the string form of `String.prototype.search`. */
+function regexFromString(pattern: IrExpr, loc: SrcLoc): IrExpr {
+  return { kind: "libCall", fn: "regex.new", args: [pattern, strLit("", loc)], type: REGEX_T, loc };
+}
+
+/** An untyped search argument: copy a RegExp, otherwise `new RegExp(ToString(value))`. */
+function regexFromDynamic(pattern: IrExpr, loc: SrcLoc): IrExpr {
+  return {
+    kind: "libCall",
+    fn: "regex.newChecked",
+    args: [pattern, dynUndefinedExpr(loc)],
+    type: REGEX_T,
+    loc,
+  };
+}
+
+/** `string | RegExp` — Effect's `String.search` parameter. Other arms stay fenced. */
+function regexFromStringOrRegexUnion(lowerer: Lowerer, value: IrExpr, loc: SrcLoc): IrExpr | null {
+  if (value.type.kind !== "union") return null;
+  const arms = lowerer.unions.get(value.type.unionId)?.arms;
+  if (!arms?.every((arm) => arm.kind === "string" || arm.kind === "regex")) return null;
+  const regexTag = arms.findIndex((arm) => arm.kind === "regex");
+  const stringTag = arms.findIndex((arm) => arm.kind === "string");
+  const regexArm = arms[regexTag];
+  const stringArm = arms[stringTag];
+  if (!regexArm || !stringArm) return null;
+  const saved = lowerer.declareHiddenLocal("%searchPattern", value.type);
+  const ref = varRef(saved.id, value.type, loc);
+  const pattern: IrExpr = {
+    kind: "ternary",
+    cond: {
+      kind: "unionIsTag",
+      unionId: value.type.unionId,
+      tag: regexTag,
+      negated: false,
+      value: ref,
+      type: BOOL,
+      loc,
+    },
+    then: {
+      kind: "unionNarrow",
+      unionId: value.type.unionId,
+      tag: regexTag,
+      value: ref,
+      type: regexArm,
+      loc,
+    },
+    else_: regexFromString(
+      {
+        kind: "unionNarrow",
+        unionId: value.type.unionId,
+        tag: stringTag,
+        value: ref,
+        type: stringArm,
+        loc,
+      },
+      loc,
+    ),
+    type: REGEX_T,
+    loc,
+  };
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "varDecl", localId: saved.id, init: value, loc }],
+    result: pattern,
+    type: REGEX_T,
+    loc,
+  };
+}
+
+/** The pattern `String.prototype.search` compiles: a regex, a string, an untyped
+ * value, or exactly `string | RegExp`. */
+function searchPatternKeepsRuntimeValue(lowerer: Lowerer, arg0: ts.Expression): boolean {
+  const argType = lowerer.mapTypeOf(lowerer.typeOf(arg0));
+  if (argType?.kind === "dyn") return true;
+  // Context-free `any` has no mapped shape. `String.prototype.search` still
+  // accepts a string or a RegExp at runtime.
+  return (lowerer.typeOf(arg0).flags & ts.TypeFlags.Any) !== 0;
+}
+
+function searchPattern(lowerer: Lowerer, arg0: ts.Expression, loc: SrcLoc): IrExpr | null {
+  const argType = lowerer.mapTypeOf(lowerer.typeOf(arg0));
+  if (argType?.kind === "regex") return lowerer.lowerExprExpecting(arg0, REGEX_T);
+  if (argType?.kind === "string") return regexFromString(lowerer.lowerExpr(arg0), loc);
+  if (searchPatternKeepsRuntimeValue(lowerer, arg0)) {
+    return regexFromDynamic(lowerer.lowerExprExpecting(arg0, DYN), loc);
+  }
+  if (argType?.kind !== "union") return null;
+  return regexFromStringOrRegexUnion(lowerer, lowerer.lowerExpr(arg0), loc);
+}
+
+/** Receiver first, then the pattern. A union pattern is a sequence, so the
+ * receiver is stored before that sequence runs. */
+function searchCall(lowerer: Lowerer, receiver: IrExpr, pattern: IrExpr, loc: SrcLoc): IrExpr {
+  if (pattern.kind !== "seqExpr") {
+    return { kind: "regexIntrinsic", method: "search", receiver, args: [pattern], type: F64, loc };
+  }
+  const saved = lowerer.declareHiddenLocal("%searchReceiver", receiver.type);
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "varDecl", localId: saved.id, init: receiver, loc }, ...pattern.stmts],
+    result: {
+      kind: "regexIntrinsic",
+      method: "search",
+      receiver: varRef(saved.id, receiver.type, loc),
+      args: [pattern.result],
+      type: F64,
+      loc,
+    },
+    type: F64,
+    loc,
+  };
+}
+
+function lowerStringSearchCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  lowerReceiver: () => IrExpr,
+): IrExpr | null {
+  const arg0 = call.arguments[0];
+  if (!arg0 || call.arguments.length !== 1) return null;
+  const loc = locOf(call);
+  const pattern = searchPattern(lowerer, arg0, loc);
+  if (!pattern) return null;
+  return searchCall(lowerer, lowerReceiver(), pattern, loc);
+}
+
 function lowerSplitLimitArg(
   lowerer: Lowerer,
   node: ts.Expression | undefined,
@@ -860,12 +989,7 @@ export function lowerRegexMethodCall(
   // — a fresh exec from position 0, so /g is irrelevant and /y anchors at
   // 0, exactly Node. Never throws.
   if (receiverKind === "string" && name === "search") {
-    const arg0 = call.arguments[0];
-    if (!arg0 || lowerer.mapTypeOf(lowerer.typeOf(arg0))?.kind !== "regex") return null; // string-pattern form: the SC2020 fence
-    if (call.arguments.length !== 1) return null;
-    const receiver = lowerReceiver();
-    const re = lowerer.lowerExprExpecting(arg0, { kind: "regex" });
-    return { kind: "regexIntrinsic", method: "search", receiver, args: [re], type: F64, loc };
+    return lowerStringSearchCall(lowerer, call, lowerReceiver);
   }
   if (
     receiverKind === "string" &&

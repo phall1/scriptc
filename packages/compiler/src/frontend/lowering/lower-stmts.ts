@@ -115,7 +115,12 @@ import { hasExplicitJsDocReturn } from "./function-returns.js";
 import { recordKeysArrayCall } from "./lower-calls.js";
 import { registerOverloadedCallableAlias } from "./call-signatures.js";
 import { isMixinFnBinding, mixinResultBindingClassOf } from "./lower-mixins.js";
-import type { ClassInfo, ClassIteratorInfo } from "./lower-classes.js";
+import {
+  classIteratorDoneTest,
+  classIteratorValueRead,
+  type ClassInfo,
+  type ClassIteratorInfo,
+} from "./lower-classes.js";
 import { isCompiledPrototypeMember } from "./class-prototypes.js";
 import { classStaticDataFor } from "./class-static-data.js";
 import { objectFactorySignature } from "./object-factory-new.js";
@@ -2080,14 +2085,11 @@ export function lowerBindingPattern(
           }
           const rl = lowerer.declareHiddenLocal("%dir", citPat.resultT);
           out.push({ kind: "varDecl", localId: rl.id, init: step, loc: stepLoc });
-          const value: IrExpr = {
-            kind: "recordGet",
-            obj: { kind: "varRef", localId: rl.id, type: citPat.resultT, loc: stepLoc },
-            shapeId: citPat.resultT.shapeId,
-            field: "value",
-            type: citPat.valueT,
-            loc: stepLoc,
-          };
+          const value: IrExpr = classIteratorValueRead(
+            citPat,
+            { kind: "varRef", localId: rl.id, type: citPat.resultT, loc: stepLoc },
+            stepLoc,
+          );
           lowerer.bindPatternTarget(el.name, value, isLet, out);
         }
         return;
@@ -4853,6 +4855,13 @@ export function lowerVarDecl(
     settledType = DYN;
     init = lowerer.lowerExprExpecting(decl.initializer, DYN);
   }
+  // `let quotient = num / den` infers number. The value is a bigint when
+  // both operands are, and this function later multiplies by one.
+  if (jsInferredNumberKeepsBigint(lowerer, decl, settledType, init)) {
+    settledType = DYN;
+    const symbol = lowerer.resolveValueSymbol(decl.name as ts.Identifier);
+    if (symbol) lowerer.jsBigintArithmeticSymbols.add(symbol);
+  }
   // Slot coercion: `const r: A | B = bValue;` wraps implicitly; width
   // subtyping (`const p: {a: number} = wider;`) is rejected, not coerced.
   // `[]` infers never[] and lowers as number[]. dynFrom of that array is a
@@ -5351,6 +5360,71 @@ function closedRecordArray(lowerer: Lowerer, type: IrType): boolean {
   if (type.kind !== "array" || type.elem.kind !== "record") return false;
   const shape = lowerer.shapes.get(type.elem.shapeId);
   return shape !== undefined && shape.indexValue === undefined && !shape.tuple;
+}
+
+const BIGINT_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.PlusToken,
+  ts.SyntaxKind.MinusToken,
+  ts.SyntaxKind.AsteriskToken,
+  ts.SyntaxKind.SlashToken,
+  ts.SyntaxKind.PercentToken,
+  ts.SyntaxKind.AsteriskAsteriskToken,
+  ts.SyntaxKind.LessThanToken,
+  ts.SyntaxKind.LessThanEqualsToken,
+  ts.SyntaxKind.GreaterThanToken,
+  ts.SyntaxKind.GreaterThanEqualsToken,
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.PlusEqualsToken,
+  ts.SyntaxKind.MinusEqualsToken,
+  ts.SyntaxKind.AsteriskEqualsToken,
+  ts.SyntaxKind.SlashEqualsToken,
+  ts.SyntaxKind.PercentEqualsToken,
+  ts.SyntaxKind.AsteriskAsteriskEqualsToken,
+]);
+
+/** The checker called this binding a number, but its value is dyn and the
+ * function combines it with a bigint. Keep the dyn value. */
+function jsInferredNumberKeepsBigint(
+  lowerer: Lowerer,
+  decl: ts.VariableDeclaration,
+  settled: IrType,
+  init: IrExpr,
+): boolean {
+  if (settled.kind !== "f64" && settled.kind !== "dyn") return false;
+  if (init.type.kind !== "dyn" || !unannotatedJsIdentifier(decl)) return false;
+  const body = enclosingFunctionBody(decl);
+  return body !== undefined && functionMentionsBigint(lowerer, body);
+}
+
+function unannotatedJsIdentifier(decl: ts.VariableDeclaration): boolean {
+  return (
+    ts.isIdentifier(decl.name) &&
+    !decl.type &&
+    !hasJsTypeAnnotation(decl) &&
+    isJsSourceFile(decl.getSourceFile())
+  );
+}
+
+function functionMentionsBigint(lowerer: Lowerer, body: ts.Node): boolean {
+  let found = false;
+  ts.walkPreorder(body, (node) => {
+    if (found) return "stop";
+    if (node !== body && ts.isFunctionLike(node)) return "skip";
+    if (!operandIsBigint(lowerer, node)) return undefined;
+    found = true;
+    return "stop";
+  });
+  return found;
+}
+
+function operandIsBigint(lowerer: Lowerer, node: ts.Node): boolean {
+  if (!ts.isBinaryExpression(node) || !BIGINT_OPERATORS.has(node.operatorToken.kind)) return false;
+  return checkerIsBigint(lowerer, node.left) || checkerIsBigint(lowerer, node.right);
+}
+
+function checkerIsBigint(lowerer: Lowerer, node: ts.Expression): boolean {
+  return (lowerer.typeOf(node).flags & (ts.TypeFlags.BigInt | ts.TypeFlags.BigIntLiteral)) !== 0;
 }
 
 function enclosingFunctionBody(decl: ts.VariableDeclaration): ts.Node | undefined {
@@ -9411,6 +9485,7 @@ function lowerForOfClassIterator(
         );
     const xRef: IrExpr = { kind: "varRef", localId: x.id, type: cit.valueT, loc };
     const blame: ts.Node = decl?.name ?? exprTargetNode ?? stmt.initializer;
+    const doneTest = classIteratorDoneTest(cit, rRef(), loc);
     const head: IrStmt[] = [
       {
         kind: "varDecl",
@@ -9418,18 +9493,11 @@ function lowerForOfClassIterator(
         init: lowerer.classIteratorNextCall(cit, itRef(), loc),
         loc,
       },
-      ...(cit.hasDone
+      ...(doneTest
         ? [
             {
               kind: "if",
-              cond: {
-                kind: "recordGet",
-                obj: rRef(),
-                shapeId: cit.resultT.shapeId,
-                field: "done",
-                type: BOOL,
-                loc,
-              },
+              cond: doneTest,
               then: [{ kind: "break", loc }],
               else_: null,
               loc,
@@ -9439,14 +9507,7 @@ function lowerForOfClassIterator(
       {
         kind: "varDecl",
         localId: x.id,
-        init: {
-          kind: "recordGet",
-          obj: rRef(),
-          shapeId: cit.resultT.shapeId,
-          field: "value",
-          type: cit.valueT,
-          loc,
-        },
+        init: classIteratorValueRead(cit, rRef(), loc),
         loc,
       },
       ...(varTarget

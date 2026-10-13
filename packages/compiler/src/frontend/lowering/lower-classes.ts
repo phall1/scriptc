@@ -6735,7 +6735,10 @@ export function classMemberNameOf(lowerer: Lowerer, name: ts.PropertyName): stri
  * idiom returns `this`, so the iterator class is usually the receiver
  * itself). A MISSING done field never terminates — exactly JS, where
  * `undefined` is falsy forever (Node loops forever too; corpus
- * iterators of that shape are deliberately infinite). Iterator classes
+ * iterators of that shape are deliberately infinite). An unannotated JS
+ * `next()` often returns a checked-dynamic object instead of one record
+ * (two object-literal returns). That result still iterates: `done` and
+ * `value` are read from the object at runtime. Iterator classes
  * declaring `return`/`throw` members stay out — the desugars below
  * never call IteratorClose, and silently skipping a declared return()
  * would drop user cleanup. Null when the shape doesn't hold — callers
@@ -6743,43 +6746,202 @@ export function classMemberNameOf(lowerer: Lowerer, name: ts.PropertyName): stri
 export interface ClassIteratorInfo {
   /** The `[Symbol.iterator]()` call's receiver class + its declarer. */
   className: string;
+  /** ABI return of `[Symbol.iterator]()`. Dyn when JS widened a class instance. */
+  openT: IrType;
   /** The iterator object's type (the method's return). */
   iterT: IrType & { kind: "object" };
-  /** next()'s result record type. */
-  resultT: IrType & { kind: "record" };
+  /** next()'s result: one record, or a checked-dynamic object. */
+  resultT: IrType;
   valueT: IrType;
   /** False: no done field — the protocol never terminates. */
   hasDone: boolean;
 }
-export function classIteratorOf(lowerer: Lowerer, t: IrType): ClassIteratorInfo | null {
-  if (t.kind !== "object") return null;
-  const info = lowerer.classes.get(t.className);
-  if (!info) return null;
-  const iter = findMethodOn(lowerer, info, "sym:iterator");
-  if (!iter || iter.sig.params.length !== 0 || iter.sig.abstract === true) return null;
-  const iterT = iter.sig.ret;
-  if (iterT.kind !== "object") return null;
+
+type IteratorMethod = NonNullable<ReturnType<typeof findMethodOn>>;
+
+function zeroArgInstanceMethod(
+  lowerer: Lowerer,
+  info: ClassInfo,
+  name: string,
+): IteratorMethod | null {
+  const method = findMethodOn(lowerer, info, name);
+  if (!method || method.sig.params.length !== 0 || method.sig.abstract === true) return null;
+  return method;
+}
+
+function symbolIteratorMethod(lowerer: Lowerer, info: ClassInfo): ts.MethodDeclaration | null {
+  const decl = info.decl;
+  if (!decl) return null;
+  for (const member of decl.members) {
+    if (!ts.isMethodDeclaration(member) || !member.body) continue;
+    if (classMemberNameOf(lowerer, member.name) === "sym:iterator") return member;
+  }
+  return null;
+}
+
+/** Every explicit return is one class instance, and the method cannot fall
+ * off the end. JS widens that return to dyn; the instance class is still
+ * the expression's type. */
+function returnedObjectClass(
+  lowerer: Lowerer,
+  method: ts.MethodDeclaration,
+): (IrType & { kind: "object" }) | null {
+  if (!method.body) return null;
+  const last = method.body.statements[method.body.statements.length - 1];
+  if (!last || !ts.isReturnStatement(last)) return null;
+  let className: string | null = null;
+  let failed = false;
+  const visit = (node: ts.Node): void => {
+    if (failed || ts.isFunctionLike(node)) return;
+    if (!ts.isReturnStatement(node)) {
+      node.forEachChild(visit);
+      return;
+    }
+    const mapped = node.expression ? lowerer.mapTypeOf(lowerer.typeOf(node.expression)) : null;
+    if (mapped?.kind !== "object" || (className !== null && mapped.className !== className)) {
+      failed = true;
+      return;
+    }
+    className = mapped.className;
+  };
+  method.body.forEachChild(visit);
+  if (failed || className === null) return null;
+  return { kind: "object", className };
+}
+
+function iteratorReturnClass(
+  lowerer: Lowerer,
+  declarer: ClassInfo,
+  ret: IrType,
+): (IrType & { kind: "object" }) | null {
+  if (ret.kind === "object") return ret;
+  if (ret.kind !== "dyn") return null;
+  const member = symbolIteratorMethod(lowerer, declarer);
+  return member ? returnedObjectClass(lowerer, member) : null;
+}
+
+function iteratorMethodReturnsObject(
+  lowerer: Lowerer,
+  info: ClassInfo,
+): { openT: IrType; iterT: IrType & { kind: "object" }; next: IteratorMethod } | null {
+  const iter = zeroArgInstanceMethod(lowerer, info, "sym:iterator");
+  if (!iter) return null;
+  const iterT = iteratorReturnClass(lowerer, iter.declarer, iter.sig.ret);
+  if (!iterT) return null;
   const itInfo = lowerer.classes.get(iterT.className);
   if (!itInfo) return null;
   // IteratorClose honesty: a declared return()/throw() would be called
   // by JS on abrupt completion; these desugars never close.
   if (findMethodOn(lowerer, itInfo, "return") || findMethodOn(lowerer, itInfo, "throw"))
     return null;
-  const next = findMethodOn(lowerer, itInfo, "next");
-  if (!next || next.sig.params.length !== 0 || next.sig.abstract === true) return null;
-  const resultT = next.sig.ret;
+  const next = zeroArgInstanceMethod(lowerer, itInfo, "next");
+  if (!next) return null;
+  return { openT: iter.sig.ret, iterT, next };
+}
+
+function recordIteratorFields(
+  lowerer: Lowerer,
+  resultT: IrType,
+): { valueT: IrType; hasDone: boolean } | null {
   if (resultT.kind !== "record") return null;
   const shape = lowerer.shapes.get(resultT.shapeId);
   const value = shape?.fields.find((f) => f.name === "value");
   if (!shape || !value) return null;
   const done = shape.fields.find((f) => f.name === "done");
   if (done && done.type.kind !== "bool") return null;
+  return { valueT: value.type, hasDone: done !== undefined };
+}
+
+export function classIteratorOf(lowerer: Lowerer, t: IrType): ClassIteratorInfo | null {
+  if (t.kind !== "object") return null;
+  const info = lowerer.classes.get(t.className);
+  if (!info) return null;
+  const protocol = iteratorMethodReturnsObject(lowerer, info);
+  if (!protocol) return null;
+  const resultT = protocol.next.sig.ret;
+  // JS object-literal returns stay checked-dynamic. `done` is tested at
+  // runtime; a missing property is undefined and the loop continues.
+  if (resultT.kind === "dyn") {
+    return {
+      className: t.className,
+      openT: protocol.openT,
+      iterT: protocol.iterT,
+      resultT,
+      valueT: DYN,
+      hasDone: true,
+    };
+  }
+  const record = recordIteratorFields(lowerer, resultT);
+  if (!record) return null;
   return {
     className: t.className,
-    iterT,
+    openT: protocol.openT,
+    iterT: protocol.iterT,
     resultT,
-    valueT: value.type,
-    hasDone: done !== undefined,
+    valueT: record.valueT,
+    hasDone: record.hasDone,
+  };
+}
+
+/** `result.done` when the protocol has one. A dynamic result treats a
+ * missing `done` as falsy, matching JavaScript. */
+export function classIteratorDoneTest(
+  cit: ClassIteratorInfo,
+  result: IrExpr,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (!cit.hasDone) return null;
+  if (cit.resultT.kind === "dyn") {
+    return {
+      kind: "dynTest",
+      test: "truthy",
+      value: {
+        kind: "dynKeyGet",
+        value: result,
+        key: { kind: "strLit", value: "done", type: STRING, loc },
+        type: DYN,
+        loc,
+      },
+      type: BOOL,
+      loc,
+    };
+  }
+  if (cit.resultT.kind !== "record") return null;
+  return {
+    kind: "recordGet",
+    obj: result,
+    shapeId: cit.resultT.shapeId,
+    field: "done",
+    type: BOOL,
+    loc,
+  };
+}
+
+/** `result.value`. A dynamic result yields the property as checked-dynamic. */
+export function classIteratorValueRead(
+  cit: ClassIteratorInfo,
+  result: IrExpr,
+  loc: SrcLoc,
+): IrExpr {
+  if (cit.resultT.kind === "dyn") {
+    return {
+      kind: "dynKeyGet",
+      value: result,
+      key: { kind: "strLit", value: "value", type: STRING, loc },
+      type: DYN,
+      loc,
+    };
+  }
+  if (cit.resultT.kind !== "record") {
+    throw new InternalCompilerError("class iterator result is neither a record nor dynamic");
+  }
+  return {
+    kind: "recordGet",
+    obj: result,
+    shapeId: cit.resultT.shapeId,
+    field: "value",
+    type: cit.valueT,
+    loc,
   };
 }
 
@@ -6801,7 +6963,9 @@ export function classIteratorOpenCall(
   recv: IrExpr,
   loc: SrcLoc,
 ): IrExpr {
-  return accessorCall(lowerer, cit.className, "sym:iterator", recv, [], cit.iterT, loc);
+  const opened = accessorCall(lowerer, cit.className, "sym:iterator", recv, [], cit.openT, loc);
+  if (cit.openT.kind !== "dyn") return opened;
+  return { kind: "dynCheck", value: opened, type: cit.iterT, loc };
 }
 
 /** `[...new C]` / `f(...new C)` over a CLASS ITERABLE: the eager drain —
@@ -6838,14 +7002,8 @@ export function classIteratorDrainCall(
     const itRef: IrExpr = { kind: "varRef", localId: "it.0", type: cit.iterT, loc };
     const outRef: IrExpr = { kind: "varRef", localId: "out.0", type: outT, loc };
     const resRef: IrExpr = { kind: "varRef", localId: "res.0", type: cit.resultT, loc };
-    const valueRead: IrExpr = {
-      kind: "recordGet",
-      obj: resRef,
-      shapeId: cit.resultT.shapeId,
-      field: "value",
-      type: cit.valueT,
-      loc,
-    };
+    const valueRead: IrExpr = classIteratorValueRead(cit, resRef, loc);
+    const doneTest = classIteratorDoneTest(cit, resRef, loc);
     const loop: IrStmt[] = [
       {
         kind: "varDecl",
@@ -6853,18 +7011,11 @@ export function classIteratorDrainCall(
         init: classIteratorNextCall(lowerer, cit, itRef, loc),
         loc,
       },
-      ...(cit.hasDone
+      ...(doneTest
         ? [
             {
               kind: "if",
-              cond: {
-                kind: "recordGet",
-                obj: resRef,
-                shapeId: cit.resultT.shapeId,
-                field: "done",
-                type: BOOL,
-                loc,
-              },
+              cond: doneTest,
               then: [{ kind: "return", value: outRef, loc }],
               else_: null,
               loc,
@@ -6950,6 +7101,7 @@ export function classIteratorRestDrainCall(
     const itRef: IrExpr = { kind: "varRef", localId: "it.0", type: cit.iterT, loc };
     const outRef: IrExpr = { kind: "varRef", localId: "out.0", type: outT, loc };
     const resRef: IrExpr = { kind: "varRef", localId: "res.0", type: cit.resultT, loc };
+    const doneTest = classIteratorDoneTest(cit, resRef, loc);
     const loop: IrStmt[] = [
       {
         kind: "varDecl",
@@ -6957,18 +7109,11 @@ export function classIteratorRestDrainCall(
         init: classIteratorNextCall(lowerer, cit, itRef, loc),
         loc,
       },
-      ...(cit.hasDone
+      ...(doneTest
         ? [
             {
               kind: "if",
-              cond: {
-                kind: "recordGet",
-                obj: resRef,
-                shapeId: cit.resultT.shapeId,
-                field: "done",
-                type: BOOL,
-                loc,
-              },
+              cond: doneTest,
               then: [{ kind: "return", value: outRef, loc }],
               else_: null,
               loc,
@@ -6981,16 +7126,7 @@ export function classIteratorRestDrainCall(
           kind: "arrIntrinsic",
           method: "push",
           receiver: outRef,
-          args: [
-            {
-              kind: "recordGet",
-              obj: resRef,
-              shapeId: cit.resultT.shapeId,
-              field: "value",
-              type: cit.valueT,
-              loc,
-            },
-          ],
+          args: [classIteratorValueRead(cit, resRef, loc)],
           type: F64,
           loc,
         },
