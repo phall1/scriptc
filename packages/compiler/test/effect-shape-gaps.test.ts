@@ -500,3 +500,21 @@ console.log(Literal("a").transform("b"));
 test("a nested method can capture the const it initializes, including a recursive call", async () => {
   await matchesNode("literal-capture-fixture", literalProbe, literalProgram);
 });
+
+const fileProbe = `
+export async function described(bytes) {
+  const file = new globalThis.File([bytes], "note.txt", { type: "text/plain", lastModified: 5 });
+  const copy = new Uint8Array(await file.arrayBuffer());
+  return [file.name, file.type, String(file.lastModified), String(file.size), String(copy.length), String(copy[0])].join(" ");
+}
+`;
+
+const fileProgram = `
+import { described } from "file-fixture/probe.js";
+
+console.log(await described(new Uint8Array([1, 2, 3])));
+`;
+
+test("new File records the name, type, time, and byte length", async () => {
+  await matchesNode("file-fixture", fileProbe, fileProgram);
+});
