@@ -2805,6 +2805,12 @@ export function collectClassShapeInner(
           // JS dyn redeclaration resets the existing slot to undefined.
           // Other bare or type-changing redeclarations keep the fence.
           const baseType = fields.get(member.name.text)!;
+          // `message = this.reason.message` on an Error subclass. The
+          // inherited slot is string; a schema reason still types the
+          // read as unknown. Keep the string slot and check the value.
+          if (member.initializer && baseType.kind === "string" && type.kind === "dyn") {
+            type = baseType;
+          }
           if ((member.initializer || type.kind === "dyn") && typeEquals(type, baseType)) {
             fieldOrder.push({
               name: member.name.text,

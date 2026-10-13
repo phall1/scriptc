@@ -890,3 +890,29 @@ console.log(JSON.stringify(loggerMode()));
 test("a process alias probes stdout and isBun", async () => {
   await matchesNode("process-probe-fixture", processProbe, processProgram);
 });
+
+const messageProbe = `
+class WithReason extends Error {
+  constructor(reason) {
+    super();
+    this.reason = reason;
+  }
+}
+class Boom extends WithReason {
+  message = this.reason.message;
+}
+export function text(reason) {
+  return new Boom(reason).message;
+}
+`;
+
+const messageProgram = `
+import { text } from "message-field-fixture/probe.js";
+
+console.log(text({ message: "boom" }));
+console.log(text({ message: "socket closed" }));
+`;
+
+test("an Error subclass resets message from an unknown reason", async () => {
+  await matchesNode("message-field-fixture", messageProbe, messageProgram);
+});
