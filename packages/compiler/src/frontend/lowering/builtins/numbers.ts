@@ -2,7 +2,7 @@ import * as ts from "../../ts7/adapter.js";
 import { type Lowerer, own } from "../lowerer.js";
 import { lowerCheckedPredicateValue } from "../lower-builtin-values.js";
 import { locOf } from "../../program.js";
-import { BOOL, F64, type IrExpr, type IrLibFn } from "../../../ir/ir.js";
+import { BOOL, F64, STRING, type IrExpr, type IrLibFn } from "../../../ir/ir.js";
 import { lowerBuiltinValuePreservingUndefined, lowerOptionalNumberPredicate } from "./arguments.js";
 import { tryLowerExpression } from "../expressions/try-lower-expression.js";
 import { lowerStaticNumberGlobal } from "../lower-calls.js";
@@ -87,6 +87,20 @@ export function lowerNumberStaticCall(
     if (probed !== null && isStringLike(lowerer, probed.type)) {
       const parsed = lowerStaticNumberGlobal(lowerer, member, call, call.arguments, loc);
       if (parsed !== null) return parsed;
+    }
+    // An untyped argument is still ToString'd by the spec. The value form
+    // of Number.parseInt already does this; the call form follows it so a
+    // specialized string parses instead of fencing the whole function.
+    if (member === "parseInt" && probed?.type.kind === "dyn") {
+      const text: IrExpr = {
+        kind: "libCall",
+        fn: "dyn.toStringCoerce",
+        args: [probed],
+        type: STRING,
+        loc,
+      };
+      const radix = lowerer.lowerExprExpecting(call.arguments[1]!, F64);
+      return { kind: "libCall", fn: "num.parseInt", args: [text, radix], type: F64, loc };
     }
     const argText =
       probed !== null

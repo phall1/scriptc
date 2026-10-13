@@ -6231,6 +6231,13 @@ function lowerSymbolStaticCall(
       lowerer.noLowering(`Symbol.keyFor with ${call.arguments.length} arguments`, call);
     }
     const sym = lowerer.lowerExpr(call.arguments[0]!);
+    if (sym.type.kind === "dyn") {
+      const type = lowerer.irTypeOf(call);
+      if (type.kind !== "union") lowerer.badType(call, lowerer.typeOf(call));
+      const checked: IrExpr = { kind: "dynCheck", value: sym, type: SYMBOL_T, loc };
+      const read: IrExpr = { kind: "libCall", fn: "sym.keyFor", args: [checked], type, loc };
+      return lowerer.maybeNarrow(read, call);
+    }
     if (sym.type.kind !== "symbol") {
       lowerer.noLowering(
         `Symbol.keyFor of a '${lowerer.fmt(sym.type)}' value`,

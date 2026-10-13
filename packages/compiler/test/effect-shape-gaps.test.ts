@@ -204,3 +204,25 @@ console.log(fromIterator(() => [7][Symbol.iterator]()));
 test("record field calls and generator next match Node", async () => {
   await matchesNode("member-call-fixture", memberProbe, memberProgram);
 });
+
+const symbolProbe = `
+export function keys(registered) {
+  const local = Symbol("local");
+  return (Symbol.keyFor(registered) ?? "none") + ":" + (Symbol.keyFor(local) ?? "none");
+}
+export function octet(part) {
+  return Number.parseInt(part, 16);
+}
+`;
+
+const symbolProgram = `
+import { keys, octet } from "symbol-parse-fixture/probe.js";
+
+console.log(keys(Symbol.for("effect")));
+console.log(octet("0a"));
+console.log(octet("zz"));
+`;
+
+test("Symbol.keyFor and Number.parseInt of unknown values match Node", async () => {
+  await matchesNode("symbol-parse-fixture", symbolProbe, symbolProgram);
+});
