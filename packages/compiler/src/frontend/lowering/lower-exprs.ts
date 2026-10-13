@@ -6407,6 +6407,69 @@ function lowerTupleSpreadLiteral(
 /** Convert an undefined-armed numeric value at an arithmetic use. Ordinary
  * reads preserve their tagged value; JavaScript's ToNumber(undefined) is NaN,
  * so compounds and binary arithmetic use this checked one-time extraction. */
+/** A value produced by number|bigint arithmetic, including a local that
+ * adopted that checked-dynamic result. */
+function mixedNumericDyn(lowerer: Lowerer, expr: IrExpr): boolean {
+  if (expr.kind === "libCall" && expr.fn === "dyn.arithmetic") return true;
+  if (expr.kind !== "varRef") return false;
+  for (const local of lowerer.runtimeOptionalArithmeticLocals) {
+    if (local.id === expr.localId && local.type.kind === "dyn") return true;
+  }
+  return false;
+}
+
+/** `number | bigint` arithmetic, including an undefined or null arm from an
+ * optional field. Both sides box and `dyn.arithmetic` selects the number
+ * or bigint operation, throwing Node's mix TypeError when the kinds
+ * differ. Plain number/number and bigint/bigint stay on their static
+ * operations. */
+function lowerMixedNumericArithmetic(
+  lowerer: Lowerer,
+  expr: ts.BinaryExpression,
+  left: IrExpr,
+  right: IrExpr,
+  op: "-" | "*" | "/" | "%" | "**",
+  loc: SrcLoc,
+): IrExpr | null {
+  const numeric = (type: IrType): boolean => {
+    if (type.kind === "f64" || type.kind === "bigint") return true;
+    if (type.kind !== "union") return false;
+    const arms = lowerer.unions.get(type.unionId)?.arms;
+    return (
+      !!arms &&
+      arms.length > 0 &&
+      arms.every(
+        (arm) =>
+          arm.kind === "f64" ||
+          arm.kind === "bigint" ||
+          arm.kind === "undefinedT" ||
+          arm.kind === "nullT",
+      )
+    );
+  };
+  if (!numeric(left.type) || !numeric(right.type)) return null;
+  // number/number and bigint/bigint already lowered. A union arm, or a
+  // bigint beside a number, still has to pick the operation at runtime.
+  if (
+    left.type.kind !== "union" &&
+    right.type.kind !== "union" &&
+    left.type.kind === right.type.kind
+  )
+    return null;
+  if (!lowerer.dynConvertible(left.type) || !lowerer.dynConvertible(right.type)) return null;
+  const l = lowerer.coerceToExpected(left, DYN);
+  const r = lowerer.coerceToExpected(right, DYN);
+  if (l.type.kind !== "dyn" || r.type.kind !== "dyn") return null;
+  lowerer.runtimeOptionalArithmeticTypes.set(expr, DYN);
+  return {
+    kind: "libCall",
+    fn: "dyn.arithmetic",
+    args: [l, r, { kind: "strLit", value: op, type: STRING, loc }],
+    type: DYN,
+    loc,
+  };
+}
+
 export function lowerOptionalNumber(
   lowerer: Lowerer,
   operand: IrExpr,
@@ -10184,7 +10247,14 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
               : left.type.kind === "f64" || right.type.kind === "f64"
                 ? F64
                 : null;
-          return numeric ? { kind: "dynCheck", value, type: numeric, loc } : value;
+          if (numeric) return { kind: "dynCheck", value, type: numeric, loc };
+          // A previous number|bigint operation stayed checked-dynamic.
+          // Keep this result checked-dynamic too: the checker often types
+          // the product as number, and checking a bigint here throws.
+          if (mixedNumericDyn(lowerer, left) || mixedNumericDyn(lowerer, right)) {
+            lowerer.runtimeOptionalArithmeticTypes.set(expr, DYN);
+          }
+          return value;
         }
       }
       if (cmp && lowerer.dynConvertible(left.type) && lowerer.dynConvertible(right.type)) {
@@ -10552,7 +10622,6 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     case ts.SyntaxKind.SlashToken:
     case ts.SyntaxKind.PercentToken:
     case ts.SyntaxKind.AsteriskAsteriskToken: {
-      if (!bothNum) lowerer.unsupported("SC1043", expr);
       const binOp =
         op === ts.SyntaxKind.MinusToken
           ? "-"
@@ -10563,6 +10632,23 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
               : op === ts.SyntaxKind.PercentToken
                 ? "%"
                 : "**";
+      if (!bothNum) {
+        // An untyped array element is `number | bigint`, and an optional
+        // record field is `bigint | undefined`. JavaScript picks the
+        // operation from the runtime kinds and throws on a mix. The result
+        // stays checked-dynamic so a later BigInt() or `%` sees whichever
+        // kind actually came back.
+        const mixed = lowerMixedNumericArithmetic(
+          lowerer,
+          expr,
+          arithmeticLeft,
+          arithmeticRight,
+          binOp,
+          loc,
+        );
+        if (!mixed) lowerer.unsupported("SC1043", expr);
+        return mixed;
+      }
       return {
         kind: "bin",
         op: binOp,

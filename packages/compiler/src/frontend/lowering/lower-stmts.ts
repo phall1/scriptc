@@ -4901,7 +4901,7 @@ export function lowerVarDecl(
   }
   init = lowerer.coerceInto(decl.initializer, init, settledType);
   const local = lowerer.declareLocal(decl.name, decl.name.text, settledType, isLet);
-  if (runtimeStringArithmetic && init.type.kind === "union") {
+  if (runtimeStringArithmetic && (init.type.kind === "union" || init.type.kind === "dyn")) {
     lowerer.runtimeOptionalArithmeticLocals.add(lowerer.runtimeOptionalRootOf(local));
   }
   if (runtimeOptional) {

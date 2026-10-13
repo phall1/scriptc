@@ -916,3 +916,74 @@ console.log(text({ message: "socket closed" }));
 test("an Error subclass resets message from an unknown reason", async () => {
   await matchesNode("message-field-fixture", messageProbe, messageProgram);
 });
+
+const remainderProbe = `
+function toScientificInteger(n) {
+  if (globalThis.Number.isInteger(n)) return [BigInt(n), 0];
+  const scientific = Math.abs(n).toExponential();
+  const eIndex = scientific.indexOf("e");
+  const digits = scientific.slice(0, eIndex).replace(".", "");
+  const coefficient = BigInt(digits) * (n < 0 ? -BigInt(1) : BigInt(1));
+  return [coefficient, globalThis.Number(scientific.slice(eIndex + 1)) - digits.length + 1];
+}
+export function remainder(self, divisor) {
+  if (!globalThis.Number.isFinite(self) || !globalThis.Number.isFinite(divisor) || divisor === 0) {
+    return NaN;
+  }
+  if (globalThis.Number.isInteger(self) && globalThis.Number.isInteger(divisor)) {
+    return self % divisor;
+  }
+  const [selfCoefficient, selfExponent] = toScientificInteger(self);
+  const [divisorCoefficient, divisorExponent] = toScientificInteger(divisor);
+  const exponent = Math.min(selfExponent, divisorExponent);
+  const selfInteger = selfCoefficient * BigInt(10) ** BigInt(selfExponent - exponent);
+  const divisorInteger = divisorCoefficient * BigInt(10) ** BigInt(divisorExponent - exponent);
+  const out = selfInteger % divisorInteger;
+  if (out === BigInt(0)) return self < 0 || Object.is(self, -0) ? -0 : 0;
+  const value = globalThis.Number(String(out) + "e" + exponent);
+  return value === 0 ? Math.sign(self) * globalThis.Number.MIN_VALUE : value;
+}
+export function show(n) {
+  return Object.is(n, -0) ? "-0" : String(n);
+}
+`;
+
+const remainderProgram = `
+import { remainder, show } from "remainder-fixture/probe.js";
+
+for (const [self, divisor] of [[2, 2], [3, 2], [-4, 2], [1.5, 0.2], [0.3, 0.1], [-1.25, 0.5]]) {
+  console.log(show(remainder(self, divisor)));
+}
+`;
+
+test("a scientific remainder subtracts number-or-bigint exponents", async () => {
+  await matchesNode("remainder-fixture", remainderProbe, remainderProgram);
+});
+
+const quantityProbe = `
+const units = new Map([["kB", { factor: BigInt(1000), symbol: "kB" }]]);
+function fromQuantity(quantity, unit) {
+  if (typeof quantity === "bigint") {
+    if (quantity < BigInt(0)) return "bad";
+    return String(quantity * unit.factor);
+  }
+  const value = quantity * globalThis.Number(unit.factor);
+  if (!globalThis.Number.isSafeInteger(value) || value < 0) return "bad";
+  return String(BigInt(value));
+}
+export function of(symbol, quantity) {
+  return fromQuantity(quantity, units.get(symbol));
+}
+`;
+
+const quantityProgram = `
+import { of } from "quantity-fixture/probe.js";
+
+console.log(of("kB", 2));
+console.log(of("kB", 2n));
+console.log(of("kB", 0));
+`;
+
+test("a byte quantity multiplies a bigint factor", async () => {
+  await matchesNode("quantity-fixture", quantityProbe, quantityProgram);
+});
