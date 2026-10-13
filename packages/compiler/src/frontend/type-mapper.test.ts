@@ -54,7 +54,6 @@ test("Node URL constructor static sides never map to native instance storage", (
       shapes: new ShapeRegistry(),
       unions: new UnionRegistry(),
       classNamer: (decl) => decl.name?.text ?? "anonymous",
-      dynamic: false,
       typeMemo: new Map(),
       isStdlibFile: (sf) =>
         loaded.program.isSourceFileDefaultLibrary(sf) ||

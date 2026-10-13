@@ -2,6 +2,7 @@ import { classMembershipIntervals } from "./classes.js";
 import { borrowableInputs, emitBorrowedInput, emitBorrowedInputs } from "./borrowed-inputs.js";
 import { preservesDynTest } from "./checked-value-lifetimes.js";
 import { typedRefConstructor } from "./shapes.js";
+import { bindLiveArrayOps } from "./expr-stream-bridges.js";
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
 import { emitNullableIsTag, emitNullablePresent } from "./union-repr.js";
@@ -27,7 +28,6 @@ export function emitDynamicExpr(
   host: LlvmEmitterContext,
   e: ExprOf<
     | "dynFrom"
-    | "dynFromJsval"
     | "dynCall"
     | "dynInvoke"
     | "dynArrLit"
@@ -96,6 +96,7 @@ export function emitDynamicExpr(
         B.line(
           `${boxed} = call ptr ${typedRefConstructor(host.shapeHost, v.type)}(ptr ${v.name}, ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
         );
+        for (const line of bindLiveArrayOps(host.shapeHost, adapter, boxed)) B.line(line);
         return host.own({ name: boxed, type: e.type });
       }
       if (v.type.kind === "func") {
@@ -112,16 +113,6 @@ export function emitDynamicExpr(
       const valTy = host.llType(v.type);
       const t = B.tmp();
       B.line(`${t} = call ptr @${conv}(${valTy} ${v.name})`);
-      return host.own({ name: t, type: e.type });
-    }
-    case "dynFromJsval": {
-      // Island value → dyn: the by-reference wrap (scr_dyn_from_jsval
-      // retains the cell in; engine scalars normalize to native dyn
-      // kinds at wrap time). Operand borrowed, result +1, never throws.
-      const v = emitBorrowedInput(host, e.value);
-      host.declare(`declare ptr @scr_dyn_from_jsval(ptr)`);
-      const t = B.tmp();
-      B.line(`${t} = call ptr @scr_dyn_from_jsval(ptr ${v.name})`);
       return host.own({ name: t, type: e.type });
     }
     case "dynCall": {
@@ -625,16 +616,16 @@ export function emitDynamicExpr(
       } else if (e.test === "error") {
         // `u instanceof Error`: the checked-dynamic tree's error encoding — an object
         // carrying the reserved "%error" marker key, a registered native
-        // Error view, or a real engine Error held by reference.
+        // Error view.
         const kd = host.dynKind(d.name);
         const isObj = B.tmp();
         B.line(`${isObj} = icmp eq i32 ${kd}, ${DYN_KIND.OBJ}`);
         const slot = B.slot();
         B.entryAllocas.push(`${slot} = alloca i1`);
-        host.declare(`declare zeroext i1 @scr_dyn_isl_is_error(ptr)`);
-        const isl = B.tmp();
-        B.line(`${isl} = call zeroext i1 @scr_dyn_isl_is_error(ptr ${d.name})`);
-        B.line(`store i1 ${isl}, ptr ${slot}`);
+        host.declare(`declare zeroext i1 @scr_dyn_ref_is_error(ptr)`);
+        const nativeError = B.tmp();
+        B.line(`${nativeError} = call zeroext i1 @scr_dyn_ref_is_error(ptr ${d.name})`);
+        B.line(`store i1 ${nativeError}, ptr ${slot}`);
         const lObj = B.newLabel("dts.o");
         const lj = B.newLabel("dts.j");
         B.condBr(isObj, lObj, lj);
@@ -647,7 +638,7 @@ export function emitDynamicExpr(
         );
         B.line(`${has} = icmp ne ptr ${m}, null`);
         const branded = B.tmp();
-        B.line(`${branded} = or i1 ${has}, ${isl}`);
+        B.line(`${branded} = or i1 ${has}, ${nativeError}`);
         B.line(`store i1 ${branded}, ptr ${slot}`);
         B.br(lj);
         B.startBlock(lj);
@@ -670,10 +661,9 @@ export function emitDynamicExpr(
           }
           return acc;
         };
-        // ISLAND-held nodes route the tests that depend on the engine's
-        // answer through the scr_dyn_isl_* helpers (false on every
-        // other kind — the calls stay unconditional and branch-free).
-        const orIsl = (acc: string, helper: string, arg?: string): string => {
+
+        // Native reference capsules answer through materialization helpers.
+        const orNativeRef = (acc: string, helper: string, arg?: string): string => {
           host.declare(`declare zeroext i1 @${helper}(ptr${arg !== undefined ? ", ptr" : ""})`);
           const c = B.tmp();
           B.line(
@@ -701,9 +691,8 @@ export function emitDynamicExpr(
           B.line(`${test} = and i1 ${bytes}, ${buffer}`);
         } else if (e.test === "object") {
           // `typeof v === "object"`: objects, arrays, bytes, native
-          // handles, promises, AND null — engine-held objects by the
-          // engine's own typeof.
-          const object = orIsl(
+          // handles, promises, null, and native reference capsules.
+          const object = orNativeRef(
             oneOf([
               DYN_KIND.OBJ,
               DYN_KIND.ARR,
@@ -713,7 +702,7 @@ export function emitDynamicExpr(
               DYN_KIND.PROXY,
               DYN_KIND.NULL,
             ]),
-            "scr_dyn_isl_typeof_is",
+            "scr_dyn_ref_typeof_is",
             host.cstr("object"),
           );
           host.declare("declare zeroext i1 @scr_dyn_is_callable(ptr)");
@@ -724,9 +713,8 @@ export function emitDynamicExpr(
           B.line(`${nonCallable} = xor i1 ${callable}, true`);
           B.line(`${test} = and i1 ${object}, ${nonCallable}`);
         } else if (e.test === "array") {
-          // Array.isArray: the checked-dynamic tree's array kind, or the engine's own
-          // answer for an engine-held value.
-          test = orIsl(oneOf([DYN_KIND.ARR]), "scr_dyn_isl_is_array");
+          // Array.isArray accepts native arrays and typed array capsules.
+          test = orNativeRef(oneOf([DYN_KIND.ARR]), "scr_dyn_ref_is_array");
         } else if (e.test === "function") {
           host.declare("declare zeroext i1 @scr_dyn_is_callable(ptr)");
           test = B.tmp();

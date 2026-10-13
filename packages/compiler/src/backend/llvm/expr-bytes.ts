@@ -3,7 +3,7 @@ import { InternalCompilerError } from "../../errors.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { BYTES_ELEMENT_SIZE, F64, type IrBytesElem, type IrExpr } from "../../ir/ir.js";
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
-import { F64_INF, f64Lit } from "./common.js";
+import { F64_INF, exactIndexLines, f64Lit } from "./common.js";
 import { exactInteger, widenInteger } from "./integer-values.js";
 import { byteNumberAccess } from "../../ir/byte-numbers.js";
 import { emitByteNumber } from "./byte-numbers.js";
@@ -118,28 +118,12 @@ export function emitBytesIndex(
     B.line(`${narrow} = trunc i64 ${wideIndex} to ${host.sizeType}`);
     return narrow;
   }
-  const lenF64 = B.tmp();
-  const nonnegative = B.tmp();
-  const belowLen = B.tmp();
-  const inRange = B.tmp();
-  B.line(`${lenF64} = uitofp ${host.sizeType} ${len} to double`);
-  B.line(`${nonnegative} = fcmp oge double ${index}, ${f64Lit(0)}`);
-  B.line(`${belowLen} = fcmp olt double ${index}, ${lenF64}`);
-  B.line(`${inRange} = and i1 ${nonnegative}, ${belowLen}`);
-
-  const rangeOk = B.newLabel("bytes.index.range");
+  const exact = exactIndexLines(index, len, host.sizeType, () => B.tmp());
+  for (const line of exact.lines) B.line(line);
   const invalid = B.newLabel("bytes.index.invalid");
   const valid = B.newLabel("bytes.index.valid");
-  B.condBr(inRange, rangeOk, invalid);
-
-  B.startBlock(rangeOk);
-  const idx = B.tmp();
-  const roundTrip = B.tmp();
-  const integral = B.tmp();
-  B.line(`${idx} = fptoui double ${index} to ${host.sizeType}`);
-  B.line(`${roundTrip} = uitofp ${host.sizeType} ${idx} to double`);
-  B.line(`${integral} = fcmp oeq double ${roundTrip}, ${index}`);
-  B.condBr(integral, valid, invalid);
+  B.condBr(exact.ok, valid, invalid);
+  let idx = exact.wide;
 
   B.startBlock(invalid);
   if (skipInvalid) B.br(skipInvalid);
@@ -151,6 +135,10 @@ export function emitBytesIndex(
   }
 
   B.startBlock(valid);
+  if (host.sizeType !== "i64") {
+    idx = B.tmp();
+    B.line(`${idx} = trunc i64 ${exact.wide} to ${host.sizeType}`);
+  }
   return idx;
 }
 
@@ -177,7 +165,7 @@ export function emitBytesLength(
   const count = bytes && size !== 1 ? B.tmp() : len;
   if (count !== len) B.line(`${count} = shl ${host.sizeType} ${len}, ${Math.log2(size)}`);
   const out = B.tmp();
-  B.line(`${out} = uitofp ${host.sizeType} ${count} to double`);
+  B.line(`${out} = sitofp ${host.sizeType} ${count} to double`);
   return { name: out, type: F64 };
 }
 
@@ -197,6 +185,20 @@ export function emitBytesGet(
     const local = emitSharedBytesSplit(host, receiver);
     const result = B.tmp();
     B.line(`${result} = call double @${fn}(ptr ${receiver}, double ${index.name})`);
+    // Integer elements read as integers in int32/uint32 range, or NaN for a
+    // missing one: ToUint32 is the integer, or 0. Keeping it lets the join
+    // carry the local path's integer hint.
+    let sharedU32: string | undefined;
+    if (elem !== "f32" && elem !== "f64") {
+      const missing = B.tmp(),
+        present = B.tmp(),
+        wide = B.tmp();
+      sharedU32 = B.tmp();
+      B.line(`${missing} = fcmp uno double ${result}, ${result}`);
+      B.line(`${present} = select i1 ${missing}, double 0.0, double ${result}`);
+      B.line(`${wide} = fptosi double ${present} to i64`);
+      B.line(`${sharedU32} = trunc i64 ${wide} to i32`);
+    }
     const shared = B.newLabel("bytes.shared.done");
     B.br(shared);
     B.startBlock(local);
@@ -211,7 +213,10 @@ export function emitBytesGet(
     B.startBlock(join);
     const out = B.tmp();
     B.line(`${out} = phi double [ ${own.name}, %${owned} ], [ ${result}, %${shared} ]`);
-    return { name: out, type: F64 };
+    if (own.uint32 === undefined || sharedU32 === undefined) return { name: out, type: F64 };
+    const u32 = B.tmp();
+    B.line(`${u32} = phi i32 [ ${own.uint32}, %${owned} ], [ ${sharedU32}, %${shared} ]`);
+    return { name: out, type: F64, uint32: u32 };
   }
   return emitBytesGetLocal(host, elem, receiver, index, expr, inBounds, invalidNaN);
 }
@@ -264,12 +269,29 @@ function emitBytesGetLocal(
   B.br(done);
   B.startBlock(done);
   const out = B.tmp();
-  B.line(`${out} = phi double [ ${loaded.name}, %${ok} ], [ ${f64Lit(NaN)}, %${invalid} ]`);
-  // NaN has no integer value: the integer hint survives only when the read
-  // is proven valid (the invalid block is then unreachable).
-  if (loaded.uint32 === undefined || !inBounds) return { name: out, type: F64 };
-  const u32 = B.tmp();
+  if (loaded.uint32 === undefined) {
+    B.line(`${out} = phi double [ ${loaded.name}, %${ok} ], [ ${f64Lit(NaN)}, %${invalid} ]`);
+    return { name: out, type: F64 };
+  }
+  // The hint is ToUint32 of the value, and ToUint32(NaN) is 0, so it holds
+  // for an invalid index too. Integer ranges (which would claim more) are
+  // never derived for NaN-coded reads.
+  //
+  // An integer element joins as an integer and a validity bit, and the
+  // number converts after the join. A join of the numbers, `phi [sitofp x,
+  // NaN]`, hides the integer from LLVM: compares of the number stay floating,
+  // and once `| 0` makes the NaN arm 0, InstCombine moves the conversion into
+  // that join (`phi [sitofp x, 0.0]`) and never folds it back. Converting
+  // the joined integer gives it two users (this conversion and the ToUint32
+  // consumers), so a compare of `x | 0` stays an integer compare.
+  const u32 = B.tmp(),
+    valid = B.tmp(),
+    number = B.tmp();
   B.line(`${u32} = phi i32 [ ${loaded.uint32}, %${ok} ], [ 0, %${invalid} ]`);
+  B.line(`${valid} = phi i1 [ true, %${ok} ], [ false, %${invalid} ]`);
+  const signed = elem === "i8" || elem === "i16" || elem === "i32";
+  B.line(`${number} = ${signed ? "sitofp" : "uitofp"} i32 ${u32} to double`);
+  B.line(`${out} = select i1 ${valid}, double ${number}, double ${f64Lit(NaN)}`);
   return { name: out, type: F64, uint32: u32 };
 }
 
@@ -355,48 +377,46 @@ export function emitToUint32(
   B.br(done);
 
   B.startBlock(slowLabel);
-  const ordered = B.tmp();
-  const belowInf = B.tmp();
-  const aboveNegInf = B.tmp();
-  const finiteRange = B.tmp();
-  const finite = B.tmp();
-  B.line(`${ordered} = fcmp ord double ${value}, ${value}`);
-  B.line(`${belowInf} = fcmp olt double ${value}, ${F64_INF}`);
-  B.line(`${aboveNegInf} = fcmp ogt double ${value}, ${f64Lit(-Infinity)}`);
-  B.line(`${finiteRange} = and i1 ${belowInf}, ${aboveNegInf}`);
-  B.line(`${finite} = and i1 ${ordered}, ${finiteRange}`);
-  const finiteLabel = B.newLabel("uint32.coerce.finite");
-  const nonfiniteLabel = B.newLabel("uint32.coerce.nonfinite");
-  const slowDone = B.newLabel("uint32.coerce.slow.done");
-  B.condBr(finite, finiteLabel, nonfiniteLabel);
-
-  B.startBlock(finiteLabel);
-  host.declare(`declare double @llvm.trunc.f64(double)`);
-  const truncated = B.tmp();
-  const residue = B.tmp();
+  // Only NaN, the infinities and magnitudes above 2^53 reach this block.
+  // Such a finite double is the integer mantissa * 2^shift with shift >= 1,
+  // so its low 32 bits are the shifted mantissa's (none once shift >= 64),
+  // negated for a negative value. NaN and the infinities have the maximum
+  // exponent, a shift of 972, and convert to 0 like ToUint32. Integer
+  // arithmetic only: the former `frem` became an `fmod` call that LLVM
+  // could hoist above the range test, onto the fast path.
+  const bits = B.tmp();
+  const exponentBits = B.tmp();
+  const exponent = B.tmp();
+  const fraction = B.tmp();
+  const mantissa = B.tmp();
+  const shift = B.tmp();
+  const inWord = B.tmp();
+  const safeShift = B.tmp();
+  const shifted = B.tmp();
+  const magnitude = B.tmp();
+  const low = B.tmp();
   const negative = B.tmp();
-  const wrapped = B.tmp();
-  const normalized = B.tmp();
-  const finiteU32 = B.tmp();
-  B.line(`${truncated} = call double @llvm.trunc.f64(double ${value})`);
-  B.line(`${residue} = frem double ${truncated}, ${f64Lit(4294967296)}`);
-  B.line(`${negative} = fcmp olt double ${residue}, ${f64Lit(0)}`);
-  B.line(`${wrapped} = fadd double ${residue}, ${f64Lit(4294967296)}`);
-  B.line(`${normalized} = select i1 ${negative}, double ${wrapped}, double ${residue}`);
-  B.line(`${finiteU32} = fptoui double ${normalized} to i32`);
-  B.br(slowDone);
-
-  B.startBlock(nonfiniteLabel);
-  B.br(slowDone);
-
-  B.startBlock(slowDone);
+  const negated = B.tmp();
   const slowU32 = B.tmp();
-  B.line(`${slowU32} = phi i32 [ ${finiteU32}, %${finiteLabel} ], [ 0, %${nonfiniteLabel} ]`);
+  B.line(`${bits} = bitcast double ${value} to i64`);
+  B.line(`${exponentBits} = lshr i64 ${bits}, 52`);
+  B.line(`${exponent} = and i64 ${exponentBits}, 2047`);
+  B.line(`${fraction} = and i64 ${bits}, 4503599627370495`);
+  B.line(`${mantissa} = or i64 ${fraction}, 4503599627370496`);
+  B.line(`${shift} = sub i64 ${exponent}, 1075`);
+  B.line(`${inWord} = icmp ult i64 ${shift}, 64`);
+  B.line(`${safeShift} = select i1 ${inWord}, i64 ${shift}, i64 0`);
+  B.line(`${shifted} = shl i64 ${mantissa}, ${safeShift}`);
+  B.line(`${magnitude} = select i1 ${inWord}, i64 ${shifted}, i64 0`);
+  B.line(`${low} = trunc i64 ${magnitude} to i32`);
+  B.line(`${negative} = icmp slt i64 ${bits}, 0`);
+  B.line(`${negated} = sub i32 0, ${low}`);
+  B.line(`${slowU32} = select i1 ${negative}, i32 ${negated}, i32 ${low}`);
   B.br(done);
 
   B.startBlock(done);
   const out = B.tmp();
-  B.line(`${out} = phi i32 [ ${fastU32}, %${fastLabel} ], [ ${slowU32}, %${slowDone} ]`);
+  B.line(`${out} = phi i32 [ ${fastU32}, %${fastLabel} ], [ ${slowU32}, %${slowLabel} ]`);
   return out;
 }
 

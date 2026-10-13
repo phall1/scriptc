@@ -6,6 +6,69 @@ All notable changes to scriptc will be documented in this file.
 
 <!-- release:start -->
 
+## 0.3.0
+
+### Breaking changes
+
+- **Compilation is native-only.** The `--dynamic` option and embedded JavaScript execution runtime have been removed. Eligible dependencies compile natively by default; unsupported packages receive build diagnostics. QuickJS remains only in the native compiler's isolated `comptime` helper and as standalone regex/Unicode libraries.
+
+### Features
+
+- **`process.constrainedMemory()` and `process.availableMemory()` read the process's own cgroup limits,** as Node.js does through libuv.
+
+### Performance
+
+- **Map and string lookups do less work.** Absent string keys are rejected before the map is probed, and multi-byte substring searches no longer call `memchr` for every first-byte hit.
+- **Class property bags are read without being created.**
+- **Runtime packs for Linux musl, Windows and WASI are much smaller.** Their dev runtime objects no longer carry undefined-behavior checks, matching the glibc and macOS packs.
+
+### Fixes
+
+- **Native program objects use runtime ABI v14.** The embedded JavaScript runtime's symbols were removed, so external object consumers must link the matching v0.3.0 runtime pack; the versioned marker rejects incompatible runtime objects at link time.
+
+<!-- release:end -->
+
+## 0.2.10
+
+### Features
+
+- **Contract types check extra promises at compile time.** The new types-only `@scriptc/types` package adds `NoThrow<T>`, `Int32`, `Immutable<T>`, `Acyclic` and `ProgramLifetime`. They mean nothing to TypeScript or Node.js, but scriptc proves each one or fails the build with a diagnostic that names the throwing path, the non-int32 store, the write that breaks immutability or the reference cycle. Proven `Int32` slots are stored as native integers, immutable module constants take no reference counts, and program-lifetime classes skip reference counting and cycle collection. Outside worker programs, a surrounding `try`/`catch` discharges `NoThrow`.
+
+### Performance
+
+- **Construction and narrowed reads do less work.** Private constructor stores drop publication guards, construction-only fields are borrowed, string-keyed `Map` reads retain inline, and narrowed member reads are rechecked only when a call can invalidate them.
+- **Indexed reads and integer code are cheaper.** `charCodeAt` at proven integer indices skips the double round trip, literal `switch` statements dispatch without range tests, indexed-read helpers are inlined, identity bitwise forms over proven int32 operands return the operand, and array counters use signed conversions.
+- **Allocation is faster and smaller.** Small arrays are sized exactly, map storage stays on the runtime allocator, array element reference-count entry points live in one shared descriptor per element type, glibc's large blocks use transparent huge pages, and Linux pre-faults allocator memory on a helper thread.
+- **Runtime throw paths stay out of line,** so hot code around checks that rarely fail stays smaller.
+
+### Fixes
+
+- **Published object graphs stay immutable in more cases.** A constructor that stores `this` into its own field keeps its publication guards, and calls that may replace a field keep their own reference to arguments read from it.
+- **Native program objects use runtime ABI v13.** Array headers changed, so external object consumers must link the matching v0.2.10 runtime pack; the versioned marker rejects incompatible runtime objects at link time.
+
+## 0.2.9
+
+### Features
+
+- **`os.availableParallelism()` works in static programs.**
+- **`--detached-exit` frees the address space after `process.exit` off the critical path,** so large programs exit sooner.
+
+### Performance
+
+- **Cycle-capable objects are smaller.** A 16-byte collector header, typed rest spreads, leaf capture boxes, rarely used array storage moved out of line, and tracing only types that can actually lie on a cycle.
+- **The heap and cycle collector scale better.** Busy small-object slices use transparent huge pages, the collector's growth fraction widens further on large live heaps, and `Map`/`Set` `clear` and `delete` cost O(live) rather than O(peak).
+- **Indexed reads are cheaper.** Typed-array reads stay plain numbers where `undefined` acts like `NaN`, unproven indexes are checked with a signed round trip, lengths and in-range indexes convert to doubles without the unsigned sequence, nullable-union array elements are read inline, and counted loops that start from an unproven value run on integer counters.
+- **Worker programs pay less overhead.** Fewer termination polls, an exact per-thread pending word, a call-free macOS stack guard, and exiting worker threads return their free pages to the system.
+- **More receivers and fields stay native.** Optional-chain receivers are borrowed, `int32` fields survive `Error` subclasses that forward constructor arguments, and method calls stay native when only an unrelated callback field shares the name.
+- **Compiler-scale programs compile without hitting V8's string limit.** Serialized IR is streamed.
+
+### Fixes
+
+- **More values behave as in Node.js.** Missing array and typed-array reads stay `undefined` through number arguments, narrowed slots and lambda results, and `null` stays distinct from the temporal dead zone in forward-captured bindings.
+- **Union class fields work in more shapes.** Optional base-class receivers are narrowed before shared field access, and fields declared with different types across a union can be read and written.
+- **Workers share descriptor tables safely,** and live array references are accessed one element at a time.
+- **Native program objects use runtime ABI v12.** Runtime object layouts changed, so external object consumers must link the matching v0.2.9 runtime pack; the versioned marker rejects incompatible runtime objects at link time.
+
 ## 0.2.8
 
 ### Features
@@ -27,8 +90,6 @@ All notable changes to scriptc will be documented in this file.
 - **Weak collections accept more keys.** Records and arrays reached through unions and empty object literals work as `WeakMap` and `WeakSet` keys.
 - **Debuggers stop only at user code.** Shared helpers no longer appear on user source lines, so a breakpoint on a line stops only at that line's code.
 - **Native program objects use runtime ABI v9.** External object consumers must link the matching v0.2.8 runtime pack; the versioned marker rejects incompatible runtime objects at link time.
-
-<!-- release:end -->
 
 ## 0.2.7
 

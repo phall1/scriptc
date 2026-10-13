@@ -25,7 +25,7 @@ const index = ref("i", F64);
 
 function module(name: string, returnType: IrExpr["type"], body: IrStmt[]): IrModule {
   return {
-    irVersion: 15,
+    irVersion: 16,
     sourceFile: loc.file,
     entry: "__main",
     functions: [
@@ -77,7 +77,17 @@ test.each([32, 64] as const)("strict scalar reads check dense storage inline (%i
 
 test("reference reads retain inline and keep a cold +1 runtime fallback", () => {
   const read: IrExpr = { kind: "arrayGet", arr: ref("s", words), index, type: STRING, loc };
-  const llvm = emitLlvmModule(module("word", STRING, [{ kind: "return", value: read, loc }]));
+  // An element removal in the body keeps the read from being lent as a
+  // borrowed return: the result must own its reference.
+  const truncate: IrStmt = {
+    kind: "arraySetLength",
+    arr: ref("s", words),
+    length: { kind: "numLit", value: 1, type: F64, loc },
+    loc,
+  };
+  const llvm = emitLlvmModule(
+    module("word", STRING, [truncate, { kind: "return", value: read, loc }]),
+  );
   const fn = body(llvm, "word");
   expect(fn).toMatch(/icmp ne ptr .*, null/);
   expect(fn).toContain("@scr_str_retain_v(");
@@ -139,6 +149,56 @@ test.each([32, 64] as const)(
     for (const acc of ["f64", "bool", "ref"]) {
       expect(fn).toMatch(new RegExp(`call double @scr_arr_push_${acc}\\(.*\\) cold$`, "m"));
     }
+  },
+);
+
+test.each([32, 64] as const)(
+  "indices below the hole-free prefix bound skip the state bytes (%i-bit)",
+  (bits) => {
+    const read: IrExpr = { kind: "arrayGet", arr: ref("a", nums), index, type: F64, loc };
+    const llvm = emitLlvmModule(
+      module("bound", VOID, [
+        {
+          kind: "arraySet",
+          arr: ref("a", nums),
+          index,
+          value: { kind: "bin", op: "+", left: read, right: read, type: F64, loc },
+          loc,
+        },
+        {
+          kind: "arraySet",
+          arr: ref("s", words),
+          index,
+          value: { kind: "strLit", value: "x", type: STRING, loc },
+          loc,
+        },
+      ]),
+      { pointerBits: bits },
+    );
+    const fn = body(llvm, "bound");
+    const size = bits === 32 ? "i32" : "i64";
+    // The bound is %ScrArr field 6, an i32 compared against the index.
+    const bound = fn.match(/getelementptr inbounds %ScrArr, ptr .*, i32 0, i32 6$/gm) ?? [];
+    expect(bound.length).toBeGreaterThanOrEqual(4);
+    expect(fn).toMatch(/load i32, ptr /);
+    // The prefix blocks load or store the slot without a state access.
+    const blocks = (label: string): string[] =>
+      [...fn.matchAll(new RegExp(`^${label}\\d+:\\n((?:  .*\\n)*)`, "gm"))].map((m) => m[1]!);
+    const reads = blocks("arr\\.get\\.value");
+    expect(reads).toHaveLength(2);
+    for (const block of reads) {
+      expect(block).toMatch(/load double, ptr /);
+      expect(block).not.toMatch(/i8/);
+    }
+    const writes = blocks("arr\\.set\\.filled");
+    expect(writes).toHaveLength(2);
+    for (const block of writes) expect(block).not.toMatch(/i8/);
+    expect(writes[0]).toMatch(/store double .*, ptr /);
+    // The replaced string below the bound is released after the store.
+    expect(writes[1]).toMatch(/store ptr .*\n[^]*call void @scr_str_release\(/);
+    // A state-checked store at the bound extends it.
+    expect(fn).toMatch(new RegExp(`icmp eq ${size} .*`));
+    expect(fn).toMatch(/store i32 .*, ptr /);
   },
 );
 
@@ -213,7 +273,7 @@ test("length assignments skip the runtime when the length is unchanged", () => {
     module("reset", VOID, [{ kind: "arraySetLength", arr: ref("s", words), length: index, loc }]),
   );
   const fn = body(llvm, "reset");
-  expect(fn).toMatch(/uitofp i64 .* to double/);
+  expect(fn).toMatch(/sitofp i64 .* to double/);
   expect(fn).toMatch(/fcmp oeq double %p?\S*, %t\d+/);
   expect(fn.match(/call void @scr_arr_set_len\(/g)).toHaveLength(1);
   expect(fn).toMatch(/br i1 %t\d+, label %arr\.len\.done\d*, label %arr\.len\.set\d*/);

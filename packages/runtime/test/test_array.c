@@ -18,6 +18,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Sparse entries live in the array's out-of-line storage. */
+static size_t arr_sparse_len(const ScrArr *a) { return a->ext ? a->ext->sparse_len : 0; }
+
 #ifdef SCR_RC_AUDIT
 long scr_str_live_count(void); /* provided by scr_string.c */
 long scr_arr_live_count(void); /* provided by scr_array.c */
@@ -385,18 +388,22 @@ static void mock_cyc_release(void *p) {
 }
 
 static MockRec *mock_cyc_new(int value) {
-  MockRec *r = scr_cyc_alloc(sizeof *r, &mock_trace, &mock_gcfree);
+  static const ScrCycType cyc_type = { &mock_trace, &mock_gcfree, 0 };
+  MockRec *r = scr_cyc_alloc(sizeof *r, &cyc_type);
   r->rc = 1;
   r->value = value;
   mock_live++;
   return r;
 }
 
+static const ScrArrOps mock_ops = { &mock_retain, &mock_release, NULL };
+static const ScrArrOps mock_cyc_ops = { &mock_cyc_retain, &mock_cyc_release, &mock_trace };
+
 static void test_ref_elements(void) {
 #ifdef SCR_RC_AUDIT
   long arrays0 = scr_arr_live_count();
 #endif
-  ScrArr *a = scr_arr_new_ref(&mock_retain, &mock_release, NULL, 0);
+  ScrArr *a = scr_arr_new_ops(&mock_ops, 0);
   scr_arr_push_ref(a, mock_new(1)); /* ownership moves in */
   scr_arr_push_ref(a, mock_new(2));
   check_f64(scr_arr_len(a), 2, "ref push grows");
@@ -442,7 +449,7 @@ static void test_ref_cycle(void) {
   long arrays0 = scr_arr_live_count();
 #endif
   /* arr -> rec -> arr: drop the external references, then collect. */
-  ScrArr *arr = scr_arr_new_ref(&mock_cyc_retain, &mock_cyc_release, &mock_trace, 0);
+  ScrArr *arr = scr_arr_new_ops(&mock_cyc_ops, 0);
   MockRec *rec = mock_cyc_new(7);
   rec->owner = (ScrArr *)scr_arr_retain(arr); /* rec points back at arr */
   scr_arr_push_ref(arr, rec);                 /* arr owns rec */
@@ -462,7 +469,7 @@ static void test_ref_truncate_cycle(void) {
   /* The truncation release runs while the record points back at the array.
    * The array edge must be detached before mock_cyc_release can trigger the
    * cycle collector. */
-  ScrArr *arr = scr_arr_new_ref(&mock_cyc_retain, &mock_cyc_release, &mock_trace, 0);
+  ScrArr *arr = scr_arr_new_ops(&mock_cyc_ops, 0);
   MockRec *rec = mock_cyc_new(8);
   rec->owner = (ScrArr *)scr_arr_retain(arr);
   scr_arr_push_ref(arr, rec);
@@ -477,7 +484,7 @@ static void test_ref_truncate_cycle(void) {
 
 static void test_ref_trace_storage_boundaries(void) {
   long before = mock_live;
-  ScrArr *arr = scr_arr_new_ref(&mock_cyc_retain, &mock_cyc_release, &mock_trace, 4096);
+  ScrArr *arr = scr_arr_new_ops(&mock_cyc_ops, 4096);
   MockRec *dense = mock_cyc_new(1);
   MockRec *sparse = mock_cyc_new(2);
   MockRec *property = mock_cyc_new(3);
@@ -648,11 +655,11 @@ static void test_sparse_holes(void) {
   scr_arr_set_f64(high, high_index, 11);
   check(scr_arr_has(high, high_index), "high sparse index is present");
   check(high->cap <= ((size_t)1 << 20), "high sparse index avoids dense allocation");
-  check(high->sparse_len == 1, "high sparse index uses side storage");
+  check(arr_sparse_len(high) == 1, "high sparse index uses side storage");
   check_f64(scr_arr_next_present(high, 0), high_index,
             "next-present traversal jumps to side storage");
   scr_arr_set_len(high, 0);
-  check(high->sparse_len == 0 && scr_arr_len(high) == 0,
+  check(arr_sparse_len(high) == 0 && scr_arr_len(high) == 0,
         "length shrink removes sparse entries");
   scr_arr_release(high);
 
@@ -706,7 +713,7 @@ static void test_large_storage(void) {
 
   ScrArr *pushed = scr_arr_new(SCR_ELEM_F64, 0);
   for (double i = 0; i < n; i++) scr_arr_push_f64(pushed, i);
-  check(pushed->sparse_len == 0 && pushed->cap >= (size_t)n,
+  check(arr_sparse_len(pushed) == 0 && pushed->cap >= (size_t)n,
         "appends past the cutoff stay dense");
   check_f64(scr_arr_get_f64(pushed, n - 1), n - 1, "large append round-trips");
   scr_arr_release(pushed);
@@ -714,7 +721,7 @@ static void test_large_storage(void) {
   ScrArr *filled = scr_arr_new(SCR_ELEM_BOOL, 0);
   scr_arr_set_len(filled, n);
   scr_arr_release(scr_arr_fill_bool(filled, true, 0, INFINITY));
-  check(filled->sparse_len == 0 && filled->cap >= (size_t)n,
+  check(arr_sparse_len(filled) == 0 && filled->cap >= (size_t)n,
         "fill of a large holey array allocates dense storage");
   scr_arr_set_bool(filled, n - 1, false);
   check(!scr_arr_get_bool(filled, n - 1) && scr_arr_get_bool(filled, n - 2),
@@ -724,7 +731,7 @@ static void test_large_storage(void) {
   ScrArr *forward = scr_arr_new(SCR_ELEM_F64, 0);
   scr_arr_set_len(forward, n);
   for (double i = 0; i < n; i++) scr_arr_set_f64(forward, i, i * 2);
-  check(forward->sparse_len == 0, "forward indexed writes extend dense storage");
+  check(arr_sparse_len(forward) == 0, "forward indexed writes extend dense storage");
   scr_arr_release(forward);
 
   /* Every 64th index past the cutoff is too sparse for packed slots, even
@@ -734,14 +741,14 @@ static void test_large_storage(void) {
   scr_arr_release(scr_arr_fill_f64(strided, 0, 0, INFINITY));
   size_t entries = 0;
   for (double i = (double)cutoff + 4095; i < n; i += 64, entries++) scr_arr_set_f64(strided, i, i);
-  check(strided->cap == cutoff && strided->sparse_len == entries,
+  check(strided->cap == cutoff && arr_sparse_len(strided) == entries,
         "strided indices past the cutoff keep side storage");
   for (int round = 0; round < 3; round++) {
     for (double i = (double)cutoff + 4095; i < n; i += 64) {
       scr_arr_set_f64(strided, i, scr_arr_get_f64(strided, i) + 1);
     }
   }
-  check(strided->sparse_len == entries &&
+  check(arr_sparse_len(strided) == entries &&
             scr_arr_get_f64(strided, (double)cutoff + 4159) == (double)cutoff + 4162,
         "rewriting sparse entries updates them in place");
   check(!scr_arr_has(strided, (double)cutoff + 1) && scr_arr_len(strided) > (double)cutoff + 4095,
@@ -760,7 +767,7 @@ static void test_large_storage(void) {
   for (double i = n - 2; i >= (double)cutoff; i -= 2) {
     scr_arr_set_ref(backward, i, scr_str_new("v", 1));
   }
-  check(backward->sparse_len == 0 && backward->cap >= (size_t)n,
+  check(arr_sparse_len(backward) == 0 && backward->cap >= (size_t)n,
         "a populated sparse tail densifies");
   check(scr_arr_state(backward, n - 1) == SCR_ARR_UNDEFINED &&
             scr_arr_state(backward, n - 3) == SCR_ARR_HOLE &&
@@ -777,7 +784,7 @@ static void test_large_storage(void) {
     scr_arr_set_ref(deque, middle - k * 1000, scr_str_new("d", 1));
     scr_arr_set_ref(deque, middle + 1 + k * 1000, scr_str_new("a", 1));
   }
-  check(deque->sparse_len == 6000 && deque->cap == 0, "spread first touches stay sparse");
+  check(arr_sparse_len(deque) == 6000 && deque->cap == 0, "spread first touches stay sparse");
   for (double k = 0; k < 3000; k += 3) {
     scr_arr_delete(deque, middle - k * 1000);
     scr_arr_delete(deque, middle + 1 + k * 1000);
@@ -807,7 +814,7 @@ static void test_large_storage(void) {
   ScrArr *holes = scr_arr_slice(high, 1, INFINITY);
   check(holes->cap <= cutoff && scr_arr_len(holes) == 4294967294.0,
         "slicing a huge hole run keeps a bounded allocation");
-  check(holes->sparse_len == 1 && scr_arr_get_f64(holes, 4294967293.0) == 2,
+  check(arr_sparse_len(holes) == 1 && scr_arr_get_f64(holes, 4294967293.0) == 2,
         "a sliced hole run keeps its sparse value");
   scr_arr_release(holes);
   scr_arr_release(high);
@@ -1103,6 +1110,242 @@ static void test_comparator_sort(void) {
   scr_arr_release(wide);
 }
 
+/* scr_arr_sort_dense: in-place comparator sort of dense arrays. */
+static ScrArr *dense_target = NULL;
+static long dense_edit_at = -1;
+static ScrStr *dense_replacement = NULL;
+
+static double dense_by_length(ScrClosure *self, void *a, void *b) {
+  (void)self;
+  double d = (double)((ScrStr *)a)->len - (double)((ScrStr *)b)->len;
+  scr_str_release((ScrStr *)a);
+  scr_str_release((ScrStr *)b);
+  if (++sort_calls == dense_edit_at) {
+    /* Overwrite one element, then truncate: the dropped originals must
+     * survive in the sort's own buffer. */
+    scr_arr_set_ref(dense_target, 0, scr_str_retain(dense_replacement));
+    scr_arr_set_len(dense_target, 0);
+  }
+  if (sort_calls == sort_throw_at) scr_throw_f64(7);
+  return d;
+}
+
+static double dense_observe(ScrClosure *self, double a, double b) {
+  (void)self;
+  /* The receiver keeps its unsorted values while the comparator runs. */
+  if (sort_calls++ == 0 && scr_arr_get_f64(dense_target, 0) != 9) sort_throw_at = -2;
+  return a - b;
+}
+
+static void test_dense_comparator_sort(void) {
+  ScrClosure floor_fn = {SIZE_MAX, (void *)sort_by_floor, 0, NULL, 0};
+  ScrClosure observe_fn = {SIZE_MAX, (void *)dense_observe, 0, NULL, 0};
+  ScrArr *nums = scr_arr_new(SCR_ELEM_F64, 0);
+  for (int i = 0; i < 100; i++) scr_arr_push_f64(nums, (double)((i * 37) % 100) + (i % 2) * 0.5);
+  scr_arr_push_f64(nums, 9); /* keys stay distinct by floor */
+  scr_arr_set_f64(nums, 0, 9);
+  dense_target = nums;
+  sort_calls = 0;
+  sort_throw_at = -1;
+  check(scr_arr_sort_dense(nums, &observe_fn, 2, false), "a dense number array sorts in place");
+  check(sort_throw_at == -1, "the comparator sees the unsorted receiver");
+  bool ordered = true;
+  for (size_t i = 1; i < 101; i++)
+    if (scr_arr_get_f64(nums, (double)(i - 1)) > scr_arr_get_f64(nums, (double)i)) ordered = false;
+  check(ordered && scr_arr_len(nums) == 101, "dense number sort orders every value");
+
+  ScrArr *holes = scr_arr_new(SCR_ELEM_F64, 0);
+  scr_arr_push_f64(holes, 3);
+  scr_arr_set_f64(holes, 2, 1);
+  sort_calls = 0;
+  check(!scr_arr_sort_dense(holes, &floor_fn, 2, false) && sort_calls == 0,
+        "an array with holes takes the snapshot path without comparator calls");
+  ScrArr *undef = scr_arr_new(SCR_ELEM_F64, 0);
+  scr_arr_push_f64(undef, 3);
+  scr_arr_set_undefined(undef, 1);
+  scr_arr_push_f64(undef, 1);
+  check(!scr_arr_sort_dense(undef, &floor_fn, 2, true) && sort_calls == 0,
+        "storage-level undefined takes the snapshot path");
+  ScrArr *one = scr_arr_new(SCR_ELEM_F64, 0);
+  scr_arr_push_f64(one, 5);
+  check(scr_arr_sort_dense(one, &floor_fn, 2, false) && sort_calls == 0,
+        "a single value needs no comparator call");
+  size_t rc = one->rc;
+  one->rc = SIZE_MAX; /* as publication marks it */
+  check(!scr_arr_sort_dense(one, &floor_fn, 2, false), "a published array takes the general path");
+  one->rc = rc;
+  scr_arr_release(one);
+  scr_arr_release(undef);
+  scr_arr_release(holes);
+  scr_arr_release(nums);
+
+  long strings0 = scr_str_live_count();
+  ScrClosure length_fn = {SIZE_MAX, (void *)dense_by_length, 0, NULL, 0};
+  const char *spellings[] = {"ccc", "a", "bb", "dddd", "e", "ff", "ggg", "h", "iiiii", "jj",
+                             "k", "llll", "mmm", "n", "oo", "p", "qqq", "r", "ss", "t"};
+  const size_t count = sizeof(spellings) / sizeof(*spellings);
+  for (int owned = 0; owned < 2; owned++) {
+    for (long at = 1; at <= 40; at += 39) {
+      ScrArr *words = scr_arr_new(SCR_ELEM_STR, 0);
+      for (size_t i = 0; i < count; i++)
+        scr_arr_push_ref(words, scr_str_new(spellings[i], strlen(spellings[i])));
+      ScrStr *first = scr_arr_peek_ref(words, 0);
+      sort_calls = 0;
+      sort_throw_at = at;
+      dense_edit_at = -1;
+      check(scr_arr_sort_dense(words, &length_fn, 2, owned) && scr_exc_pending(),
+            "a throwing comparator leaves the exception pending");
+      scr_exc_clear();
+      check(sort_calls == at && scr_arr_len(words) == count,
+            "the dense sort stops at the first comparator exception");
+      if (!owned) {
+        check(scr_arr_peek_ref(words, 0) == first, "an exception leaves the receiver unwritten");
+      } else {
+        /* A private copy is discarded after an exception; it must still
+         * own every element exactly once. */
+        bool permutation = true;
+        for (size_t i = 0; i < count; i++) {
+          size_t uses = 0;
+          for (size_t j = 0; j < count; j++)
+            uses += strcmp(((ScrStr *)scr_arr_peek_ref(words, (double)j))->data, spellings[i]) == 0;
+          permutation &= uses == 1;
+        }
+        check(permutation, "an exception leaves the private copy a permutation");
+      }
+      scr_arr_release(words);
+    }
+  }
+  check(scr_str_live_count() == strings0, "throwing dense sorts release every string");
+
+  dense_replacement = scr_str_new("zz", 2);
+  ScrArr *words = scr_arr_new(SCR_ELEM_STR, 0);
+  for (size_t i = 0; i < count; i++)
+    scr_arr_push_ref(words, scr_str_new(spellings[i], strlen(spellings[i])));
+  dense_target = words;
+  sort_calls = 0;
+  sort_throw_at = -1;
+  dense_edit_at = 3;
+  check(scr_arr_sort_dense(words, &length_fn, 2, false) && !scr_exc_pending(),
+        "a comparator that truncates the receiver still completes");
+  dense_edit_at = -1;
+  bool lengths = scr_arr_len(words) == count;
+  for (size_t i = 1; lengths && i < count; i++)
+    lengths = ((ScrStr *)scr_arr_peek_ref(words, (double)(i - 1)))->len <=
+              ((ScrStr *)scr_arr_peek_ref(words, (double)i))->len;
+  check(lengths, "the sorted original values are written back after truncation");
+  scr_arr_release(words);
+  scr_str_release(dense_replacement);
+  check(scr_str_live_count() == strings0, "a mutating comparator leaks no string");
+  dense_target = NULL;
+}
+
+static void test_exact_construction(void) {
+  /* Construction reserves the requested slots (rounded up to the small
+   * allocator's block where it is live); appends past them grow
+   * geometrically, and every new slot starts as a hole. */
+  ScrArr *one = scr_arr_new(SCR_ELEM_F64, 1);
+  check(one->cap >= 1 && one->cap < 4 && scr_arr_len(one) == 0 && !scr_arr_has(one, 0),
+        "one-slot construction keeps an exactly sized empty dense prefix");
+  scr_arr_push_f64(one, 1);
+  size_t first_cap = one->cap;
+  for (int i = 2; i <= 6; i++) scr_arr_push_f64(one, i);
+  check(one->cap >= 6 && one->cap > first_cap && scr_arr_len(one) == 6,
+        "appends past an exact construction grow the dense prefix");
+  for (int i = 0; i < 6; i++) check(scr_arr_get_number(one, i) == i + 1, "grown values kept");
+  scr_arr_set_len(one, (double)one->cap + 3);
+  check(!scr_arr_has(one, 6) && !scr_arr_has(one, (double)one->cap - 1),
+        "spare capacity after growth from an exact size reads as holes");
+  scr_arr_release(one);
+
+  ScrArr *refs = scr_arr_new(SCR_ELEM_STR, 3);
+  scr_arr_push_ref(refs, scr_str_new("a", 1));
+  scr_arr_set_ref(refs, 4, scr_str_new("e", 1));
+  check(scr_arr_len(refs) == 5 && scr_arr_has(refs, 0) && !scr_arr_has(refs, 1) &&
+            !scr_arr_has(refs, 3) && scr_arr_has(refs, 4),
+        "index write past an exact construction leaves holes between");
+  scr_arr_release(refs);
+}
+
+/* The hole-free prefix bound never covers a non-value state, and the
+ * operations that keep an array hole-free keep the bound at its length. */
+static bool filled_ok(const ScrArr *a) {
+  if (a->filled > a->len || a->filled > a->cap) return false;
+  for (size_t i = 0; i < a->filled; i++)
+    if (a->present[i] != SCR_ARR_VALUE) return false;
+  return true;
+}
+
+static void test_filled_prefix(void) {
+  ScrArr *a = scr_arr_new(SCR_ELEM_F64, 0);
+  for (int i = 0; i < 8; i++) scr_arr_push_f64(a, i);
+  check(a->filled == 8 && filled_ok(a), "pushes keep the bound at the length");
+  scr_arr_set_len(a, 12);
+  check(a->filled == 8 && filled_ok(a), "length growth leaves the bound below the holes");
+  scr_arr_set_f64(a, 8, 8);
+  check(a->filled == 9 && filled_ok(a), "a write at the bound extends it");
+  scr_arr_set_f64(a, 11, 11);
+  check(a->filled == 9 && filled_ok(a), "a write past a hole does not extend it");
+  scr_arr_release(scr_arr_fill_f64(a, 0, 0, INFINITY));
+  check(a->filled == 12 && filled_ok(a), "fill over the whole array restores it");
+  scr_arr_delete(a, 3);
+  check(a->filled == 3 && filled_ok(a), "delete cuts the bound at the hole");
+  scr_arr_set_f64(a, 3, 3);
+  check(a->filled == 4 && filled_ok(a), "refilling the hole continues the prefix");
+  scr_arr_set_undefined(a, 1);
+  check(a->filled == 1 && filled_ok(a), "present undefined cuts the bound");
+  scr_arr_set_len(a, 0);
+  check(a->filled == 0 && filled_ok(a), "truncation cuts the bound");
+  scr_arr_release(a);
+
+  ScrArr *b = scr_arr_new(SCR_ELEM_F64, 0);
+  for (int i = 0; i < 10; i++) scr_arr_push_f64(b, i);
+  check(scr_arr_shift_f64(b) == 0 && b->filled == 9 && filled_ok(b), "shift keeps a full bound");
+  scr_arr_unshift_f64(b, -1);
+  check(b->filled == 10 && filled_ok(b), "unshift keeps a full bound");
+  scr_arr_release(scr_arr_splice(b, 2, 3));
+  check(b->filled == 7 && filled_ok(b), "splice removal keeps a full bound");
+  double values[2] = {5, 6};
+  uint64_t two[2];
+  memcpy(two, values, sizeof two);
+  scr_arr_splice_drop(b, 1, 0, 2, two);
+  check(b->filled == 9 && filled_ok(b), "splice insertion keeps a full bound");
+  scr_arr_release(scr_arr_reverse(b));
+  check(b->filled == 9 && filled_ok(b), "reverse keeps a full bound");
+  scr_arr_release(scr_arr_copy_within(b, 0, 4, 6));
+  check(b->filled == 9 && filled_ok(b), "copyWithin inside the prefix keeps it");
+  scr_arr_set_len(b, 12);
+  scr_arr_release(scr_arr_copy_within(b, 2, 10, 12));
+  check(b->filled == 2 && filled_ok(b), "copyWithin of holes cuts the bound");
+  ScrArr *s = scr_arr_slice(b, 0, 2);
+  check(s->filled == 2 && filled_ok(s), "slice of a hole-free range is hole-free");
+  scr_arr_release(s);
+  s = scr_arr_slice(b, 0, INFINITY);
+  check(s->filled == 2 && filled_ok(s), "slice keeps holes out of the bound");
+  scr_arr_release(s);
+  scr_arr_release(scr_arr_reverse(b));
+  check(filled_ok(b), "reverse of a holey array recomputes the bound");
+  scr_arr_release(scr_arr_sort_primitive(b, false));
+  check(filled_ok(b), "sorting moves holes past the bound");
+  for (size_t i = 0; i < b->len; i++) {
+    if (i < b->cap && b->present[i] != SCR_ARR_VALUE) break;
+    check(i < b->filled, "sorted values form the bound");
+  }
+  while (scr_arr_len(b) > 0) {
+    scr_arr_pop_state(b, NULL);
+    check(filled_ok(b), "pop keeps the bound below the length");
+  }
+  scr_arr_release(b);
+
+  ScrArr *r = scr_arr_new(SCR_ELEM_STR, 0);
+  for (int i = 0; i < 4; i++) scr_arr_push_ref(r, scr_str_new("ab", 2));
+  check(r->filled == 4 && filled_ok(r), "reference pushes keep the bound");
+  scr_arr_delete(r, 0);
+  check(r->filled == 0 && filled_ok(r), "deleting the first reference empties the bound");
+  scr_arr_set_ref(r, 0, scr_str_new("c", 1));
+  check(r->filled == 1 && filled_ok(r), "a write at an empty bound extends it by one");
+  scr_arr_release(r);
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     ScrArr *a = scr_arr_new(SCR_ELEM_F64, 0);
@@ -1127,10 +1370,12 @@ int main(int argc, char **argv) {
 
   test_primitive_sort();
   test_comparator_sort();
+  test_dense_comparator_sort();
   test_f64_basics();
   test_numeric_read();
   test_borrowed_ref_read();
   test_bool();
+  test_exact_construction();
   test_dense_replacement();
   test_unshift_reverse();
   test_str_rc();
@@ -1145,6 +1390,7 @@ int main(int argc, char **argv) {
   test_large_storage();
   test_bulk_reference_ownership();
   test_splice_drop();
+  test_filled_prefix();
 
   fprintf(stderr, "%ld/%ld cases passed\n", total - failed, total);
   return failed == 0 ? 0 : 1;

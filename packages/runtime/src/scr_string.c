@@ -1081,18 +1081,60 @@ static void scr_sidx_ascii_run(const ScrStr *s, ScrSidx *e) {
   e->ascii_end = end;
 }
 
+/* How far past its end a forward access may grow the cached ASCII run, and
+ * how far beyond the access the growth looks ahead. */
+#define SCR_SIDX_ASCII_REACH ((size_t)4096)
+#define SCR_SIDX_ASCII_AHEAD ((size_t)256)
+
+/* Grow the cached ASCII run forward until it covers byte `want` (plus a
+ * lookahead) or meets a non-ASCII byte. The run stays one contiguous ASCII
+ * span starting at the unit/byte pair (ascii_cu, ascii_cb), so a scan that
+ * reads a mostly ASCII text front to back (a scanner taking substrings at
+ * increasing offsets) tests each byte once instead of walking from the
+ * cursor and re-centring the run every 128 bytes. Only accesses up to
+ * SCR_SIDX_ASCII_REACH past the run try: the walk below bounds the rest. */
+static bool scr_sidx_ascii_grow(const ScrStr *s, ScrSidx *e, size_t want) {
+  size_t end = e->ascii_end;
+  if (want < end || want >= s->len || want - end > SCR_SIDX_ASCII_REACH) return false;
+  size_t limit = s->len - want > SCR_SIDX_ASCII_AHEAD ? want + SCR_SIDX_ASCII_AHEAD : s->len;
+  while (limit - end >= 8) {
+    uint64_t word;
+    memcpy(&word, s->data + end, 8);
+    if (word & UINT64_C(0x8080808080808080)) break;
+    end += 8;
+  }
+  while (end < limit && (unsigned char)s->data[end] < 0x80) end++;
+  e->ascii_end = end;
+  return want < end;
+}
+
+static size_t scr_u16_to_byte_walk(const ScrStr *s, ScrSidx *e, size_t u16,
+                                   bool *mid);
+
 /* Convert a UTF-16 index to a byte offset from the closest sparse anchor or
  * hot cursor. If u16 addresses the second (low-surrogate) unit of
  * an astral char, *mid is set and the returned offset is the START of that
  * 4-byte sequence. u16 at or past the end returns s->len with *mid false.
- * Same contract as a from-scratch scan. */
-static size_t scr_u16_to_byte_c(const ScrStr *s, ScrSidx *e, size_t u16,
-                                 bool *mid) {
+ * Same contract as a from-scratch scan. The identity and ASCII-run cases
+ * inline into callers; everything else is out of line. */
+static inline size_t scr_u16_to_byte_c(const ScrStr *s, ScrSidx *e, size_t u16,
+                                        bool *mid) {
   if (s->ascii || e->u16len == s->len) { /* all ASCII: identity mapping */
     *mid = false;
     return u16 < s->len ? u16 : s->len;
   }
   if (u16 >= e->ascii_cu && u16 - e->ascii_cu < e->ascii_end - e->ascii_cb) {
+    e->cb = e->ascii_cb + (u16 - e->ascii_cu);
+    e->cu = u16;
+    *mid = false;
+    return e->cb;
+  }
+  return scr_u16_to_byte_walk(s, e, u16, mid);
+}
+
+static __attribute__((noinline)) size_t scr_u16_to_byte_walk(const ScrStr *s, ScrSidx *e,
+                                                             size_t u16, bool *mid) {
+  if (u16 >= e->ascii_cu && scr_sidx_ascii_grow(s, e, e->ascii_cb + (u16 - e->ascii_cu))) {
     e->cb = e->ascii_cb + (u16 - e->ascii_cu);
     e->cu = u16;
     *mid = false;
@@ -1151,12 +1193,25 @@ static size_t scr_u16_to_byte_c(const ScrStr *s, ScrSidx *e, size_t u16,
   return cb;
 }
 
+static size_t scr_byte_to_u16_walk(const ScrStr *s, ScrSidx *e, size_t byte_off);
+
 /* Convert a byte offset (must be a char boundary) to a UTF-16 index from
- * the closest sparse anchor or hot cursor. */
-static size_t scr_byte_to_u16_c(const ScrStr *s, ScrSidx *e,
-                                 size_t byte_off) {
+ * the closest sparse anchor or hot cursor. As above, the identity and
+ * ASCII-run cases inline into callers. */
+static inline size_t scr_byte_to_u16_c(const ScrStr *s, ScrSidx *e,
+                                        size_t byte_off) {
   if (s->ascii || e->u16len == s->len) return byte_off; /* all ASCII */
   if (byte_off >= e->ascii_cb && byte_off < e->ascii_end) {
+    e->cu = e->ascii_cu + (byte_off - e->ascii_cb);
+    e->cb = byte_off;
+    return e->cu;
+  }
+  return scr_byte_to_u16_walk(s, e, byte_off);
+}
+
+static __attribute__((noinline)) size_t scr_byte_to_u16_walk(const ScrStr *s, ScrSidx *e,
+                                                             size_t byte_off) {
+  if (byte_off >= e->ascii_cb && scr_sidx_ascii_grow(s, e, byte_off)) {
     e->cu = e->ascii_cu + (byte_off - e->ascii_cb);
     e->cb = byte_off;
     return e->cu;
@@ -1202,13 +1257,51 @@ static const char *scr_byte_find(const char *hay, size_t hay_len,
   if (nee_len == 0) return hay;
   if (nee_len > hay_len) return NULL;
   if (nee_len == 1) return memchr(hay, (unsigned char)nee[0], hay_len);
-  size_t remaining = hay_len - nee_len + 1;
-  while (remaining) {
-    const char *found = memchr(hay, (unsigned char)nee[0], remaining);
+  const unsigned char first = (unsigned char)nee[0];
+  const unsigned char second = (unsigned char)nee[1];
+  /* The last possible match start. */
+  const char *last = hay + (hay_len - nee_len);
+  const char *p = hay;
+  if (hay_len <= 256) {
+    /* Short haystacks (paths, names, keys) often repeat the first needle
+     * byte ('/' in "//" or "/../"), so one memchr per occurrence costs more
+     * than the scan. Test eight candidate starts per step: a start matches
+     * the first two needle bytes where both XORed words have a zero byte.
+     * The zero-byte test has no false negatives; its rare false positives
+     * (a 0x01 byte above a zero byte) are filtered by the byte checks. Each
+     * step reads p[0..8], within the haystack because p + 8 <= last. */
+    const uint64_t ones = UINT64_C(0x0101010101010101);
+    const uint64_t highs = UINT64_C(0x8080808080808080);
+    const uint64_t want0 = ones * first, want1 = ones * second;
+    while ((size_t)(last - p) >= 8) {
+      uint64_t w0, w1;
+      memcpy(&w0, p, 8);
+      memcpy(&w1, p + 1, 8);
+      uint64_t z = (w0 ^ want0) | (w1 ^ want1);
+      if ((z - ones) & ~z & highs) {
+        for (int k = 0; k < 8; k++) {
+          const char *c = p + k;
+          if ((unsigned char)c[0] == first && (unsigned char)c[1] == second &&
+              memcmp(c + 2, nee + 2, nee_len - 2) == 0)
+            return c;
+        }
+      }
+      p += 8;
+    }
+    for (; p <= last; p++) {
+      if ((unsigned char)p[0] == first && (unsigned char)p[1] == second &&
+          memcmp(p + 2, nee + 2, nee_len - 2) == 0)
+        return p;
+    }
+    return NULL;
+  }
+  while (p <= last) {
+    const char *found = memchr(p, first, (size_t)(last - p) + 1);
     if (!found) return NULL;
-    if (memcmp(found + 1, nee + 1, nee_len - 1) == 0) return found;
-    remaining -= (size_t)(found - hay) + 1;
-    hay = found + 1;
+    if ((unsigned char)found[1] == second &&
+        memcmp(found + 2, nee + 2, nee_len - 2) == 0)
+      return found;
+    p = found + 1;
   }
   return NULL;
 }
@@ -1581,18 +1674,7 @@ static const struct { size_t rc; size_t len; size_t cap; char data[4]; }
 /* Split owns a fresh array and appends only present string values. Fill an
  * available dense slot directly; ordinary push handles growth and the sparse
  * boundary. The array remains valid after every append, including RC audit. */
-/* split(separator, limit) with a STRING separator (ECMA-262 22.1.3.23):
- * limit is ToUint32'd; zero returns [] and reaching the limit stops before
- * any later separator probes. The no-limit wrapper supplies 2^32-1.
- * an empty separator splits into single UTF-16 code units ("".split("") is
- * [] — no probe matches nothing); a non-empty separator splits on every
- * byte-level occurrence (well-formed UTF-8 is self-synchronizing, so byte
- * matches are exactly code-point matches), keeping empty pieces at the
- * ends and between adjacent separators; an empty subject with a non-empty
- * separator is [""]. Where JS's per-unit split of an astral char would
- * yield the two lone surrogate halves, each half is U+FFFD here
- * (divergence 2 — the same substitution the island's boundary marshal
- * applied). Borrows both; returns a +1 string[]. */
+
 void scr_str_split_cursor_init(ScrSplitCursor *cursor, uint32_t limit) {
   cursor->offset = 0;
   cursor->remaining = limit;
@@ -2185,7 +2267,6 @@ ScrStr *scr_str_cp_at(ScrStr *s, double i) {
   (void)scr_utf8_decode(s->data + off, &adv);
   return scr_str_from_span(s->data + off, adv);
 }
-
 
 /* ── the URI component codecs (encodeURIComponent/decodeURIComponent) ──
  * ECMA-262 Encode/Decode with the component sets, byte-wise over the

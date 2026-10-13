@@ -4,7 +4,6 @@ Usage:
   scriptc build <file.ts|.js> [options]     compile to an executable or source artifact
   scriptc run <file.ts|.js> [options]       compile and run
   scriptc coverage <file.ts|.js>            how much compiles statically, and why not
-  scriptc coverage <file.ts|.js> --dynamic  what a --dynamic build compiles, and what still blocks it
   scriptc coverage <file.ts|.js> --external-types <specifier=file.d.ts>
                                             type-resolve an embedder-provided module for analysis
   scriptc build --lib --profile <p.json>    library mode: compile the profile's entry
@@ -14,7 +13,7 @@ Usage:
                                             exporting the profile symbols; a profile
                                             with a sidecar section also gets the
                                             contract sidecar JSON beside the archive
-  scriptc cache warm [runtime|tls|dynamic…] prebuild expensive native cache families
+  scriptc cache warm [runtime|tls…] verify and load precompiled runtime families
                                             for the current compiler/SDK/target
 
 Options:
@@ -42,27 +41,29 @@ Options:
       --windows-subsystem <console|gui>
                      Windows executable subsystem (default: console). gui
                      prevents Windows from opening a console window
+      --detached-exit
+                     Linux: after process.exit, free the program's memory in
+                     a helper process so the parent sees the exit sooner. The
+                     helper keeps the executable mapped and its memory charged
+                     for up to ~100 ms after exit (opt in; --emit=exe only)
       --keep-llvm    keep generated LLVM IR beside the executable (default)
       --no-keep-llvm delete generated LLVM IR after compiling
       --emit-ir      also write IR beside an executable or library archive;
                      deprecated for executables: use --emit=ir for primary IR
       --sanitize     build with ASan + runtime RC audit
-      --dynamic      embed the dynamic engine (adds ~620KB; static stays the default)
       --ffi <file>   bind signature-only TypeScript declarations to native
                      C symbols and link the manifest's archives/libraries
       --npm-static <pkg[,pkg…]|auto>
                      compile the named npm packages' shipped JS statically as
                      program modules (repeatable; "auto" opts in every eligible
                      direct import: own .d.ts, unminified JS, no build-transform
-                     markers). A package preflight refuses falls back to the
-                     island (--dynamic) with a coverage-report note — opt-in,
-                     experimental
+                     markers). Packages that fail preflight are refused with a
+                     diagnostic. Eligible dependencies compile automatically.
       --provenance-sources
                      EXPERIMENTAL: compile npm dependencies from their
                      provenance-attested SOURCE (fetched at the attested
                      commit) as static program modules; packages without a
-                     usable attestation keep the island path (a note, never
-                     a failure)
+                     usable attestation use their published source
       --external-types <specifier=file.d.ts>
                      coverage only: map an exact bare module specifier to a
                      local declaration file. The declaration supplies types
@@ -81,10 +82,10 @@ export const CLI_OPTIONS = {
   optimization: { type: "string" },
   strip: { type: "boolean", default: false },
   "windows-subsystem": { type: "string" },
+  "detached-exit": { type: "boolean", default: false },
   "keep-llvm": { type: "boolean", default: true },
   "emit-ir": { type: "boolean", default: false },
   sanitize: { type: "boolean", default: false },
-  dynamic: { type: "boolean", default: false },
   ffi: { type: "string" },
   "npm-static": { type: "string", multiple: true },
   "provenance-sources": { type: "boolean", default: false },

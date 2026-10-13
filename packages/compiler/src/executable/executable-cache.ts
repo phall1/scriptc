@@ -48,14 +48,12 @@ export interface EarlyExecutableNativeFeatures {
   backend: "llvm";
   /** Omitted is the historical release posture. */
   optimization?: "dev" | "speed";
-  dynamic: boolean;
   workers?: boolean;
   regex: boolean;
   copying: boolean;
   textDecoderLegacy: boolean;
   fileHandle: boolean;
   fetch: boolean;
-  netIsland: boolean;
   zlib: boolean;
   assert: boolean;
   inspect: boolean;
@@ -102,7 +100,6 @@ export interface EarlyExecutableCacheOptions {
   outPath: string;
   emitIr: boolean;
   sanitize: boolean;
-  dynamic: boolean;
   backend: "llvm";
   /** Omitted is the historical release posture and preserves v1 keys. */
   optimization?: "dev" | "speed";
@@ -110,6 +107,8 @@ export interface EarlyExecutableCacheOptions {
   strip?: true;
   /** Omitted for the default Windows console subsystem. */
   windowsSubsystem?: "gui";
+  /** Omitted unless --detached-exit is set. */
+  detachedExit?: true;
   npmStatic: readonly string[] | "auto" | null;
   /** Raw manifest identity: path and bytes. Native archives remain under the
    * stricter native cache's independent dependency validation. */
@@ -160,13 +159,11 @@ export interface EarlyExecutableCachePublish extends EarlyExecutableCacheHit {
 }
 
 const BOOLEAN_NATIVE_KEYS = [
-  "dynamic",
   "regex",
   "copying",
   "textDecoderLegacy",
   "fileHandle",
   "fetch",
-  "netIsland",
   "zlib",
   "assert",
   "inspect",
@@ -215,11 +212,12 @@ function cacheKey(options: EarlyExecutableCacheOptions): string {
     resolve(options.outPath),
     options.emitIr ? "emit-ir" : "no-ir",
     options.sanitize ? "sanitize" : "plain",
-    options.dynamic ? "dynamic" : "static",
+    "static",
     options.backend,
     ...optimizationKeyParts(options.optimization),
     ...(options.strip ? ["strip"] : []),
     ...(options.windowsSubsystem === "gui" ? ["windows-subsystem-gui"] : []),
+    ...(options.detachedExit ? ["detached-exit"] : []),
     options.npmStatic === null
       ? "<npm-static-off>"
       : options.npmStatic === "auto"
@@ -251,13 +249,14 @@ function routeKey(options: Omit<EarlyExecutableRouteOptions, "nativeEnvironment"
     .update("\0")
     .update(options.sanitize ? "sanitize" : "plain")
     .update("\0")
-    .update(options.dynamic ? "dynamic" : "static")
+    .update("static")
     .update("\0")
     .update(options.backend)
     .update("\0");
   for (const part of optimizationKeyParts(options.optimization)) hash.update(`${part}\0`);
   if (options.strip) hash.update("strip\0");
   if (options.windowsSubsystem === "gui") hash.update("windows-subsystem-gui\0");
+  if (options.detachedExit) hash.update("detached-exit\0");
   hash
     .update(
       options.npmStatic === null

@@ -17,8 +17,8 @@ static void scr_classobj_gcfree(void *object) {
 ScrClassObj *scr_classobj_new(const ScrClassObj *template, size_t ncaps) {
   if (ncaps > (SIZE_MAX - sizeof(ScrClassObj)) / sizeof(ScrBox *))
     scr_trap("scriptc: class capture allocation overflow\n");
-  ScrClassObj *c = scr_cyc_alloc(sizeof(ScrClassObj) + ncaps * sizeof(ScrBox *),
-      &scr_classobj_trace_v, &scr_classobj_gcfree);
+  static const ScrCycType cyc_type = { &scr_classobj_trace_v, &scr_classobj_gcfree, SCR_CYC_KIND_CLASS_OBJECT };
+  ScrClassObj *c = scr_cyc_alloc(sizeof(ScrClassObj) + ncaps * sizeof(ScrBox *), &cyc_type);
   c->rc = 1;
   c->pre = template->pre;
   c->post = template->post;
@@ -87,12 +87,24 @@ void scr_record_key_miss(ScrStr *k) {
 
 #ifdef SCR_RC_AUDIT
 static SCR_TL long scr_live_objects = 0;
+/* ProgramLifetime instances (@scriptc/types) this thread created: never
+ * freed by design, and neither is anything they hold (see the exit audit in
+ * scr_console.c). */
+static SCR_TL long scr_lifetime_objects = 0;
 long scr_obj_live_count(void) { return scr_live_objects; }
+long scr_obj_lifetime_count(void) { return scr_lifetime_objects; }
 void scr_obj_alloc_note(void) { scr_live_objects++; }
 void scr_obj_free_note(void) { scr_live_objects--; }
+/* Also an intentional LeakSanitizer root, like published objects: what the
+ * instance holds stays reachable. */
+void scr_obj_lifetime_note(const void *obj) {
+  scr_lifetime_objects++;
+  scr_lsan_immortal(obj);
+}
 #else
 #undef scr_obj_alloc_note
 #undef scr_obj_free_note
 void scr_obj_alloc_note(void) {}
 void scr_obj_free_note(void) {}
+void scr_obj_lifetime_note(const void *obj) { (void)obj; }
 #endif

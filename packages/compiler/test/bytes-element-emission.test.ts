@@ -75,7 +75,7 @@ function fixture(): IrModule {
   );
 
   return {
-    irVersion: 15,
+    irVersion: 16,
     sourceFile: loc.file,
     entry: "__main",
     functions: [{ name: "__main", params: [], returnType: VOID, locals, body, loc }],
@@ -145,7 +145,7 @@ function receiverReassignmentFixture(): IrModule {
   ];
 
   return {
-    irVersion: 15,
+    irVersion: 16,
     sourceFile: loc.file,
     entry: "__main",
     functions: [{ name: "__main", params: [], returnType: VOID, locals, body, loc }],
@@ -212,7 +212,7 @@ function integerLoopFixture(mutatesIndex = false): IrModule {
     { kind: "bytesSet", arr: bytesRef(), index: indexRef(), value: ref("sum"), loc },
   );
   return {
-    irVersion: 15,
+    irVersion: 16,
     sourceFile: loc.file,
     entry: "__main",
     functions: [
@@ -314,7 +314,10 @@ test("canonical byte loops keep their induction variable and indices integral", 
 
   expect(ll).toContain("alloca i64 ; integer induction index");
   expect(ll).toContain("icmp ult i64");
-  expect(ll).not.toContain("bytes.index.range");
+  // The proven in-bounds index needs no element check at all. Do not assert
+  // on `fptosi double` here: the fixture's inline ToUint32 coercion of the
+  // running sum legitimately uses it.
+  expect(ll).not.toContain("bytes.index");
 });
 
 test("a body mutation keeps the byte loop on the general f64 path", () => {
@@ -324,8 +327,8 @@ test("a body mutation keeps the byte loop on the general f64 path", () => {
   const ll = emitLlvmModule(mod);
 
   expect(ll).not.toContain("integer induction index");
-  expect(ll).toContain("bytes.index.range");
-  expect(ll).toContain("fptoui double");
+  expect(ll).toContain("bytes.index.valid");
+  expect(ll).toContain("fptosi double");
 });
 
 test("large record clones stay outlined while small clones remain inlineable", () => {
@@ -333,7 +336,7 @@ test("large record clones stay outlined while small clones remain inlineable", (
     const fields = Array.from({ length: count }, (_, i) => ({ name: `f${i}`, type: F64 }));
     const type = { kind: "record", shapeId: id } as const;
     return {
-      irVersion: 15,
+      irVersion: 16,
       sourceFile: "record-clone.ts",
       entry: "__main",
       records: [{ id, fields }],

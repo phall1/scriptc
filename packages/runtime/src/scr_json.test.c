@@ -391,7 +391,8 @@ static void test_item_release(void *ptr) {
 
 static ScrArr *test_tags_new(size_t cap) { return scr_arr_new(SCR_ELEM_STR, cap); }
 static ScrArr *test_list_new(size_t cap) {
-  return scr_arr_new_ref(test_item_retain, test_item_release, NULL, cap);
+  static const ScrArrOps item_ops = { test_item_retain, test_item_release, NULL };
+  return scr_arr_new_ops(&item_ops, cap);
 }
 static void test_arr_release(void *ptr) { scr_arr_release(ptr); }
 
@@ -553,8 +554,8 @@ static void array_key_presence(void) {
   ScrStr *nul = scr_str_new("map\0", 4);
   assert(!scr_arr_has_key(native, nul));
   scr_str_release(nul);
-  native->metadata = scr_dyn_new_obj();
-  scr_dyn_obj_set(native->metadata, "named", 5, scr_dyn_retain(scr_dyn_undefined()));
+  scr_arr_ext(native)->metadata = scr_dyn_new_obj();
+  scr_dyn_obj_set(scr_arr_ext(native)->metadata, "named", 5, scr_dyn_retain(scr_dyn_undefined()));
   assert(native_array_key(native, "named"));
 
   ScrDyn *checked = scr_dyn_new_arr();

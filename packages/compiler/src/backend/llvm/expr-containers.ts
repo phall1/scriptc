@@ -4,6 +4,7 @@ import { isStableReceiverOperand, undefinedArmTag } from "../../ir/analysis.js";
 import { type IrExpr, type IrType, isRefCounted, typeEquals, typeKey } from "../../ir/ir.js";
 import { mangleResolveThunk } from "../mangle.js";
 import {
+  arrOps,
   elemAccess,
   FN_ATTRS,
   mapKeyAccess,
@@ -23,15 +24,24 @@ import {
   borrowsMapReadInputs,
   borrowsMapMutationReceiver,
   inlineNumberKey,
+  entryStringKey,
 } from "./map-read-lifetimes.js";
 import {
   emitNumberMapGetRef,
   emitNumberMapGetScalar,
   emitNumberMapHas,
+  emitStringMapGetRef,
+  emitStringMapGetScalar,
+  emitStringMapHas,
 } from "./map-number-lookup.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { emitStringSliceRead } from "./string-slices.js";
-import { STRING_CHAR_CODE_AT_DECL, STRING_UTF16_LEN_DECL } from "./string-reads.js";
+import {
+  STRING_CHAR_CODE_AT_DECL,
+  STRING_CHAR_CODE_AT_INT_MARKER,
+  STRING_UTF16_LEN_DECL,
+} from "./string-reads.js";
+import { exactInteger, widenInteger } from "./integer-values.js";
 import { emitDenseArrayNumber, emitDenseArrayPush } from "./dense-array-access.js";
 import { emitUnionWiden } from "./expr-records.js";
 
@@ -293,6 +303,13 @@ export function emitStrIntrinsic(
     case "charCodeAt": {
       host.declare(STRING_CHAR_CODE_AT_DECL);
       const t = B.tmp();
+      const index = e.args[0] ? exactInteger(host, args[0]!, e.args[0]) : null;
+      if (index) {
+        host.declare(STRING_CHAR_CODE_AT_INT_MARKER);
+        const wide = widenInteger(host, index);
+        B.line(`${t} = call double @sc_str_char_code_at_int(ptr ${r.name}, i64 ${wide})`);
+        return { name: t, type: e.type };
+      }
       B.line(`${t} = call double @sc_str_char_code_at(ptr ${r.name}, double ${args[0]!.name})`);
       return { name: t, type: e.type };
     }
@@ -520,7 +537,7 @@ export function emitArrIntrinsic(
       B.line(`${p} = getelementptr inbounds %ScrArr, ptr ${r.name}, i32 0, i32 1`);
       host.markMemoryPointer(p, "array:header");
       B.line(`${len} = load ${host.sizeType}, ptr ${p}${host.fieldAliasAttachment(p)}`);
-      B.line(`${t} = uitofp ${host.sizeType} ${len} to double`);
+      B.line(`${t} = sitofp ${host.sizeType} ${len} to double`);
       return { name: t, type: e.type };
     }
     case "getNumber": {
@@ -613,14 +630,14 @@ export function emitArrIntrinsic(
     case "pop":
     case "shift": {
       host.emitPublishedArrayGuard(r.name, e.receiver.type, method === "pop" ? 2 : 6);
-      const dynamic = elem.kind === "dyn" && e.type.kind === "dyn";
-      if (!dynamic && e.type.kind !== "union")
+      const checkedValue = elem.kind === "dyn" && e.type.kind === "dyn";
+      if (!checkedValue && e.type.kind !== "union")
         throw new InternalCompilerError("llvm emitter bug: array removal result is not a union");
       const def = e.type.kind === "union" ? host.unionsById.get(e.type.unionId) : undefined;
       const tag = def ? def.arms.findIndex((arm) => typeEquals(arm, elem)) : -1;
       const undefTag = undefinedArmTag(e.type, host.unionsById);
       const sameUnion = elem.kind === "union" && typeEquals(elem, e.type);
-      if (!dynamic && ((!sameUnion && tag < 0) || undefTag < 0))
+      if (!checkedValue && ((!sameUnion && tag < 0) || undefTag < 0))
         throw new InternalCompilerError("llvm emitter bug: array removal union lacks its arms");
       host.declare(`declare zeroext i8 @scr_arr_${method}_state(ptr, ptr)`);
       const rawSlot = B.slot();
@@ -643,11 +660,11 @@ export function emitArrIntrinsic(
       else if (elem.kind === "bool") B.line(`${value} = icmp ne i64 ${raw}, 0`);
       else B.line(`${value} = inttoptr i64 ${raw} to ptr`);
       B.line(
-        `store ptr ${dynamic || sameUnion || e.type.kind !== "union" ? value : host.unionNewOwned(e.type.unionId, tag, { name: value, type: elem })}, ptr ${resultSlot}`,
+        `store ptr ${checkedValue || sameUnion || e.type.kind !== "union" ? value : host.unionNewOwned(e.type.unionId, tag, { name: value, type: elem })}, ptr ${resultSlot}`,
       );
       B.br(lj);
       B.startBlock(la);
-      if (dynamic) {
+      if (checkedValue) {
         host.declare(`declare ptr @scr_dyn_undefined()`);
         const absent = B.tmp();
         B.line(`${absent} = call ptr @scr_dyn_undefined()`);
@@ -734,6 +751,21 @@ export function emitArrIntrinsic(
       );
       host.emitPendingCheck();
       return { name: "", type: e.type };
+    }
+    case "sortDense": {
+      // Answers false, without calling the comparator, when the receiver
+      // needs the compacting snapshot path.
+      const comparator = emitBorrowedInput(host, e.args[0]!);
+      const owned = e.args[1]!.kind === "boolLit" && e.args[1]!.value;
+      const cmp = e.args[0]!.type;
+      const arity = cmp.kind === "func" ? cmp.params.length : 0;
+      host.declare(`declare zeroext i1 @scr_arr_sort_dense(ptr, ptr, i32, i1 zeroext)`);
+      const handled = B.tmp();
+      B.line(
+        `${handled} = call zeroext i1 @scr_arr_sort_dense(ptr ${r.name}, ptr ${comparator.name}, i32 ${arity}, i1 ${owned ? 1 : 0})`,
+      );
+      host.emitPendingCheck();
+      return { name: handled, type: e.type };
     }
     case "reverse": {
       // Mutates in place and returns the same receiver as a fresh +1.
@@ -1119,12 +1151,15 @@ export function emitMapLikeIntrinsic(
         return host.own({ name: t, type: e.type });
       }
       const numberKey = inlineNumberKey(k);
+      const stringKey = entryStringKey(k);
       if (value.kind === "union") {
         const isnull = B.tmp();
         const t = B.tmp();
         let raw: string;
         if (numberKey !== null) {
           raw = emitNumberMapGetRef(host, r.name, numberKey, value);
+        } else if (stringKey !== null) {
+          raw = emitStringMapGetRef(host, r.name, stringKey, value);
         } else {
           host.declare(`declare ptr @scr_map_get_${kAcc}_ref(ptr, ${kTy})`);
           raw = B.tmp();
@@ -1141,8 +1176,11 @@ export function emitMapLikeIntrinsic(
         const outTy = value.kind === "f64" ? "double" : "i8";
         let found: string;
         let readHit: () => string;
-        if (numberKey !== null) {
-          const scalar = emitNumberMapGetScalar(host, r.name, numberKey);
+        if (numberKey !== null || stringKey !== null) {
+          const scalar =
+            numberKey !== null
+              ? emitNumberMapGetScalar(host, r.name, numberKey)
+              : emitStringMapGetScalar(host, r.name, stringKey!);
           found = scalar.found;
           readHit = () => {
             const hit = B.tmp();
@@ -1197,6 +1235,10 @@ export function emitMapLikeIntrinsic(
         const raw = emitNumberMapGetRef(host, r.name, numberKey, value);
         return host.wrapNullable(raw, raw, value, valueTag, e.type, undefTag);
       }
+      if (stringKey !== null && isRefCounted(value)) {
+        const raw = emitStringMapGetRef(host, r.name, stringKey, value);
+        return host.wrapNullable(raw, raw, value, valueTag, e.type, undefTag);
+      }
       host.declare(`declare ptr @scr_map_get_${kAcc}_ref(ptr, ${kTy})`);
       const raw = B.tmp();
       B.line(`${raw} = call ptr @scr_map_get_${kAcc}_ref(ptr ${r.name}, ${k.args})`);
@@ -1224,6 +1266,7 @@ export function emitMapLikeIntrinsic(
     case "has": {
       const k = borrowInputs ? host.emitReadReceiver(e.args[0]!) : host.emitExpr(e.args[0]!);
       if (kAcc === "f64") return { name: emitNumberMapHas(host, r.name, k.name), type: e.type };
+      if (kAcc === "str") return { name: emitStringMapHas(host, r.name, k.name), type: e.type };
       host.declare(`declare zeroext i1 @scr_map_has_${kAcc}(ptr, ${kTy})`);
       const t = B.tmp();
       B.line(`${t} = call zeroext i1 @scr_map_has_${kAcc}(ptr ${r.name}, ${kTy} ${k.name})`);
@@ -1290,10 +1333,18 @@ export function emitMapLikeIntrinsic(
       return { name: "", type: e.type };
     case "toArray": {
       if (receiverType.kind !== "set") throw new InternalCompilerError("unreachable");
-      // Fresh +1 elem[] of the live entries in insertion order.
-      host.declare(`declare ptr @scr_set_to_arr_${kAcc}(ptr)`);
+      // Fresh +1 elem[] of the live entries in insertion order; a REF result
+      // takes its element type's array descriptor.
       const t = B.tmp();
-      B.line(`${t} = call ptr @scr_set_to_arr_${kAcc}(ptr ${r.name})`);
+      if (kAcc === "ref") {
+        host.declare(`declare ptr @scr_set_to_arr_ref(ptr, ptr)`);
+        B.line(
+          `${t} = call ptr @scr_set_to_arr_ref(ptr ${r.name}, ptr ${arrOps(host.shapeHost, receiverType.elem)})`,
+        );
+      } else {
+        host.declare(`declare ptr @scr_set_to_arr_${kAcc}(ptr)`);
+        B.line(`${t} = call ptr @scr_set_to_arr_${kAcc}(ptr ${r.name})`);
+      }
       return host.own({ name: t, type: e.type });
     }
     default: {

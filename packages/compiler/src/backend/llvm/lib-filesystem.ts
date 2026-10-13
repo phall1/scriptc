@@ -7,6 +7,8 @@ import { arrNewCall, traceArg, vAdapters } from "./shapes.js";
 import type { LlvmEmitterContext, LibCallExpr, LlValue } from "./expr-context.js";
 import { f64Lit } from "./common.js";
 import { emitAlwaysThrowLibCall } from "./lib-shared.js";
+import { emitTruncF64 } from "./trunc.js";
+import { markWrappingOperands } from "./wrapping-sums.js";
 
 const FS_ALWAYS_THROW_SYMS: Readonly<Record<string, string>> = {
   "fs.mkdtempChk": "scr_fs_mkdtemp_chk",
@@ -82,19 +84,6 @@ export function emitWebLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValu
     const raw = B.tmp();
     B.line(`${raw} = call ptr @${sym}(ptr ${source.name}${extra})`);
     const out = host.own({ name: raw, type: e.type });
-    host.emitPendingCheck();
-    return out;
-  }
-  // The handful with non-generic shapes first.
-  if (e.fn === "island.castFail") {
-    // The deferred boundary failure: the island value was evaluated
-    // (its side effects are real), the throw is unconditional
-    // (catchable TypeError naming the target type), and the typed
-    // dummy is NULL — the pending check abandons it.
-    const args = e.args.map((a) => host.emitExpr(a));
-    host.declare(`declare void @scr_jsval_cast_fail(ptr, ptr)`);
-    B.line(`call void @scr_jsval_cast_fail(ptr ${args[0]!.name}, ptr ${args[1]!.name})`);
-    const out = host.own({ name: "null", type: e.type });
     host.emitPendingCheck();
     return out;
   }
@@ -663,8 +652,23 @@ export function emitPathUrlLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
 
 export function emitPrimitiveLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
   const B = host.B;
-  if (e.fn === "math.floor" || e.fn === "math.trunc" || e.fn === "math.ceil") {
-    const intr = e.fn === "math.floor" ? "floor" : e.fn === "math.trunc" ? "trunc" : "ceil";
+  if (e.fn === "math.min" || e.fn === "math.max") {
+    // IEEE 754-2019 minimum/maximum: NaN propagates and -0 orders below +0,
+    // exactly Math.min/Math.max of two numbers.
+    const a = host.emitExpr(e.args[0]!);
+    const b = host.emitExpr(e.args[1]!);
+    const intr = e.fn === "math.min" ? "minimum" : "maximum";
+    host.declare(`declare double @llvm.${intr}.f64(double, double)`);
+    const t = B.tmp();
+    B.line(`${t} = call double @llvm.${intr}.f64(double ${a.name}, double ${b.name})`);
+    return { name: t, type: e.type };
+  }
+  if (e.fn === "math.trunc") {
+    const v = host.emitExpr(e.args[0]!);
+    return { name: emitTruncF64(host, v.name), type: e.type };
+  }
+  if (e.fn === "math.floor" || e.fn === "math.ceil") {
+    const intr = e.fn === "math.floor" ? "floor" : "ceil";
     const v = host.emitExpr(e.args[0]!);
     host.declare(`declare double @llvm.${intr}.f64(double)`);
     const t = B.tmp();
@@ -691,6 +695,7 @@ export function emitPrimitiveLibCall(host: LlvmEmitterContext, e: LibCallExpr): 
     return { name: t, type: e.type };
   }
   if (e.fn === "math.clz32") {
+    markWrappingOperands(host, e.args[0]!);
     const v = host.emitExpr(e.args[0]!);
     const bits = host.emitToUint32(v.name, e.args[0]!, v.uint32);
     host.declare(`declare i32 @llvm.ctlz.i32(i32, i1)`);
@@ -701,6 +706,7 @@ export function emitPrimitiveLibCall(host: LlvmEmitterContext, e: LibCallExpr): 
     return { name: t, type: e.type, uint32: count };
   }
   if (e.fn === "math.imul") {
+    markWrappingOperands(host, e.args[0]!, e.args[1]!);
     const a = host.emitExpr(e.args[0]!);
     const b = host.emitExpr(e.args[1]!);
     const lhs = host.emitToUint32(a.name, e.args[0]!, a.uint32);

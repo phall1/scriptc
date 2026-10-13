@@ -80,3 +80,66 @@ test("a guarded read forwarded to a call is bounded when nothing earlier can cha
   });
   expect(results).toEqual([true, true, false, false, true]);
 });
+
+test("an if condition reads like a statement, and a same-length fact extends the guard", () => {
+  const file = parseSourceFile(
+    "same-length.ts",
+    `declare function use(...values: number[]): boolean;
+    function f(xs: Uint32Array, ys: Uint32Array, zs: Uint32Array) {
+      for (let i = 0; i < xs.length; i++) if (use(xs[i], ys[i], zs[i])) return;
+      for (let i = 0; i < xs.length; i++) if (use(xs[i], use(), ys[i])) return;
+    }`,
+    "ts",
+  );
+  const results: boolean[] = [];
+  const facts = {
+    conditions: true,
+    sameLength: (array: ts.Expression, other: ts.Expression) =>
+      ts.isIdentifier(array) &&
+      ts.isIdentifier(other) &&
+      [array.text, other.text].sort().join() === "xs,ys",
+  };
+  ts.walkPreorder(file, (node) => {
+    if (ts.isElementAccessExpression(node)) results.push(indexReadInBounds(node, facts));
+    return undefined;
+  });
+  expect(results).toEqual([true, true, false, true, false]);
+  // Without the opt-in, a read in an `if` condition keeps its old answer.
+  const plain: boolean[] = [];
+  ts.walkPreorder(file, (node) => {
+    if (ts.isElementAccessExpression(node)) plain.push(indexReadInBounds(node));
+    return undefined;
+  });
+  expect(plain).toEqual([false, false, false, false, false]);
+});
+
+test("a length-alias fact lets a cached length bound the read", () => {
+  const file = parseSourceFile(
+    "length-alias.ts",
+    `function f(src: Uint8Array, dst: Uint8Array) {
+      const n = src.length;
+      for (let i = 0; i < n; i++) { const c = src[i]; }
+      for (let i = 0; i < n; i++) { const c = dst[i]; }
+    }`,
+    "ts",
+  );
+  const results: boolean[] = [];
+  const facts = {
+    lengthAlias: (bound: ts.Expression, array: ts.Expression) =>
+      ts.isIdentifier(bound) &&
+      bound.text === "n" &&
+      ts.isIdentifier(array) &&
+      array.text === "src",
+  };
+  ts.walkPreorder(file, (node) => {
+    if (ts.isElementAccessExpression(node)) results.push(indexReadInBounds(node, facts));
+    return undefined;
+  });
+  expect(results).toEqual([true, false]);
+  const plain: boolean[] = [];
+  ts.walkPreorder(file, (node) => {
+    if (ts.isElementAccessExpression(node)) plain.push(indexReadInBounds(node));
+    return undefined;
+  });
+  expect(plain).toEqual([false, false]);
+});

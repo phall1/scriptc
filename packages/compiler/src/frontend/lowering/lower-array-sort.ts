@@ -7,7 +7,6 @@ import {
   type IrLocal,
   type IrStmt,
   type IrType,
-  JSVAL,
   VOID,
   type SrcLoc,
   arrayOf,
@@ -330,15 +329,7 @@ export function buildArraySortFn(
         loc,
       };
     }
-    if (elem.kind === "jsval") {
-      return {
-        kind: "jsOp",
-        op: "eq",
-        args: [value, { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc }],
-        type: BOOL,
-        loc,
-      };
-    }
+
     return null;
   };
   const greater: Greater = (left, right) => {
@@ -361,9 +352,26 @@ export function buildArraySortFn(
       : compare;
   };
   const result = copyFirst ? src : a;
+  // Dense arrays sort in the runtime without the compacting snapshot below:
+  // `sort` orders the receiver's values outside it and writes them back
+  // after success, and `toSorted` orders its private copy in place.
+  const dense = (receiver: SortLocal): IrStmt =>
+    b.branch(
+      {
+        kind: "arrIntrinsic",
+        method: "sortDense",
+        receiver,
+        args: [f, { kind: "boolLit", value: copyFirst, type: BOOL, loc }],
+        type: BOOL,
+        loc,
+      },
+      [{ kind: "return", value: receiver, loc }],
+    );
   const body: IrStmt[] = [
+    ...(native && !copyFirst ? [dense(a)] : []),
     b.bind(n, b.length(a)),
     b.bind(src, { kind: "arrIntrinsic", method: "slice", receiver: a, args: [], type: arrT, loc }),
+    ...(native && copyFirst ? [dense(src)] : []),
     b.bind(valueCount, b.num(0)),
     b.bind(undefinedCount, b.num(0)),
     // Compact the owned snapshot before callbacks. Dense values stay in

@@ -2,12 +2,14 @@ import type { CompileFailure, CompileRequestOptions } from "../compile-types.js"
 import type { FfiProfile } from "../ffi/ffi-manifest.js";
 import {
   checkerPanicDiag,
+  npmStaticRefusalDiag,
   iceDiag,
   isCheckerPanic,
   type ScrDiagnostic,
 } from "../diagnostics/diagnostic.js";
 import type { IrModule, SrcLoc } from "../ir/ir.js";
 import { validateModule } from "../ir/validate.js";
+import { checkContracts } from "../contracts/check.js";
 import {
   fenceSpeculativeWasiFunctions,
   moduleWasiUnavailableSurface,
@@ -49,11 +51,22 @@ export function prepareExecutableModule(
       sourceTexts: fe.sourceTexts(),
     });
 
+    const refused = fe.npmStatic.filter((entry) => entry.status === "refused");
+    if (refused.length > 0) {
+      return fail(
+        refused.map((entry) =>
+          npmStaticRefusalDiag(
+            entry.package,
+            entry.detail ?? "its static compilation was refused",
+            fe.npmImportSites.get(entry.package) ?? { file: entryPath, start: 0, end: 0 },
+          ),
+        ),
+      );
+    }
     if (fe.preflight.length > 0) return fail(fe.preflight);
 
     try {
       lowered = fe.lower({
-        dynamic: opts.dynamic ?? false,
         targetPlatform: buildPlatform,
         ...(ffi !== null ? { ffiImports: ffi.functions } : {}),
       });
@@ -89,6 +102,12 @@ export function prepareExecutableModule(
       }
     }
     sourceTexts = fe.sourceTexts();
+    if (lowered.contracts) {
+      const checked = checkContracts(lowered.module, lowered.contracts, sourceTexts);
+      timing("contracts");
+      if (checked.diagnostics.length > 0) return fail(checked.diagnostics);
+      if (checked.contracts) lowered.module.contracts = checked.contracts;
+    }
   } finally {
     fe.dispose();
     timing("frontend-dispose");

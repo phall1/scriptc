@@ -9,7 +9,6 @@ import {
   type IrExpr,
   type IrStmt,
   type IrType,
-  JSVAL,
   STRING,
   type SrcLoc,
   UNDEFINED_T,
@@ -25,6 +24,9 @@ import { isSafeToDiscard } from "./expressions/evaluation-safety.js";
 import { defaultAfterUndefined, lowerStaticallyUndefinedArgument } from "./optional-arguments.js";
 import { checkedIterableSpread } from "./checked-iterable-spread.js";
 import { type ParamShape } from "./call-signatures.js";
+import { arrayValueRead, arrayValueType } from "./array-values.js";
+import { buildArrayConversion } from "./coercions/builders.js";
+import { typeKey } from "../type-mapper.js";
 
 function fixedTupleSpreadInfo(
   lowerer: Lowerer,
@@ -40,14 +42,6 @@ function fixedTupleSpreadInfo(
   };
 }
 
-/** CALL-SITE COMPLETION — the frontend half of the one-signature contract
- * (docs/ir.md): typed calls lower to the callee's full ABI parameter
- * list, so backends and the validator stay count-exact. Dynamic and island
- * calls retain their runtime arity handling. Omitted trailing args for omittable
- * params become the interned undefined arm (which is also what an
- * explicitly-passed `undefined` wraps to — both trigger a default, JS-
- * exact); a rest param packs the surplus args (possibly zero) into one
- * array literal, evaluated in source order at the call site. */
 export function completeArgs(
   lowerer: Lowerer,
   argNodes: readonly ts.Expression[],
@@ -63,11 +57,25 @@ export function completeArgs(
 ): IrExpr[] {
   // Conversion eligibility can traverse the whole recursive parameter
   // graph. Ordinary calls and fixed tuples never need that analysis.
+  const runtimeSpreads = argNodes.filter(
+    (arg): arg is ts.SpreadElement =>
+      ts.isSpreadElement(arg) && !fixedTupleSpreadInfo(lowerer, arg.expression),
+  );
+  // Spread operands lowered while choosing the completion, each exactly once.
+  const loweredSpreads = new Map<ts.Expression, IrExpr>();
+  const lowerSpread = (arg: ts.SpreadElement): IrExpr =>
+    loweredSpreads.get(arg) ?? lowerer.lowerExpr(arg.expression);
   if (
-    argNodes.some(
-      (arg) => ts.isSpreadElement(arg) && !fixedTupleSpreadInfo(lowerer, arg.expression),
-    ) &&
-    canCompleteRuntimeSpread(lowerer, shapes)
+    runtimeSpreads.length > 0 &&
+    canCompleteRuntimeSpread(lowerer, shapes) &&
+    !spreadsFillTypedRest(
+      lowerer,
+      shapes,
+      argNodes,
+      leading?.length ?? 0,
+      runtimeSpreads,
+      loweredSpreads,
+    )
   ) {
     // Runtime-length spreads determine the complete argument list before
     // any parameter default runs. Build it once in source order, then
@@ -96,7 +104,7 @@ export function completeArgs(
         push(lowerer.lowerExprExpecting(arg, DYN), "dyn.packPush");
         return;
       }
-      let value = lowerer.lowerExpr(arg.expression);
+      let value = lowerSpread(arg);
       if (value.type.kind === "set") {
         value = {
           kind: "setIntrinsic",
@@ -228,11 +236,7 @@ export function completeArgs(
     });
   }
   const restAt = shapes.findIndex(
-    (s) =>
-      s.mode === "rest" ||
-      s.mode === "dynRest" ||
-      s.mode === "islandRest" ||
-      s.mode === "arguments",
+    (s) => s.mode === "rest" || s.mode === "dynRest" || s.mode === "arguments",
   );
   const positional = restAt >= 0 ? shapes.slice(0, restAt) : [...shapes];
   if (restAt >= 0 && shapes[restAt]!.mode === "arguments") {
@@ -320,19 +324,7 @@ export function completeArgs(
     if (shape.callDefault) return shape.callDefault;
     return lowerer.undefinedArgFor(shape.type, loc, blame);
   });
-  if (restAt >= 0 && shapes[restAt]!.mode === "islandRest") {
-    // The ISLAND variadic pack: surplus arguments marshal into one
-    // fresh ENGINE array — exactly what the REST host-call adapter
-    // hands the closure for indirect calls.
-    const elems = sources.slice(restAt).map((a): IrExpr => {
-      if (isIr(a)) return lowerer.coerceInto(blame, a.ir, JSVAL);
-      if (ts.isSpreadElement(a)) {
-        lowerer.unsupported("SC1090", a, "spread arguments into an island rest parameter");
-      }
-      return lowerer.lowerExprExpecting(a, JSVAL);
-    });
-    out.push({ kind: "jsOp", op: "arrLit", args: elems, type: JSVAL, loc });
-  } else if (restAt >= 0 && shapes[restAt]!.mode === "dynRest") {
+  if (restAt >= 0 && shapes[restAt]!.mode === "dynRest") {
     // The VARIADIC dyn pack (a JS `...args` with no static element
     // type, or the synthetic `arguments` slot): surplus arguments
     // convert through the dyn boundary into one fresh dyn array —
@@ -390,7 +382,11 @@ export function completeArgs(
     const elems = sources.slice(restAt).map((a, i) => {
       if (isIr(a)) return lowerer.coerceInto(blame, a.ir, restType.elem);
       if (ts.isSpreadElement(a)) {
-        let src = lowerer.lowerExpr(a.expression);
+        let src = lowerSpread(a);
+        // A `T[]` into a `(T | undefined)[]` rest: read every element as JS
+        // does, holes and present undefined as undefined.
+        const lift = holeReadingLift(lowerer, src.type, restType, loc);
+        if (lift) src = { kind: "call", callee: lift, args: [src], type: restType, loc: src.loc };
         // A same-element Set spread drains first (setIntrinsic toArray).
         if (src.type.kind === "set" && typeEquals(src.type.elem, restType.elem)) {
           src = {
@@ -480,14 +476,10 @@ export function wrappedUndefined(lowerer: Lowerer, type: IrType, loc: SrcLoc): I
 /** The synthesized argument for an omitted omittable param: the interned
  * undefined arm of the param's `T | undefined` ABI union, or the checked-dynamic tree
  * undefined for a checked-dynamic param (`bar?: any`). */
-/** The "absent argument" value for a param SLOT type, or null when the
- * slot cannot hold one: the interned undefined arm for undefined-armed
- * unions, the dyn undefined for checked-dynamic slots, the engine's own
- * undefined for island slots. Shared by every call-completion loop
- * (direct calls and calls through func-typed values). */
+
 export function omittedArgFor(lowerer: Lowerer, type: IrType, loc: SrcLoc): IrExpr | null {
   if (type.kind === "dyn") return dynUndefinedExpr(loc);
-  if (type.kind === "jsval") return { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc };
+
   return lowerer.wrappedUndefined(type, loc);
 }
 
@@ -538,9 +530,7 @@ export function undefinedArgFor(
   blame: ts.Node,
 ): IrExpr {
   if (type.kind === "dyn") return dynUndefinedExpr(loc);
-  // An omitted argument for an ISLAND-typed omittable param (`f()` where
-  // f's `x = a` default is jsval-shaped): the engine's own undefined.
-  if (type.kind === "jsval") return { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc };
+
   const wrapped = lowerer.wrappedUndefined(type, loc);
   if (!wrapped) {
     // Omittable params always carry an undefined-armed union (paramShape
@@ -582,8 +572,7 @@ export function lowerSpreadArgsCall(
 ): IrExpr | null {
   if (!isJsSourceFile(expr.getSourceFile()) && callee.type.kind !== "dyn") return null;
   if (!expr.arguments.some((a) => ts.isSpreadElement(a))) return null;
-  if (callee.type.kind !== "dyn" && callee.type.kind !== "func" && callee.type.kind !== "jsval")
-    return null;
+  if (callee.type.kind !== "dyn" && callee.type.kind !== "func") return null;
   const calleeName =
     ts.isPropertyAccessExpression(expr.expression) || ts.isElementAccessExpression(expr.expression)
       ? expr.expression.getText()
@@ -600,7 +589,7 @@ export function lowerSpreadArgsCall(
   const spreadParts = parts.filter((p) => p.spreadOf !== null);
   const getR = (id: string) => lowerer.shapes.get(id);
   const getU = (id: string) => lowerer.unions.get(id);
-  const anyJsvalSpread = spreadParts.some((p) => p.v.type.kind === "jsval");
+  const anyJsvalSpread = spreadParts.some((_p) => false);
   if (
     !anyJsvalSpread &&
     (callee.type.kind === "dyn" ||
@@ -623,37 +612,8 @@ export function lowerSpreadArgsCall(
       callee.type.kind === "dyn" ? callee : lowerer.coerceInto(expr.expression, callee, DYN);
     return { kind: "dynCall", callee: boxed, calleeName, args, spreads, type: DYN, loc };
   }
-  if (
-    spreadParts.length > 0 &&
-    (spreadParts.every((p) => p.v.type.kind === "jsval") ||
-      (callee.type.kind === "func" && callee.type.restAbi === "jsval")) &&
-    (callee.type.kind === "jsval" || callee.type.kind === "func")
-  ) {
-    if (spreadParts.length !== 1 || parts[parts.length - 1]!.spreadOf === null) {
-      lowerer.unsupported(
-        "SC1090",
-        expr,
-        "spread arguments before positional arguments in island calls (one trailing spread after the fixed arguments is the supported form)",
-      );
-    }
-    const f = lowerer.coerceInto(expr.expression, callee, JSVAL);
-    const pre: IrExpr[] = parts.slice(0, -1).map((p) => lowerer.coerceInto(p.node!, p.v, JSVAL));
-    const preArr: IrExpr = { kind: "jsOp", op: "arrLit", args: pre, type: JSVAL, loc };
-    const last = parts[parts.length - 1]!;
-    // The spelling rides in `name` for V8's nullish spread-call
-    // TypeError ("v is not iterable (cannot read property ...)").
-    return {
-      kind: "jsOp",
-      op: "callSpread",
-      name: last.spreadOf!.getText(),
-      args: [f, preArr, lowerer.coerceInto(last.spreadOf!, last.v, JSVAL)],
-      type: JSVAL,
-      loc,
-    };
-  }
-  // No lane fits (a spread source outside both tiers, a callee neither
-  // boxable nor marshalable, mixed dyn/jsval spreads): fence HERE — the
-  // arguments are already lowered, and falling back to the historical
+  // No native spread-call form fits. Arguments are already lowered, so
+  // falling back to the historical
   // per-site fences would lower them a second time (duplicate lambda
   // lifts, duplicated diagnostics).
   lowerer.unsupported("SC1090", expr, "spread arguments");
@@ -661,7 +621,7 @@ export function lowerSpreadArgsCall(
 
 /** True when a spread argument lands where the compile-time completion
  * cannot take it — a FIXED parameter position, or a dynamic rest slot
- * (dynRest/islandRest, whose packs are built per-argument): the shapes
+ * (dynRest, whose packs are built per-argument): the shapes
  * the runtime-arity lane (lowerSpreadArgsCall) serves. Typed `rest`
  * slots keep completeArgs' same-element spread packing. */
 export function spreadNeedsRuntimeArity(
@@ -669,9 +629,7 @@ export function spreadNeedsRuntimeArity(
   shapes: readonly ParamShape[],
   argNodes: readonly ts.Expression[],
 ): boolean {
-  const restAt = shapes.findIndex(
-    (s) => s.mode === "rest" || s.mode === "dynRest" || s.mode === "islandRest",
-  );
+  const restAt = shapes.findIndex((s) => s.mode === "rest" || s.mode === "dynRest");
   let position = 0;
   for (const arg of argNodes) {
     if (ts.isSpreadElement(arg)) {
@@ -689,12 +647,107 @@ export function spreadNeedsRuntimeArity(
   return false;
 }
 
+/** True when every runtime-length spread only fills a typed rest with its
+ * own array type, or a `T[]` into an argument-widened `(T | undefined)[]`
+ * rest. The static completion then builds one fresh rest array and converts
+ * no argument to a checked-dynamic value: boxing an instance would give its
+ * class (and, through the generated property helpers, the classes it
+ * references) a hidden property bag. Lowers the spread operands it checks
+ * into `lowered`, so each is lowered exactly once. */
+function spreadsFillTypedRest(
+  lowerer: Lowerer,
+  shapes: readonly ParamShape[],
+  argNodes: readonly ts.Expression[],
+  leading: number,
+  runtimeSpreads: readonly ts.SpreadElement[],
+  lowered: Map<ts.Expression, IrExpr>,
+): boolean {
+  const restAt = typedRestAfterSpreads(lowerer, shapes, argNodes, leading);
+  const restType = restAt >= 0 ? shapes[restAt]!.type : null;
+  if (restType?.kind !== "array") return false;
+  for (const arg of runtimeSpreads) lowered.set(arg, lowerer.lowerExpr(arg.expression));
+  return runtimeSpreads.every((arg) => {
+    const type = lowered.get(arg)!.type;
+    return typeEquals(type, restType) || canReadHolesInto(lowerer, type, restType);
+  });
+}
+
+/** The index of the typed `rest` parameter when every runtime-length spread
+ * lands in it (after the fixed positions), else -1. */
+function typedRestAfterSpreads(
+  lowerer: Lowerer,
+  shapes: readonly ParamShape[],
+  argNodes: readonly ts.Expression[],
+  leading: number,
+): number {
+  const restAt = shapes.findIndex((s) => s.mode !== "required" && s.mode !== "omittable");
+  if (restAt < 0 || shapes[restAt]!.mode !== "rest") return -1;
+  let position = leading;
+  for (const arg of argNodes) {
+    if (ts.isSpreadElement(arg)) {
+      const tuple = fixedTupleSpreadInfo(lowerer, arg.expression);
+      if (tuple) {
+        position += tuple.fields.length;
+        continue;
+      }
+      if (position < restAt) return -1;
+    }
+    position++;
+  }
+  return restAt;
+}
+
+/** A `T[]` spread into a `(T | undefined)[]` rest, `T | undefined` being
+ * exactly what a JS read of a `T[]` element yields. */
+function canReadHolesInto(lowerer: Lowerer, from: IrType, to: IrType): boolean {
+  if (from.kind !== "array" || to.kind !== "array" || typeEquals(from, to)) return false;
+  const elem = from.elem;
+  if (elem.kind === "dyn") return false;
+  return typeEquals(arrayValueType(lowerer, elem), to.elem);
+}
+
+/** The interned `%arr.holes.<n>` copy for canReadHolesInto pairs: spread
+ * iteration reads holes and present undefined as undefined. Null for any
+ * other pair. */
+function holeReadingLift(lowerer: Lowerer, from: IrType, to: IrType, loc: SrcLoc): string | null {
+  if (from.kind !== "array" || !canReadHolesInto(lowerer, from, to)) return null;
+  const elem = from.elem;
+  const key = `arr.holes:${typeKey(elem)}`;
+  const existing = lowerer.valueHelpers.get(key);
+  if (existing) return existing;
+  const name = `%arr.holes.${lowerer.valueHelpers.size}`;
+  lowerer.valueHelpers.set(key, name);
+  lowerer.liftedFns.push(
+    buildArrayConversion(
+      name,
+      from,
+      { kind: "arrayLit", elems: [], type: to, loc },
+      (element, index, result) => ({
+        kind: "arrIntrinsic",
+        method: "push",
+        receiver: result,
+        args: [arrayValueRead(lowerer, sourceArray(element), index, elem, loc)],
+        type: F64,
+        loc,
+      }),
+      loc,
+    ),
+  );
+  return name;
+}
+
+/** The array a buildArrayConversion element read indexes. */
+function sourceArray(element: IrExpr): IrExpr {
+  if (element.kind !== "arrayGet")
+    throw new InternalCompilerError("array conversion element is not an array read");
+  return element.arr;
+}
+
 function canCompleteRuntimeSpread(lowerer: Lowerer, shapes: readonly ParamShape[]): boolean {
   return (
     shapes.length > 0 &&
     shapes.every(
       (shape) =>
-        shape.mode !== "islandRest" &&
         shape.callDefault === undefined &&
         canDynCheckTo(
           shape.type,

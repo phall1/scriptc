@@ -126,6 +126,36 @@ static void test_string_keys(void) {
   scr_map_release(m);
 }
 
+/* scr_map_entry_str: the entry of a string key, for generated code that
+ * reads the value slot and retains it with the value type's own retain. The
+ * lookup itself takes no reference, in linear and bucketed maps alike. */
+static void test_string_entries(void) {
+  ScrMap *m = scr_map_new(SCR_MAP_KEY_STR, SCR_MAP_VAL_REF, scr_str_retain_v, scr_str_release_v, NULL);
+  ScrStr *missing = S("missing");
+  check(scr_map_entry_str(m, missing) == NULL, "empty map has no entry");
+  char name[16];
+  for (int i = 0; i < 40; i++) {
+    snprintf(name, sizeof name, "key%d", i);
+    ScrStr *k = S(name);
+    scr_map_set_str_ref(m, k, S(name)); /* value +1 moves in */
+    scr_str_release(k);
+    ScrStr *probe = S("key0"); /* a different object with equal bytes */
+    const ScrMapEntry *e = scr_map_entry_str(m, probe);
+    check(e != NULL, "entry found by content");
+    ScrStr *v = (ScrStr *)(uintptr_t)e->val;
+    check(v->len == 4 && memcmp(v->data, "key0", 4) == 0, "entry value slot holds the value");
+    check(v->rc == 1, "entry lookup takes no reference");
+    scr_str_release(probe);
+  }
+  check(scr_map_entry_str(m, missing) == NULL, "absent key has no entry");
+  ScrStr *k7 = S("key7");
+  check(scr_map_delete_str(m, k7), "delete");
+  check(scr_map_entry_str(m, k7) == NULL, "deleted key has no entry");
+  scr_str_release(k7);
+  scr_str_release(missing);
+  scr_map_release(m);
+}
+
 /* String keys hash to 32 bits; heap strings cache the value in their header
  * and static strings (compiler literals, runtime one-character strings)
  * carry it precomputed. The vectors are shared with the compiler's
@@ -558,6 +588,8 @@ static void test_value_keys_and_copies(void) {
 }
 
 #ifdef SCR_RC_AUDIT
+static const ScrArrOps map_arr_ops = { scr_map_retain_v, scr_map_release_v, scr_map_trace_v };
+
 static void test_identity_cycles(void) {
   scr_collect_cycles();
   long maps = scr_map_live_count();
@@ -566,7 +598,7 @@ static void test_identity_cycles(void) {
   long unions = scr_union_live_count();
   for (int mode = 0; mode < 5; mode++) {
     for (int i = 0; i < 100; i++) {
-      ScrArr *key = scr_arr_new_ref(scr_map_retain_v, scr_map_release_v, scr_map_trace_v, 0);
+      ScrArr *key = scr_arr_new_ops(&map_arr_ops, 0);
       bool wrapped = mode >= 3;
       ScrMapValKind value_kind = mode == 0 ? SCR_MAP_VAL_F64 : SCR_MAP_VAL_REF;
       ScrTraceFn value_trace = mode == 2 ? scr_arr_trace_v : NULL;
@@ -597,10 +629,150 @@ static void test_identity_cycles(void) {
 }
 #endif
 
+/* The absent-key filter: every live entry's hash bits stay in m->filter
+ * through appends, overwrites, deletes, compaction, growth, clears (also
+ * during an iteration), direct-index transitions and clones, so a filtered
+ * miss is always a true miss. A seeded model checks membership of a key
+ * universe after every operation, for string, number and reference keys. */
+static uint64_t filter_bits(uint64_t hash) {
+  return (UINT64_C(1) << (hash >> 44 & 63)) | (UINT64_C(1) << (hash >> 50 & 63));
+}
+
+static bool filter_covers_live(const ScrMap *m) {
+  for (size_t e = 0; e < m->nentries; e++) {
+    uint64_t h = m->entries[e].hash;
+    if (h && (m->filter & filter_bits(h)) != filter_bits(h)) return false;
+  }
+  return true;
+}
+
+static void *filter_ref_retain(void *p) { return p; }
+static void filter_ref_release(void *p) { (void)p; }
+
+static uint32_t filter_rng = 12345;
+static uint32_t filter_next(void) {
+  filter_rng = filter_rng * 1103515245u + 12345u;
+  return filter_rng >> 8;
+}
+
+static void test_absent_key_filter(void) {
+  enum { UNIVERSE = 600 };
+  ScrStr *names[UNIVERSE];
+  static int refs[UNIVERSE];
+  char buf[32];
+  for (int i = 0; i < UNIVERSE; i++) {
+    snprintf(buf, sizeof buf, "k%d", i * 7919);
+    names[i] = S(buf);
+  }
+  ScrMap *ms = scr_map_new(SCR_MAP_KEY_STR, SCR_MAP_VAL_F64, NULL, NULL, NULL);
+  ScrMap *mf = scr_map_new(SCR_MAP_KEY_F64, SCR_MAP_VAL_F64, NULL, NULL, NULL);
+  ScrMap *mr = scr_set_new_ref(filter_ref_retain, filter_ref_release);
+  static bool in_s[UNIVERSE], in_f[UNIVERSE], in_r[UNIVERSE];
+  memset(in_s, 0, sizeof in_s);
+  memset(in_f, 0, sizeof in_f);
+  memset(in_r, 0, sizeof in_r);
+  bool ok = true, covered = true;
+  int iterating = 0;
+  for (int step = 0; step < 40000; step++) {
+    uint32_t r = filter_next();
+    /* Phases: grow to a few hundred keys, then shrink, repeatedly, so the
+     * maps pass through linear, bucketed and direct-index storage. */
+    int span = (step / 4000) % 2 ? 40 : UNIVERSE;
+    int i = (int)(r % (uint32_t)span);
+    /* Number keys alternate between dense indices and sparse values. */
+    double fk = (step / 8000) % 2 ? (double)i : (double)i * 1000.5;
+    switch ((r >> 20) % 16) {
+    case 0: case 1: case 2: case 3: case 4: case 5:
+      scr_map_set_str_f64(ms, names[i], (double)step);
+      in_s[i] = true;
+      scr_map_set_f64_f64(mf, fk, (double)step);
+      in_f[i] = true;
+      scr_map_set_ref_f64(mr, &refs[i], 0);
+      in_r[i] = true;
+      break;
+    case 6: case 7: case 8: case 9:
+      ok &= scr_map_delete_str(ms, names[i]) == in_s[i];
+      in_s[i] = false;
+      ok &= scr_map_delete_f64(mf, fk) == in_f[i];
+      in_f[i] = false;
+      ok &= scr_map_delete_ref(mr, &refs[i]) == in_r[i];
+      in_r[i] = false;
+      break;
+    case 10:
+      if ((r >> 4) % 64 == 0) {
+        scr_map_clear(ms);
+        scr_map_clear(mf);
+        scr_map_clear(mr);
+        memset(in_s, 0, sizeof in_s);
+        memset(in_f, 0, sizeof in_f);
+        memset(in_r, 0, sizeof in_r);
+      }
+      break;
+    case 11:
+      /* Hold or release an iteration: growth keeps tombstones meanwhile. */
+      if (!iterating) {
+        scr_map_iter_enter(ms);
+        scr_map_iter_enter(mf);
+        scr_map_iter_enter(mr);
+        iterating = 1;
+      } else {
+        scr_map_iter_exit(ms);
+        scr_map_iter_exit(mf);
+        scr_map_iter_exit(mr);
+        iterating = 0;
+      }
+      break;
+    case 12: {
+      ScrMap *copy = scr_map_clone(ms, false);
+      covered &= filter_covers_live(copy);
+      for (int j = 0; j < span; j++) ok &= scr_map_has_str(copy, names[j]) == in_s[j];
+      scr_map_release(copy);
+      break;
+    }
+    default:
+      break;
+    }
+    covered &= filter_covers_live(ms) && filter_covers_live(mf) && filter_covers_live(mr);
+    if (step % 97 == 0) {
+      for (int j = 0; j < UNIVERSE; j++) {
+        double fj = (step / 8000) % 2 ? (double)j : (double)j * 1000.5;
+        ok &= scr_map_has_str(ms, names[j]) == in_s[j];
+        ScrStr *probe = scr_str_new(names[j]->data, names[j]->len); /* uncached hash */
+        ok &= (scr_map_entry_str(ms, probe) != NULL) == in_s[j];
+        scr_str_release(probe);
+        ok &= scr_map_has_f64(mf, fj) == in_f[j];
+        ok &= scr_map_has_ref(mr, &refs[j]) == in_r[j];
+      }
+    }
+    /* A number-key phase change re-keys the model: drop everything. */
+    if (step % 8000 == 7999) {
+      scr_map_clear(mf);
+      memset(in_f, 0, sizeof in_f);
+    }
+  }
+  if (iterating) {
+    scr_map_iter_exit(ms);
+    scr_map_iter_exit(mf);
+    scr_map_iter_exit(mr);
+  }
+  check(covered, "filter keeps every live entry's bits");
+  check(ok, "filtered lookups agree with the model");
+  /* A cleared map's filter is empty, and refills cover new keys. */
+  scr_map_clear(ms);
+  check(ms->filter == 0, "clear empties the filter");
+  scr_map_set_str_f64(ms, names[3], 1);
+  check(scr_map_has_str(ms, names[3]) && !scr_map_has_str(ms, names[4]), "refill after clear");
+  scr_map_release(ms);
+  scr_map_release(mf);
+  scr_map_release(mr);
+  for (int i = 0; i < UNIVERSE; i++) scr_str_release(names[i]);
+}
+
 int main(void) {
   test_key_bytes();
   test_string_bucket_collisions();
   test_string_keys();
+  test_string_entries();
   test_same_value_zero();
   test_span_keys();
   test_string_hash_cache();
@@ -614,6 +786,7 @@ int main(void) {
   test_identity_scalar_values();
   test_reboxed_keys_and_rehash();
   test_value_keys_and_copies();
+  test_absent_key_filter();
 #ifdef SCR_RC_AUDIT
   test_identity_cycles();
   scr_collect_cycles();

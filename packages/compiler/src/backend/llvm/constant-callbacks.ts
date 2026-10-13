@@ -1,5 +1,6 @@
 import { isBorrowSafeMath } from "../../ir/analysis.js";
 import type { IrExpr, IrFunction, IrLibFn, IrModule, IrStmt } from "../../ir/ir.js";
+import { exprFunctionReference, moduleFunctionReferences } from "../../ir/function-references.js";
 import { everyStmtList } from "../../ir/traverse.js";
 import type { CallLifetimes } from "./call-lifetimes.js";
 
@@ -38,31 +39,14 @@ export function findConstantCallbacks(
   );
   const globals = new Map<string, IrExpr>();
   const writes = new Set<string>();
-  const escaped = new Set<string>([
-    mod.entry,
-    ...(mod.lib?.exports.map((entry) => entry.fnName) ?? []),
-  ]);
+  // A function named anywhere but as a direct call's callee can be entered
+  // by a generated adapter or the runtime, which a direct-call census cannot
+  // specialize: the entry, exports, class helpers and methods here, and
+  // closures and retag helpers in the bodies (collected by the walk below).
+  const escaped = new Set<string>(moduleFunctionReferences(mod));
   for (const cls of mod.classes ?? [])
     for (const method of ["constructor", ...(cls.methods ?? [])])
       escaped.add(`%${cls.name}.${method}`);
-  // Metadata and non-call expression references can expose an entry to a
-  // generated adapter or runtime callback. A direct-call census cannot
-  // specialize those entries. Conservatively reject every such reference,
-  // including future metadata that names a function.
-  function externalReferences(value: unknown): void {
-    if (typeof value === "string") {
-      if (functions.has(value)) escaped.add(value);
-    } else if (Array.isArray(value)) value.forEach(externalReferences);
-    else if (value && typeof value === "object") {
-      const object = value as Record<string, unknown>;
-      for (const key in object) {
-        if (object["kind"] === "call" && key === "callee") continue;
-        externalReferences(object[key]);
-      }
-    }
-  }
-  const { functions: _functions, ...metadata } = mod;
-  externalReferences(metadata);
   const incoming = new Map<string, { owner: string; args: IrExpr[] }[]>();
   // Where each lifted function's environment is created, for resolving its
   // immutable captures in the creating scope.
@@ -100,8 +84,9 @@ export function findConstantCallbacks(
         }
         if (expr.kind === "callValue" && expr.callee.kind === "varRef")
           callees.add(expr.callee.localId);
+        const referenced = exprFunctionReference(expr);
+        if (referenced !== undefined) escaped.add(referenced);
         if (expr.kind === "closure") {
-          escaped.add(expr.fnName);
           const sites = closureSites.get(expr.fnName) ?? [];
           sites.push({ owner: fn.name, captures: expr.captures });
           closureSites.set(expr.fnName, sites);
@@ -111,7 +96,6 @@ export function findConstantCallbacks(
         return true;
       },
     });
-    externalReferences(fn.body);
     definitions.set(fn.name, defs);
     constDefinitions.set(fn.name, consts);
     indirectCallees.set(fn.name, callees);
@@ -259,6 +243,7 @@ const RECEIVER_FREE_EXPRS = new Set<IrExpr["kind"]>([
   "nullish",
   "orDefault",
   "unionWrap",
+  "unionRetype",
   "unionNarrow",
   "unionIsTag",
   "unionEq",
@@ -329,7 +314,7 @@ const RECEIVER_FREE_LIB_FNS = new Set<IrLibFn>([
 
 /** Typed container and string operations. Their runtime paths compare and
  * copy values but never call back into compiled code, as long as no
- * operand is a function or a checked/engine value. */
+ * operand is a function or a checked value. */
 /** Operands of a data intrinsic (receiver first), or null when `e` is not
  * one. A switch over the kinds keeps this inside the self-hosted subset,
  * which has no `in` on IR expression unions. */
@@ -350,12 +335,12 @@ function dataIntrinsicOperands(e: IrExpr): IrExpr[] | null {
 
 function opaqueOperand(e: IrExpr): boolean {
   const kind = e.type.kind;
-  return kind === "func" || kind === "dyn" || kind === "jsval" || kind === "caught";
+  return kind === "func" || kind === "dyn" || kind === "caught";
 }
 
 /** The functions that may observe the ambient receiver stack when entered
  * without a fresh binding: the JS `this` read (libCall dyn.this), async and
- * generator creation (which snapshot it), dynamic and engine operations,
+ * generator creation (which snapshot it), checked-value operations,
  * diagnostics-channel stores, and anything outside the admitted kinds; then
  * every function that can reach one through a direct call, constructor or
  * virtual dispatch (a backward reachability fixpoint, so recursion such as

@@ -51,7 +51,6 @@ export function everyTypeChild(node: IrType, visit: (node: IrType) => boolean): 
     case "record":
     case "union":
     case "dyn":
-    case "jsval":
     case "caught":
     case "undefinedT":
     case "nullT":
@@ -262,8 +261,6 @@ export function everyExprChild(
       return expr(node.obj) && expr(node.key);
     case "dynFrom":
       return expr(node.value);
-    case "dynFromJsval":
-      return expr(node.value);
     case "dynCall":
       return (
         expr(node.callee) &&
@@ -308,6 +305,8 @@ export function everyExprChild(
       return true;
     case "unionWrap":
       return expr(node.value);
+    case "unionRetype":
+      return expr(node.value);
     case "unionFuncEq":
       return expr(node.union) && expr(node.func);
     case "caughtTest":
@@ -335,14 +334,6 @@ export function everyExprChild(
     case "jsonStringify":
       return expr(node.value);
     case "dynCheck":
-      return expr(node.value);
-    case "jsMarshal":
-      return expr(node.value);
-    case "jsOp":
-      return node.args.every((child) => expr(child));
-    case "jsExit":
-      return expr(node.value);
-    case "jsBridgePromise":
       return expr(node.value);
   }
   node satisfies never;
@@ -616,8 +607,6 @@ export function mapExprChildren(
       return { ...node, obj: expr(node.obj), key: expr(node.key) };
     case "dynFrom":
       return { ...node, value: expr(node.value) };
-    case "dynFromJsval":
-      return { ...node, value: expr(node.value) };
     case "dynCall": {
       const result: Extract<IrExpr, { kind: "dynCall" }> = { ...node, callee: expr(node.callee) };
       if (node.receiver !== undefined) result.receiver = expr(node.receiver);
@@ -668,6 +657,8 @@ export function mapExprChildren(
       return node;
     case "unionWrap":
       return { ...node, value: expr(node.value) };
+    case "unionRetype":
+      return { ...node, value: expr(node.value) };
     case "unionFuncEq":
       return { ...node, union: expr(node.union), func: expr(node.func) };
     case "caughtTest":
@@ -695,14 +686,6 @@ export function mapExprChildren(
     case "jsonStringify":
       return { ...node, value: expr(node.value) };
     case "dynCheck":
-      return { ...node, value: expr(node.value) };
-    case "jsMarshal":
-      return { ...node, value: expr(node.value) };
-    case "jsOp":
-      return { ...node, args: node.args.map((child) => expr(child)) };
-    case "jsExit":
-      return { ...node, value: expr(node.value) };
-    case "jsBridgePromise":
       return { ...node, value: expr(node.value) };
   }
   node satisfies never;

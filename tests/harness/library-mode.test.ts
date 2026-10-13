@@ -73,6 +73,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { compileLibrary } from "@scriptc/compiler";
 
+import { nmDefined } from "./nm-defined.js";
 const repoRoot = join(import.meta.dirname, "../..");
 const fixtureRoot = join(repoRoot, "tests/library-mode");
 const platformTest = process.env["SCRIPTC_PORTABLE_ONLY"] === "1" ? test.skip : test;
@@ -170,7 +171,7 @@ function nmSymbols(archive: string): { defined: Set<string>; undef: Set<string> 
     }
     return set;
   };
-  const defined = parse(execFileSync("nm", ["-gU", archive], { encoding: "utf8" }));
+  const defined = parse(nmDefined(archive));
   const undef = parse(execFileSync("nm", ["-u", archive], { encoding: "utf8" }));
   return { defined, undef };
 }
@@ -763,7 +764,7 @@ describe("K13: library-mode npm refusals (SC4020, static-or-refuse)", () => {
     ]);
     // The package resolves at runtime (Node would load it) but ships no
     // types: the library answer is the bar's, not SC1010's "nothing
-    // installed resolves it" nor SC2013's --dynamic teaching.
+
     expect(diags.map((d) => d.code)).toEqual(["SC4020"]);
     expect(diags[0]!.message).toContain("'untyped'");
     expect(diags[0]!.message).toContain("no own .d.ts");

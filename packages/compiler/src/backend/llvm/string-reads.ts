@@ -11,8 +11,13 @@
  * capacity word's low 32 bits on both i64 and i32 layouts.
  */
 
+import { exactIndexLines } from "./common.js";
+
 export const STRING_UTF16_LEN_DECL = "declare double @scr_str_utf16_len(ptr)";
 export const STRING_CHAR_CODE_AT_DECL = "declare double @scr_str_char_code_at(ptr, double)";
+/** Requests the integer-index helper below; an LLVM comment line among the
+ * declarations, so it never declares anything itself. */
+export const STRING_CHAR_CODE_AT_INT_MARKER = "; uses @sc_str_char_code_at_int";
 
 /** Load the proven-ASCII flag of `%s` into `%ascii`. */
 function asciiTest(): string[] {
@@ -45,7 +50,7 @@ export const STRING_READ_HELPERS: readonly StringReadHelper[] = [
       `  br i1 %ascii, label %fast, label %slow`,
       `fast:`,
       ...loadLength(sz),
-      `  %n = uitofp ${sz} %len to double`,
+      `  %n = sitofp ${sz} %len to double`,
       `  ret double %n`,
       `slow:`,
       `  %r = call double @scr_str_utf16_len(ptr %s)`,
@@ -55,28 +60,58 @@ export const STRING_READ_HELPERS: readonly StringReadHelper[] = [
   },
   {
     decl: STRING_CHAR_CODE_AT_DECL,
+    define: (sz, attrs) => {
+      let n = 0;
+      const exactIndex = exactIndexLines("%i", "%len", sz, () => `%ix${n++}`);
+      return [
+        `define internal double @sc_str_char_code_at(ptr %s, double %i) ${attrs} {`,
+        `entry:`,
+        ...asciiTest(),
+        `  br i1 %ascii, label %bounds, label %slow`,
+        `bounds:`,
+        ...loadLength(sz),
+        ...exactIndex.lines.map((line) => `  ${line}`),
+        `  br i1 ${exactIndex.ok}, label %read, label %slow`,
+        `read:`,
+        sz === "i64"
+          ? `  %k = add i64 ${exactIndex.wide}, 0`
+          : `  %k = trunc i64 ${exactIndex.wide} to ${sz}`,
+        `  %data = getelementptr inbounds %ScrStr, ptr %s, i32 1`,
+        `  %p = getelementptr inbounds i8, ptr %data, ${sz} %k`,
+        `  %byte = load i8, ptr %p`,
+        `  %unit = uitofp i8 %byte to double`,
+        `  ret double %unit`,
+        `slow:`,
+        `  %r = call double @scr_str_char_code_at(ptr %s, double %i)`,
+        `  ret double %r`,
+        `}`,
+      ];
+    },
+  },
+  {
+    // An index the compiler proved to be an exact integer (a counted-loop
+    // counter, an int32 slot or local) needs no double round trip: one
+    // unsigned compare rejects negative and out-of-range indices alike.
+    decl: STRING_CHAR_CODE_AT_INT_MARKER,
     define: (sz, attrs) => [
-      `define internal double @sc_str_char_code_at(ptr %s, double %i) ${attrs} {`,
+      `define internal double @sc_str_char_code_at_int(ptr %s, i64 %i) ${attrs} {`,
       `entry:`,
       ...asciiTest(),
       `  br i1 %ascii, label %bounds, label %slow`,
       `bounds:`,
       ...loadLength(sz),
-      `  %lenf = uitofp ${sz} %len to double`,
-      // NaN fails both ordered comparisons; -0 passes and truncates to 0.
-      `  %lo = fcmp oge double %i, 0.0`,
-      `  %hi = fcmp olt double %i, %lenf`,
-      `  %in = and i1 %lo, %hi`,
-      `  br i1 %in, label %read, label %slow`,
+      ...(sz === "i64" ? [] : [`  %len64 = zext ${sz} %len to i64`]),
+      `  %ok = icmp ult i64 %i, ${sz === "i64" ? "%len" : "%len64"}`,
+      `  br i1 %ok, label %read, label %slow`,
       `read:`,
-      `  %k = fptoui double %i to ${sz}`,
       `  %data = getelementptr inbounds %ScrStr, ptr %s, i32 1`,
-      `  %p = getelementptr inbounds i8, ptr %data, ${sz} %k`,
+      `  %p = getelementptr inbounds i8, ptr %data, i64 %i`,
       `  %byte = load i8, ptr %p`,
       `  %unit = uitofp i8 %byte to double`,
       `  ret double %unit`,
       `slow:`,
-      `  %r = call double @scr_str_char_code_at(ptr %s, double %i)`,
+      `  %d = sitofp i64 %i to double`,
+      `  %r = call double @scr_str_char_code_at(ptr %s, double %d)`,
       `  ret double %r`,
       `}`,
     ],

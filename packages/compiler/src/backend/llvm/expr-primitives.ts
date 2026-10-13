@@ -11,11 +11,24 @@ import { BYTES_ELEM_NUM, closureIdentityEqual, f64Lit } from "./common.js";
 import { emitStringInputs } from "./string-lifetimes.js";
 import { emitStringParts, numberPart, stringParts } from "./string-construction.js";
 import { emitBorrowedInputs } from "./borrowed-inputs.js";
-import { exactInteger, widenInteger, integerNumber } from "./integer-values.js";
-import { integerArithmeticRange } from "../../ir/integer-ranges.js";
+import {
+  exactInteger,
+  int32Number,
+  integerNumber,
+  narrowInteger,
+  widenInteger,
+} from "./integer-values.js";
+import {
+  bitwiseIdentityOperand,
+  integerArithmeticRange,
+  isBitwiseOp,
+  withinInt32,
+  withinUint32,
+} from "../../ir/integer-ranges.js";
 import { emitArrayValues } from "./expr-containers.js";
 import { emitCheckedRemainder, emitSignedIntegerRemainder } from "./integer-remainder.js";
 import { emitDenseArrayGet, emitDenseArrayState } from "./dense-array-access.js";
+import { emitWrappingSum, markWrappingOperands } from "./wrapping-sums.js";
 
 export function emitLiteralExpr(
   host: LlvmEmitterContext,
@@ -46,8 +59,12 @@ export function emitLiteralExpr(
         const integer = B.tmp();
         const number = B.tmp();
         B.line(`${integer} = load ${integerSlot.type}, ptr ${integerSlot.slot}`);
+        // A 64-bit induction value is a safe integer, so its sign bit is
+        // clear and the signed conversion is exact: one cvtsi2sd instead of
+        // x86-64's multi-instruction unsigned 64-bit conversion.
+        const signedConversion = integerSlot.signed === true || integerSlot.type === "i64";
         B.line(
-          `${number} = ${integerSlot.signed ? "sitofp" : "uitofp"} ${integerSlot.type} ${integer} to double`,
+          `${number} = ${signedConversion ? "sitofp" : "uitofp"} ${integerSlot.type} ${integer} to double`,
         );
         const uint32 = integerSlot.type === "i32" ? integer : B.tmp();
         if (integerSlot.type !== "i32")
@@ -63,6 +80,11 @@ export function emitLiteralExpr(
             range: integerSlot.range ?? { min: 0, max: Number.MAX_SAFE_INTEGER },
           },
         };
+      }
+      if (host.int32Locals.has(e.localId)) {
+        const bits = B.tmp();
+        B.line(`${bits} = load i32, ptr ${host.binding(e.localId).slot}`);
+        return host.int32LocalValue(e.localId, bits, e.type);
       }
       const b = host.binding(e.localId);
       if (b.kind === "global") host.checkGlobalTdz(e.localId);
@@ -89,8 +111,12 @@ export function emitLiteralExpr(
         B.line(`${uint32} = load i32, ptr ${integerView}`);
         return { name: t, type: e.type, uint32 };
       }
-      if (isRefCounted(e.type))
+      if (isRefCounted(e.type)) {
+        // An immortal Immutable constant: nothing to count.
+        if (b.kind === "global" && host.immortalGlobals.has(e.localId))
+          return host.markImmortal({ name: t, type: e.type });
         return host.own({ name: host.retainValue(t, e.type), type: e.type });
+      }
       return { name: t, type: e.type };
     }
     default: {
@@ -155,6 +181,9 @@ export function emitOperatorExpr(
         (e.op === "===" || e.op === "!==") &&
         e.left.type.kind !== "bool" &&
         host.llType(e.left.type) === "ptr";
+      // A sum that only feeds the conversion of a bitwise operator can be
+      // computed in 32 bits (emitWrappingSum).
+      if (isBitwiseOp(e.op)) markWrappingOperands(host, e.left, e.right);
       const operands = identity
         ? emitBorrowedInputs(host, [e.left, e.right])
         : [host.emitExpr(e.left), host.emitExpr(e.right)];
@@ -220,15 +249,28 @@ export function emitOperatorExpr(
         const li = exactInteger(host, l, e.left),
           ri = exactInteger(host, r, e.right);
         if (li && ri) {
+          const range = e.op === "%" ? null : integerArithmeticRange(e.op, li.range, ri.range);
+          if (range && withinInt32(range) && withinInt32(li.range) && withinInt32(ri.range)) {
+            // Int32 operands and result: 32-bit arithmetic that cannot
+            // overflow. The nsw flag survives where a truncated 64-bit
+            // result would lose it, so LLVM can widen loop counters such
+            // as `i = (i + 1) | 0` into 64-bit address arithmetic.
+            const result = B.tmp();
+            B.line(
+              `${result} = ${e.op === "+" ? "add" : e.op === "-" ? "sub" : "mul"} nsw i32 ${narrowInteger(host, li)}, ${narrowInteger(host, ri)}`,
+            );
+            return int32Number(host, result, range, e.type);
+          }
           const left = widenInteger(host, li),
             right = widenInteger(host, ri);
-          const range = e.op === "%" ? null : integerArithmeticRange(e.op, li.range, ri.range);
           if (range) {
             const result = B.tmp();
             B.line(
               `${result} = ${e.op === "+" ? "add" : e.op === "-" ? "sub" : "mul"} nsw i64 ${left}, ${right}`,
             );
-            return integerNumber(host, result, range, e.type);
+            const number = integerNumber(host, result, range, e.type);
+            const uint32 = emitWrappingSum(host, e, l, r, li, ri);
+            return uint32 === undefined ? number : { ...number, uint32 };
           }
           if (e.op === "%" && li.range.min >= 0 && ri.range.min > 0) {
             const result = B.tmp();
@@ -261,14 +303,36 @@ export function emitOperatorExpr(
           const checked = emitCheckedRemainder(host, l, r, li, ri);
           if (checked) return checked;
         }
-        if (arith[e.op] !== undefined) B.line(`${t} = ${arith[e.op]} double ${l.name}, ${r.name}`);
-        else B.line(`${t} = fcmp ${cmp[e.op]} double ${l.name}, ${r.name}`);
+        if (arith[e.op] !== undefined) {
+          B.line(`${t} = ${arith[e.op]} double ${l.name}, ${r.name}`);
+          const uint32 = emitWrappingSum(host, e, l, r, li, ri);
+          if (uint32 !== undefined) return { name: t, type: e.type, uint32 };
+        } else B.line(`${t} = fcmp ${cmp[e.op]} double ${l.name}, ${r.name}`);
       } else if (bit[e.op] !== undefined) {
         if (e.left.type.kind !== "f64" || e.right.type.kind !== "f64") {
           throw new LlvmUnsupportedError(
             `bin:${e.op}:${e.left.type.kind}:${e.right.type.kind}`,
             e.loc,
           );
+        }
+        // `x | 0` and the other identity forms over an operand the range
+        // analysis proves an int32 (a uint32 for `>>>`) return that operand:
+        // the conversion is the identity and ranges exclude -0, so the
+        // operand's double is the result bit for bit. Its integer views stay.
+        const identity = bitwiseIdentityOperand(e);
+        if (identity !== null) {
+          const operand = identity === "left" ? e.left : e.right;
+          const value = identity === "left" ? l : r;
+          const range = host.integerRanges.get(operand);
+          if (e.op === ">>>" ? withinUint32(range) : withinInt32(range)) {
+            const uint32 = host.emitToUint32(value.name, operand, value.uint32);
+            return {
+              name: value.name,
+              type: e.type,
+              uint32,
+              ...(value.integer ? { integer: value.integer } : {}),
+            };
+          }
         }
         const left = host.emitToUint32(l.name, e.left, l.uint32);
         let right = host.emitToUint32(r.name, e.right, r.uint32);
@@ -290,6 +354,7 @@ export function emitOperatorExpr(
       return { name: t, type: e.type };
     }
     case "unary": {
+      if (e.op === "~") markWrappingOperands(host, e.operand);
       const v = host.emitExpr(e.operand);
       const t = B.tmp();
       if (e.op === "-") B.line(`${t} = fneg double ${v.name}`);
@@ -308,6 +373,17 @@ export function emitOperatorExpr(
       // globals, capture boxes): read, write ±1, yield old (postfix) or
       // new (prefix).
       const b = host.binding(e.localId);
+      if (host.int32Locals.has(e.localId)) {
+        if (!host.int32LocalWrites.has(e))
+          throw new InternalCompilerError(`llvm emitter bug: unproven ++/-- of ${e.localId}`);
+        // The written value is proven in the local's range: no wrap.
+        const old = B.tmp();
+        const next = B.tmp();
+        B.line(`${old} = load i32, ptr ${b.slot}`);
+        B.line(`${next} = ${e.op === "+" ? "add" : "sub"} i32 ${old}, 1`);
+        B.line(`store i32 ${next}, ptr ${b.slot}`);
+        return host.int32LocalValue(e.localId, e.prefix ? next : old, e.type);
+      }
       if (b.kind === "boxed") {
         const box = host.loadBox(b.slot);
         const old = b.local!.tdz
@@ -374,6 +450,7 @@ export function emitOperatorExpr(
       }
       const b = host.binding(e.localId);
       const v = host.emitExpr(e.value);
+      if (host.storeInt32Local(e.localId, v, e.value)) return v;
       if (b.kind === "global") host.checkGlobalTdz(e.localId);
       if (b.kind === "boxed") {
         // box_set takes ownership of the passed reference, so hand it a

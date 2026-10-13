@@ -1506,7 +1506,6 @@ function bindableImplicitIr(t: IrType | null): t is IrType {
     t !== null &&
     t.kind !== "void" &&
     t.kind !== "dyn" &&
-    t.kind !== "jsval" &&
     t.kind !== "caught" &&
     t.kind !== "undefinedT" &&
     t.kind !== "nullT"

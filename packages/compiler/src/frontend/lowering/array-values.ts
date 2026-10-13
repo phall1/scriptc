@@ -6,7 +6,7 @@ import {
   type IrExpr,
   type IrStmt,
   type IrType,
-  JSVAL,
+  isIntegerBytesElem,
   type SrcLoc,
   UNDEFINED_T,
   typeEquals,
@@ -41,10 +41,25 @@ export function currentArrayIndexPresent(arrType: IrType, loc: SrcLoc): IrExpr {
 
 /** The value yielded by a JavaScript array read, independent of its slot's storage type. */
 export function arrayValueType(lowerer: Lowerer, elem: IrType): IrType {
-  if (elem.kind === "jsval" || elem.kind === "dyn") return elem;
+  if (elem.kind === "dyn") return elem;
   return elem.kind === "union"
     ? (lowerer.withUndefinedArmOf(elem) ?? elem)
     : lowerer.withUndefinedArm(elem);
+}
+
+/** ToNumber of one stabilized `number[]` element read: a hole, a present
+ * undefined and a missing index all read as NaN, which is
+ * ToNumber(undefined). Numeric updates use it in place of the optional
+ * element value. */
+export function arrayNumberRead(arr: IrExpr, index: IrExpr, loc: SrcLoc): IrExpr {
+  return {
+    kind: "arrIntrinsic",
+    method: "getNumber",
+    receiver: arr,
+    args: [index],
+    type: F64,
+    loc,
+  };
 }
 
 /** Read one stabilized receiver/index pair. Both a hole and present undefined yield undefined. */
@@ -58,11 +73,7 @@ export function arrayValueRead(
   const type = arrayValueType(lowerer, elem);
   const read: IrExpr = { kind: "arrayGet", arr, index, type: elem, loc };
   const missing: IrExpr =
-    type.kind === "jsval"
-      ? { kind: "jsOp", op: "undefLit", args: [], type: JSVAL, loc }
-      : type.kind === "dyn"
-        ? dynUndefinedExpr(loc)
-        : lowerer.wrappedUndefined(type, loc)!;
+    type.kind === "dyn" ? dynUndefinedExpr(loc) : lowerer.wrappedUndefined(type, loc)!;
   return {
     kind: "ternary",
     cond: {
@@ -106,13 +117,7 @@ export function unionArrayValueRead(
   if (
     joined.length > 1 &&
     (!unionContainerArmsOk(joined) ||
-      joined.some(
-        (arm) =>
-          arm.kind === "dyn" ||
-          arm.kind === "jsval" ||
-          arm.kind === "generator" ||
-          arm.kind === "caught",
-      ))
+      joined.some((arm) => arm.kind === "dyn" || arm.kind === "generator" || arm.kind === "caught"))
   )
     return null;
   const type: IrType =
@@ -289,6 +294,42 @@ export function lowerSafeBytesRead(
       type: F64,
       loc: at,
     };
+    if (isIntegerBytesElem(bytesT.elem)) {
+      // An integer element is never NaN, so the NaN-for-invalid read
+      // decides presence with one inline index check (no separate range
+      // and integrality tests).
+      const v = varRef("v.0", F64, at);
+      lowerer.liftedFns.push({
+        name,
+        params: [
+          { localId: "b.0", name: "b", type: bytesT },
+          { localId: "i.0", name: "i", type: F64 },
+        ],
+        returnType: resultT,
+        locals: [
+          { id: "b.0", name: "b", type: bytesT, mutable: false },
+          { id: "i.0", name: "i", type: F64, mutable: false },
+          { id: "v.0", name: "v", type: F64, mutable: false },
+        ],
+        body: [
+          { kind: "varDecl", localId: "v.0", init: { ...read, invalidNaN: true }, loc: at },
+          {
+            kind: "return",
+            value: {
+              kind: "ternary",
+              cond: { kind: "libCall", fn: "num.isNaN", args: [v], type: BOOL, loc: at },
+              then: lowerer.wrappedUndefined(resultT, at)!,
+              else_: lowerer.coerceToExpected(v, resultT),
+              type: resultT,
+              loc: at,
+            },
+            loc: at,
+          },
+        ],
+        loc: at,
+      });
+      return { kind: "call", callee: name, args: [receiver, index], type: resultT, loc };
+    }
     lowerer.liftedFns.push({
       name,
       params: [
@@ -378,6 +419,25 @@ export function tryLowerNumericIndexRead(
     type: F64,
     loc,
   };
+}
+
+/** Fuse our own typed-array read helper with strict equality against a
+ * plain number: `t[i] === b` is false when `t[i]` is undefined, and the
+ * NaN-for-invalid read is never equal to anything either, so the plain
+ * read answers exactly (`!==` is the negation). The other operand must
+ * lower to a double that never stands for undefined: a union keeps the
+ * box (undefined === undefined is true), and so does a NaN-coded value
+ * (nan-coded-reads.ts), which encodes undefined as NaN. The read keeps
+ * its arguments, so evaluation order is unchanged. */
+export function tryLowerBytesReadNumberEquality(
+  lowerer: Lowerer,
+  operand: IrExpr,
+  other: IrExpr,
+  otherNode: ts.Expression,
+): IrExpr | null {
+  if (other.type.kind !== "f64" || !isBytesReadHelperCall(lowerer, operand)) return null;
+  if (lowerer.nanCodedReads?.mayStandForUndefined(otherNode) === true) return null;
+  return tryLowerNumericIndexRead(lowerer, operand, operand.loc);
 }
 
 /** Fuse our own scalar-array read helper with an immediate ToBoolean, so a

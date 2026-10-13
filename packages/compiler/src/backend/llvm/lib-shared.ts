@@ -159,6 +159,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "os.homedir": "scr_os_homedir",
   "os.type": "scr_os_type",
   "os.totalmem": "scr_os_totalmem",
+  "os.availableParallelism": "scr_os_available_parallelism",
   "os.release": "scr_os_release",
   "os.userName": "scr_os_user_name",
   "os.userShell": "scr_os_user_shell",
@@ -934,14 +935,6 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "http.clientDestroyed": "scr_http_client_destroyed",
   "http2.streamUndefCall": "scr_http2_stream_undef_call",
   "http.agentNew": "scr_http_agent_new",
-  // The island surface (--dynamic): eval/import bridge catchably (the
-  // may-throw seed's pending check); importDyn answers an engine promise
-  // and never throws itself. insp.jsval throws on composite island
-  // values (engine JSON.stringify inside).
-  "island.eval": "scr_island_eval",
-  "island.import": "scr_jsval_import",
-  "island.importDyn": "scr_jsval_import_dyn",
-  "insp.jsval": "scr_insp_jsval",
   // timers/promises (+1 promises; the await parks a fiber, so the async
   // loop gate already runs) and diagnostics_channel (scr_dc.c): all
   // generic shapes; the throwing members ride the pending check.

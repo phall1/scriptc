@@ -1230,7 +1230,8 @@ static ScrStreamState *scr_stream_state_new(bool has_r, bool has_w,
 static ScrStream *scr_stream_alloc(const ScrVt *vt, const char *cls, bool has_r, bool has_w,
                                     double rhwm, double whwm, bool auto_destroy,
                                     bool emit_close, bool allow_half_open) {
-  ScrStream *s = scr_cyc_alloc(sizeof *s, &scr_stream_trace, &scr_stream_gcfree);
+  static const ScrCycType cyc_type = { &scr_stream_trace, &scr_stream_gcfree, SCR_CYC_KIND_STREAM };
+  ScrStream *s = scr_cyc_alloc(sizeof *s, &cyc_type);
   s->rc = 1;
   s->vt = vt;
   s->reg = NULL;
@@ -2328,7 +2329,8 @@ static ScrPromise *scr_sc_consume(ScrStream *s, int kind) {
     scr_promise_reject_pending(p);
     return p;
   }
-  ScrArr *chunks = scr_arr_new_ref(scr_bytes_retain_v, scr_bytes_release_v, NULL, 4);
+  static const ScrArrOps bytes_ops = { scr_bytes_retain_v, scr_bytes_release_v, NULL };
+  ScrArr *chunks = scr_arr_new_ops(&bytes_ops, 4);
   ScrStreamErrInv fin_inv = kind == SCR_SC_TEXT    ? &scr_sc_fin_text
                             : kind == SCR_SC_JSON  ? &scr_sc_fin_json
                                                    : &scr_sc_fin_buffer;

@@ -12,6 +12,7 @@ import { everyStmtList } from "../../ir/traverse.js";
 import { analyzeCallLifetimes, type CallLifetimes } from "./call-lifetimes.js";
 import type { LlValue, LlvmEmitterContext } from "./expr-context.js";
 import { ReferenceEffects } from "./reference-effects.js";
+import { SCR_ARR_FIELD, exactIndexLines } from "./common.js";
 
 export interface LocalArrayRead {
   type: IrType;
@@ -21,7 +22,16 @@ export interface LocalArrayRead {
   presentTag: number;
   missingTag: number;
   borrow?: boolean;
+  /** The array's elements are themselves the read's `T | undefined`
+   * nullable-pointer union, so a present slot may hold NULL (undefined):
+   * owned copies retain and release through the union's NULL-tolerant
+   * entry points. */
+  nullableElement?: boolean;
 }
+
+/** Whether a union is held as its reference arm's plain pointer
+ * (nullable-unions.ts). Without it, only reference elements are matched. */
+export type NullablePointerUnion = (unionId: string) => boolean;
 
 /** Kept as the array-analysis entry point; the same edge-preservation
  * proof also governs projections passed to borrowing consumers. */
@@ -38,6 +48,7 @@ interface ArrayReadShape {
   element: IrType;
   presentTag: number;
   missingTag: number;
+  nullableElement?: boolean;
 }
 
 /** f64 and bool elements copy their slot bits into the box payload. They
@@ -52,6 +63,7 @@ function isScalarElement(element: IrType): boolean {
 function inlineArrayRead(
   value: IrExpr,
   unions: ReadonlyMap<string, IrUnionDef>,
+  nullable?: NullablePointerUnion,
 ): LocalArrayRead | null {
   if (value.kind !== "ternary" || value.type.kind !== "union") return null;
   const { cond, then, else_: missing } = value;
@@ -61,15 +73,20 @@ function inlineArrayRead(
     cond.left.kind !== "arrayState" ||
     cond.right.kind !== "numLit" ||
     cond.right.value !== 1 ||
-    then.kind !== "unionWrap" ||
-    then.unionId !== value.type.unionId ||
-    then.value.kind !== "arrayGet" ||
     missing.kind !== "unionWrap" ||
     missing.unionId !== value.type.unionId ||
     missing.value.kind !== "unitLit" ||
     missing.value.unit !== "undefined"
   )
     return null;
+  // A `T | undefined` element is read as it is (arrayValueRead adds no wrap).
+  const elementRead =
+    then.kind === "unionWrap" && then.unionId === value.type.unionId
+      ? then.value
+      : then.kind === "arrayGet" && typeEquals(then.type, value.type)
+        ? then
+        : null;
+  if (elementRead?.kind !== "arrayGet") return null;
   const sameOperand = (left: IrExpr, right: IrExpr): boolean =>
     (left.kind === "varRef" && right.kind === "varRef" && left.localId === right.localId) ||
     (left.kind === "numLit" && right.kind === "numLit" && Object.is(left.value, right.value));
@@ -79,23 +96,40 @@ function inlineArrayRead(
     array.kind !== "varRef" ||
     array.type.kind !== "array" ||
     index.type.kind !== "f64" ||
-    !sameOperand(array, then.value.arr) ||
-    !sameOperand(index, then.value.index)
+    !sameOperand(array, elementRead.arr) ||
+    !sameOperand(index, elementRead.index)
   )
     return null;
-  const element = array.type.elem;
   const arms = unions.get(value.type.unionId)?.arms;
-  if (
-    (!isRefCounted(element) && !isScalarElement(element)) ||
-    element.kind === "union" ||
-    !arms ||
-    arms.length !== 2
-  )
+  if (!arms || arms.length !== 2) return null;
+  const missingTag = arms.findIndex((arm) => arm.kind === "undefinedT");
+  if (missingTag < 0 || missing.tag !== missingTag) return null;
+  if (then === elementRead) {
+    // The slots hold the union itself: only its plain-pointer form (NULL is
+    // undefined) shares the element encoding of the reference-arm reads.
+    const presentTag = 1 - missingTag;
+    const element = arms[presentTag]!;
+    if (
+      !typeEquals(array.type.elem, value.type) ||
+      !isRefCounted(element) ||
+      nullable?.(value.type.unionId) !== true
+    )
+      return null;
+    return {
+      type: value.type,
+      element,
+      presentTag,
+      missingTag,
+      array,
+      index,
+      nullableElement: true,
+    };
+  }
+  const element = array.type.elem;
+  if ((!isRefCounted(element) && !isScalarElement(element)) || element.kind === "union")
     return null;
   const presentTag = arms.findIndex((arm) => typeEquals(arm, element));
-  const missingTag = arms.findIndex((arm) => arm.kind === "undefinedT");
-  if (presentTag < 0 || missingTag < 0 || then.tag !== presentTag || missing.tag !== missingTag)
-    return null;
+  if (presentTag < 0 || then.kind !== "unionWrap" || then.tag !== presentTag) return null;
   return { type: value.type, element, presentTag, missingTag, array, index };
 }
 
@@ -103,6 +137,7 @@ function inlineArrayRead(
 function arrayReadShape(
   fn: IrFunction,
   unions: ReadonlyMap<string, IrUnionDef>,
+  nullable?: NullablePointerUnion,
 ): ArrayReadShape | null {
   if (
     fn.async ||
@@ -117,7 +152,7 @@ function arrayReadShape(
     return null;
   const ret = fn.body[0]!;
   if (ret.kind !== "return" || !ret.value) return null;
-  const read = inlineArrayRead(ret.value, unions);
+  const read = inlineArrayRead(ret.value, unions, nullable);
   if (
     !read ||
     !typeEquals(read.type, fn.returnType) ||
@@ -132,6 +167,7 @@ function arrayReadShape(
     element: read.element,
     presentTag: read.presentTag,
     missingTag: read.missingTag,
+    ...(read.nullableElement ? { nullableElement: true } : {}),
   };
 }
 
@@ -144,15 +180,16 @@ export class OptionalArrayReads {
   constructor(
     functions: ReadonlyMap<string, IrFunction>,
     private readonly unions: ReadonlyMap<string, IrUnionDef>,
+    private readonly nullable?: NullablePointerUnion,
   ) {
     for (const fn of functions.values()) {
-      const shape = arrayReadShape(fn, unions);
+      const shape = arrayReadShape(fn, unions, nullable);
       if (shape) this.shapes.set(fn.name, shape);
     }
   }
 
   get(call: IrExpr): LocalArrayRead | null {
-    if (call.kind === "ternary") return inlineArrayRead(call, this.unions);
+    if (call.kind === "ternary") return inlineArrayRead(call, this.unions, this.nullable);
     if (call.kind !== "call" || call.args.length !== 2) return null;
     const shape = this.shapes.get(call.callee);
     if (!shape || !typeEquals(shape.type, call.type)) return null;
@@ -205,6 +242,87 @@ function stableArrayOperand(
   }
 }
 
+interface StatementPosition {
+  list: readonly IrStmt[];
+  index: number;
+}
+
+/** The statement list and index of every statement of a body. Statements
+ * nested in expressions (sequence statements) and `for` initializers are
+ * absent: their declarations keep the frame-wide proof alone. */
+function statementPositions(body: readonly IrStmt[]): Map<IrStmt, StatementPosition> {
+  const positions = new Map<IrStmt, StatementPosition>();
+  const visit = (list: readonly IrStmt[]): void => {
+    list.forEach((stmt, index) => {
+      positions.set(stmt, { list, index });
+      switch (stmt.kind) {
+        case "if":
+          visit(stmt.then);
+          if (stmt.else_) visit(stmt.else_);
+          break;
+        case "while":
+        case "doWhile":
+        case "for":
+        case "forOf":
+        case "block":
+          visit(stmt.body);
+          break;
+        case "switch":
+          for (const c of stmt.cases) visit(c.body);
+          break;
+        case "tryCatch":
+          visit(stmt.tryBody);
+          if (stmt.catchBody) visit(stmt.catchBody);
+          if (stmt.finallyBody) visit(stmt.finallyBody);
+          break;
+      }
+    });
+  };
+  visit(body);
+  return positions;
+}
+
+function countReferences(body: readonly IrStmt[], localId: string): number {
+  let count = 0;
+  everyStmtList(body as IrStmt[], {
+    stmt: () => true,
+    expr: (e) => {
+      if (e.kind === "varRef" && e.localId === localId) count++;
+      return true;
+    },
+  });
+  return count;
+}
+
+/** A declaration whose whole live range preserves heap edges: every use
+ * of the local follows it in its own statement list, and neither its
+ * initializer nor any statement up to the last use can remove a reference
+ * (effects as in ReferenceEffects). The array operand, rooted at a stable
+ * parameter, then keeps the element alive until the local is dead, though
+ * other code of the function may mutate. */
+function preservingLiveRange(
+  decl: IrStmt & { kind: "varDecl" },
+  positions: ReadonlyMap<IrStmt, StatementPosition>,
+  body: readonly IrStmt[],
+  effects: ReferenceEffects,
+): boolean {
+  const position = positions.get(decl);
+  if (!position || !decl.init || !effects.preserves(decl.init)) return false;
+  const { list, index } = position;
+  let last = index,
+    seen = 0;
+  for (let i = index + 1; i < list.length; i++) {
+    const count = countReferences([list[i]!], decl.localId);
+    if (count === 0) continue;
+    last = i;
+    seen += count;
+  }
+  return (
+    seen === countReferences(body, decl.localId) &&
+    effects.preservesScope(list.slice(index + 1, last + 1) as IrStmt[])
+  );
+}
+
 export function findLocalArrayReads(
   fn: IrFunction,
   functions: ReadonlyMap<string, IrFunction>,
@@ -213,6 +331,7 @@ export function findLocalArrayReads(
   lifetimes: CallLifetimes = analyzeCallLifetimes(functions),
   reads = new OptionalArrayReads(functions, unions),
   loopBorrows: ReadonlySet<IrStmt> = new Set(),
+  effects?: ReferenceEffects,
 ): Map<string, LocalArrayRead> {
   const result = new Map<string, LocalArrayRead>();
   if (fn.async || fn.generator) return result;
@@ -223,6 +342,7 @@ export function findLocalArrayReads(
   const params = new Set(fn.params.map((p) => p.localId));
   const stableParams = stableArrayParameters(fn, lifetimes);
   const borrow = arrayPreservingFunctions.has(fn.name);
+  let positions: Map<IrStmt, StatementPosition> | undefined;
   everyStmtList(fn.body, {
     expr: () => true,
     stmt: (node) => {
@@ -232,11 +352,20 @@ export function findLocalArrayReads(
         return true;
       const read = reads.get(node.init);
       if (read && lifetimes.locals.get(fn.name)?.has(local.id)) {
+        const stable = stableArrayOperand(read.array, stableParams, locals);
         if (
-          (borrow && stableArrayOperand(read.array, stableParams, locals)) ||
+          (borrow && stable) ||
           (read.array.kind === "varRef" &&
             loopBorrows.has(node) &&
-            !locals.get(read.array.localId)?.boxed)
+            !locals.get(read.array.localId)?.boxed) ||
+          (stable &&
+            effects !== undefined &&
+            preservingLiveRange(
+              node,
+              (positions ??= statementPositions(fn.body)),
+              fn.body,
+              effects,
+            ))
         )
           read.borrow = true;
         result.set(local.id, read);
@@ -249,14 +378,16 @@ export function findLocalArrayReads(
 
 /** An immediate argument needs no heap union when its parameter only
  * projects the box. The payload owns a snapshot through all later arguments
- * and the call, unless the enclosing function preserves its parameter's
- * array edges. The latter proof includes every later argument and callee,
- * so a mutation anywhere keeps the independent payload owner. */
+ * and the call, unless the enclosing function, or the call itself with all
+ * of its arguments, preserves its parameter's array edges. That proof
+ * includes every later argument and callee, so a mutation anywhere keeps
+ * the independent payload owner. */
 export function findCallArrayReads(
   fn: IrFunction,
   reads: OptionalArrayReads,
   arrayPreservingFunctions: ReadonlySet<string>,
   lifetimes: CallLifetimes,
+  effects?: ReferenceEffects,
 ): Map<IrExpr, LocalArrayRead> {
   const result = new Map<IrExpr, LocalArrayRead>();
   if (fn.async || fn.generator) return result;
@@ -273,7 +404,11 @@ export function findCallArrayReads(
         if (!parameters.has(index)) return;
         const read = reads.get(arg);
         if (!read) return;
-        if (borrow && stableArrayOperand(read.array, stableParams, locals)) read.borrow = true;
+        if (
+          (borrow || effects?.preserves(node) === true) &&
+          stableArrayOperand(read.array, stableParams, locals)
+        )
+          read.borrow = true;
         result.set(arg, read);
       });
       return true;
@@ -338,34 +473,49 @@ function emitDenseReferenceArrayRead(
   // The dense path uses the existing ScrArr ABI. Sparse indices and
   // noncanonical numeric properties retain the runtime lookup semantics.
   const capPtr = B.tmp(),
-    cap = B.tmp(),
-    capNumber = B.tmp(),
-    nonnegative = B.tmp(),
-    belowCap = B.tmp(),
-    inRange = B.tmp();
+    cap = B.tmp();
   B.line(`${capPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 2`);
   host.markMemoryPointer(capPtr, "array:header");
   B.line(`${cap} = load ${host.sizeType}, ptr ${capPtr}${host.fieldAliasAttachment(capPtr)}`);
-  if (integerIndex) B.line(`${inRange} = icmp ult ${host.sizeType} ${integerIndex}, ${cap}`);
-  else {
-    B.line(`${capNumber} = uitofp ${host.sizeType} ${cap} to double`);
-    B.line(`${nonnegative} = fcmp oge double ${index.name}, 0.0`);
-    B.line(`${belowCap} = fcmp olt double ${index.name}, ${capNumber}`);
-    B.line(`${inRange} = and i1 ${nonnegative}, ${belowCap}`);
+  let offset: string, inRange: string;
+  if (integerIndex) {
+    offset = integerIndex;
+    inRange = B.tmp();
+    B.line(`${inRange} = icmp ult ${host.sizeType} ${integerIndex}, ${cap}`);
+  } else {
+    // Capacity bounds the dense slots; the length check below still decides presence.
+    const exact = exactIndexLines(index.name, cap, host.sizeType, () => B.tmp());
+    for (const line of exact.lines) B.line(line);
+    inRange = exact.ok;
+    offset = exact.wide;
+    if (host.sizeType !== "i64") {
+      offset = B.tmp();
+      B.line(`${offset} = trunc i64 ${exact.wide} to ${host.sizeType}`);
+    }
   }
   B.condBr(inRange, range, slow);
   B.startBlock(range);
-  const offset = integerIndex ?? B.tmp(),
-    roundTrip = B.tmp(),
-    integral = B.tmp();
-  if (integerIndex) B.br(dense);
-  else {
-    B.line(`${offset} = fptoui double ${index.name} to ${host.sizeType}`);
-    B.line(`${roundTrip} = uitofp ${host.sizeType} ${offset} to double`);
-    B.line(`${integral} = fcmp oeq double ${index.name}, ${roundTrip}`);
-    B.condBr(integral, dense, slow);
-  }
+  B.br(dense);
   B.startBlock(dense);
+  // Below the hole-free prefix bound every state is a present value.
+  const filledPtr = B.tmp(),
+    filled = B.tmp(),
+    belowFilled = B.tmp(),
+    lenLabel = B.newLabel("local.array.len");
+  B.line(
+    `${filledPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 ${SCR_ARR_FIELD.filled}`,
+  );
+  host.markMemoryPointer(filledPtr, "array:header");
+  B.line(`${filled} = load i32, ptr ${filledPtr}${host.fieldAliasAttachment(filledPtr)}`);
+  let filledSized = filled;
+  if (host.sizeType !== "i32") {
+    filledSized = B.tmp();
+    B.line(`${filledSized} = zext i32 ${filled} to ${host.sizeType}`);
+  }
+  B.line(`${belowFilled} = icmp ult ${host.sizeType} ${offset}, ${filledSized}`);
+  const valueLabel = B.newLabel("local.array.value");
+  B.condBr(belowFilled, valueLabel, lenLabel);
+  B.startBlock(lenLabel);
   const lenPtr = B.tmp(),
     len = B.tmp(),
     belowLen = B.tmp();
@@ -373,8 +523,7 @@ function emitDenseReferenceArrayRead(
   host.markMemoryPointer(lenPtr, "array:header");
   B.line(`${len} = load ${host.sizeType}, ptr ${lenPtr}${host.fieldAliasAttachment(lenPtr)}`);
   B.line(`${belowLen} = icmp ult ${host.sizeType} ${offset}, ${len}`);
-  const stateLabel = B.newLabel("local.array.state"),
-    valueLabel = B.newLabel("local.array.value");
+  const stateLabel = B.newLabel("local.array.state");
   B.condBr(belowLen, stateLabel, no);
   B.startBlock(stateLabel);
   const statesPtr = B.tmp(),
@@ -382,7 +531,9 @@ function emitDenseReferenceArrayRead(
     statePtr = B.tmp(),
     denseState = B.tmp(),
     densePresent = B.tmp();
-  B.line(`${statesPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 8`);
+  B.line(
+    `${statesPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 ${SCR_ARR_FIELD.present}`,
+  );
   host.markMemoryPointer(statesPtr, "array:header");
   B.line(`${states} = load ptr, ptr ${statesPtr}${host.fieldAliasAttachment(statesPtr)}`);
   B.line(`${statePtr} = getelementptr inbounds i8, ptr ${states}, ${host.sizeType} ${offset}`);
@@ -395,7 +546,9 @@ function emitDenseReferenceArrayRead(
     data = B.tmp(),
     valuePtr = B.tmp(),
     raw = B.tmp();
-  B.line(`${dataPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 7`);
+  B.line(
+    `${dataPtr} = getelementptr inbounds %ScrArr, ptr ${array.name}, i32 0, i32 ${SCR_ARR_FIELD.data}`,
+  );
   host.markMemoryPointer(dataPtr, "array:header");
   B.line(`${data} = load ptr, ptr ${dataPtr}${host.fieldAliasAttachment(dataPtr)}`);
   B.line(`${valuePtr} = getelementptr inbounds i64, ptr ${data}, ${host.sizeType} ${offset}`);
@@ -460,10 +613,10 @@ export function emitLocalArrayRead(
     const slow = B.newLabel("local.array.slow"),
       no = B.newLabel("local.array.missing"),
       join = B.newLabel("local.array.join");
+    // A slot of a nullable-union array may hold NULL even when present.
+    const owned = read.nullableElement ? read.type : read.element;
     const store = (value: string): void => {
-      B.line(
-        `store ptr ${read.borrow ? value : host.retainValue(value, read.element)}, ptr ${localSlot}`,
-      );
+      B.line(`store ptr ${read.borrow ? value : host.retainValue(value, owned)}, ptr ${localSlot}`);
     };
     if (inline)
       emitDenseReferenceArrayRead(host, array, index, integerIndex, store, no, slow, join, "ptr");
@@ -485,7 +638,7 @@ export function emitLocalArrayRead(
     );
     B.br(join);
     B.startBlock(join);
-    return read.borrow ? null : { slot: localSlot, type: read.element };
+    return read.borrow ? null : { slot: localSlot, type: owned };
   }
   const box = B.slot(),
     payload = B.slot(),

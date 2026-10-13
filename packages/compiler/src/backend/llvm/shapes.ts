@@ -26,8 +26,8 @@ import {
   mangleRecordStruct,
   mangleRecordTrace,
 } from "../mangle.js";
-import { emitObjectAlloc, emitObjectFree } from "./alloc.js";
-import { llvmCommentText } from "./common.js";
+import { cycTypeDescriptor, emitObjectAlloc, emitObjectFree } from "./alloc.js";
+import { SCR_ARR_FIELD, llvmCommentText } from "./common.js";
 import type { NullableUnions } from "./nullable-unions.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 
@@ -39,8 +39,8 @@ export interface ShapeHost {
   needOom(): void;
   /** The target C ABI's `size_t` / refcount integer type. */
   readonly sizeType: "i32" | "i64";
-  /** Byte offset from an object pointer back to ScrCycHdr.color. */
-  readonly cycleColorOffset: number;
+  /** Byte offset from an object pointer back to ScrCycHdr.buffered. */
+  readonly cycleBufferedOffset: number;
   readonly tracedShapes: Set<string>;
   readonly tracedUnions: Set<string>;
   /** Unions represented as a nullable arm pointer (nullable-unions.ts):
@@ -63,6 +63,11 @@ export interface ShapeHost {
    * keeps every retain/release a runtime call: inline RC is a
    * size-for-speed optimization of the `speed` posture only. */
   readonly rcHelpers: Set<string> | null;
+  /** The next collector statistics index for an emitted ScrCycType
+   * descriptor (cycTypeDescriptor), counting from FIRST_EMITTED_CYC_KIND
+   * in emission order.
+   * Absent: every descriptor gets 0, which keeps no statistics. */
+  nextCycKind?(): number;
 }
 
 /** Every emitted function/helper carries #0 = { sanitize_address } — see
@@ -192,7 +197,7 @@ export function releaseSym(host: ShapeHost, t: IrType): string {
 
 /** How a runtime family decides whether an object carries a ScrCycHdr:
  * never, always, or per object through the trace slots its C release
- * tests (`a->elem_trace`, `m->key_trace || m->val_trace`). */
+ * tests (`a->cyc`, `m->key_trace || m->val_trace`). */
 type RcCycle = "none" | "always" | "arr" | "map";
 
 interface InlineRcFamily {
@@ -313,9 +318,9 @@ export function inlineRcDecls(host: ShapeHost): string[] {
 function rcHeaderTest(cycle: "arr" | "map", yes: string, no: string): string[] {
   if (cycle === "arr") {
     return [
-      `  %tracep = getelementptr inbounds %ScrArr, ptr %o, i32 0, i32 6 ; elem_trace`,
-      `  %trace = load ptr, ptr %tracep`,
-      `  %headered = icmp ne ptr %trace, null`,
+      `  %cycp = getelementptr inbounds %ScrArr, ptr %o, i32 0, i32 ${SCR_ARR_FIELD.cyc} ; cyc`,
+      `  %cyc = load i8, ptr %cycp`,
+      `  %headered = icmp ne i8 %cyc, 0`,
       `  br i1 %headered, label %${yes}, label %${no}`,
     ];
   }
@@ -390,7 +395,23 @@ function releaseHelper(host: ShapeHost, family: string, row: InlineRcFamily): st
           `  br i1 %untraced, label %done, label %root`,
           `root:`,
         ]
-      : []),
+      : family === "box"
+        ? [
+            // scr_box_release buffers a surviving box only when its trace
+            // visits the payload (scr_box_traced): a closure (kind 4), or a
+            // class instance whose obj_trace is set.
+            `  %kp = getelementptr i8, ptr %o, ${S} ${S === "i64" ? 8 : 4} ; ScrBox.kind`,
+            `  %kind = load i32, ptr %kp`,
+            `  %func = icmp eq i32 %kind, 4`,
+            `  br i1 %func, label %root, label %objbox`,
+            `objbox:`,
+            `  %otp = getelementptr i8, ptr %o, ${S} ${S === "i64" ? 32 : 16} ; ScrBox.obj_trace`,
+            `  %ot = load ptr, ptr %otp`,
+            `  %untraced = icmp eq ptr %ot, null`,
+            `  br i1 %untraced, label %done, label %root`,
+            `root:`,
+          ]
+        : []),
     ...(cycle === "always" ? cycleRootLines(host, "done") : [`  br label %done`]),
     `done:`,
     `  ret void`,
@@ -545,7 +566,7 @@ function elemKindNum(elem: IrType): number {
 /** Array construction call text: ref elements
  * (records, unions, closures — and cycle-capable inner arrays, whose
  * SCR_ELEM_ARR spelling would hide them from the outer array's trace)
- * construct through scr_arr_new_ref with the element type's `_v` RC entry
+ * construct through scr_arr_new_ops with the element type's `_v` RC entry
  * points; every other element kind keeps the plain scr_arr_new call. */
 export function arrNewCall(host: ShapeHost, elem: IrType, capText: string): string {
   const useRef =
@@ -560,8 +581,7 @@ export function arrNewCall(host: ShapeHost, elem: IrType, capText: string): stri
     elem.kind === "classval" || // local class objects own traced capture boxes
     elem.kind === "promise" || // promise entries (Promise.all inputs): full REF story
     elem.kind === "child" || // spawned child handles: scr_child_* adapters, no trace
-    elem.kind === "netServer" || // server handles ([...set] drains): REF, no trace
-    elem.kind === "jsval" || // island handles (`any[]` under --dynamic): REF, no trace
+    elem.kind === "netServer" ||
     elem.kind === "dyn" || // native collection seeds/drains: traced REF
     elem.kind === "regex" || // RegExp values: scr_regex_* adapters, no trace (no refs inside)
     (elem.kind === "array" && traceAdapter(host, elem) !== null);
@@ -569,9 +589,21 @@ export function arrNewCall(host: ShapeHost, elem: IrType, capText: string): stri
     host.declare(`declare ptr @scr_arr_new(i32, ${host.sizeType})`);
     return `call ptr @scr_arr_new(i32 ${elemKindNum(elem)}, ${host.sizeType} ${capText})`;
   }
+  host.declare(`declare ptr @scr_arr_new_ops(ptr, ${host.sizeType})`);
+  return `call ptr @scr_arr_new_ops(ptr ${arrOps(host, elem)}, ${host.sizeType} ${capText})`;
+}
+
+/** The constant %ScrArrOps descriptor (retain, release, trace) of a REF
+ * element type, defined once per module and shared by all its arrays. */
+export function arrOps(host: ShapeHost, elem: IrType): string {
   const v = vAdapters(host, elem);
-  host.declare(`declare ptr @scr_arr_new_ref(ptr, ptr, ptr, ${host.sizeType})`);
-  return `call ptr @scr_arr_new_ref(ptr ${v.retain}, ptr ${v.release}, ptr ${traceArg(host, elem)}, ${host.sizeType} ${capText})`;
+  const trace = traceArg(host, elem);
+  const part = (sym: string): string => sym.replace(/^@/, "").replace(/[^A-Za-z0-9_.]/g, "_");
+  const name = `@sc_arrops.${part(v.retain)}.${part(v.release)}.${part(trace)}`;
+  host.declare(
+    `${name} = internal constant %ScrArrOps { ptr ${v.retain}, ptr ${v.release}, ptr ${trace} }`,
+  );
+  return name;
 }
 
 /* ── capture boxes ────────────────────────────────────────────────────── */
@@ -698,8 +730,14 @@ function rcMembers(shape: IrRecordShape): { index: number; type: IrType; name: s
 /** The NULL- and immortal-skipping retain body shared by every shape. A
  * retain never touches the cycle header: a buffered candidate that is
  * retained again stays a candidate (scr_cycle.c, markRoots). */
-export function retainBody(host: ShapeHost, fnName: string, comment = ""): string[] {
+export function retainBody(
+  host: ShapeHost,
+  fnName: string,
+  comment = "",
+  immortal = false,
+): string[] {
   const S = host.sizeType;
+  if (immortal) return immortalRcBody(fnName, "ptr", comment);
   return [
     `define internal ptr @${fnName}(ptr %o) ${FN_ATTRS} {${comment ? ` ; ${comment}` : ""}`,
     `entry:`,
@@ -715,6 +753,19 @@ export function retainBody(host: ShapeHost, fnName: string, comment = ""): strin
     `  br label %done`,
     `done:`,
     `  ret ptr %o`,
+    `}`,
+  ];
+}
+
+/** The retain or release entry point of a class whose every instance lives
+ * until the process exits (no collector header; see classes.ts
+ * programLifetimeClass and programLifetimeRc): nothing to count, so every
+ * inlined call site folds away. */
+function immortalRcBody(fnName: string, ret: "ptr" | "void", comment: string): string[] {
+  return [
+    `define internal ${ret} @${fnName}(ptr %o) ${FN_ATTRS} {${comment ? ` ; ${comment} (immortal)` : ""}`,
+    `entry:`,
+    ret === "ptr" ? `  ret ptr %o` : `  ret void`,
     `}`,
   ];
 }
@@ -739,6 +790,7 @@ export function releaseBody(
   freeBody: string[],
   comment = "",
   bounded = true,
+  immortal = false,
 ): string[] {
   const S = host.sizeType;
   if (bounded) host.declare(`declare void @scr_rc_destroy(ptr, ptr)`);
@@ -753,7 +805,7 @@ export function releaseBody(
           `}`,
         ]
       : []),
-    ...releaseFastPath(host, fnName, `${fnName}_slow`, traced, comment),
+    ...releaseFastPath(host, fnName, `${fnName}_slow`, traced, comment, immortal),
     `define internal void @${fnName}_slow(ptr %o) noinline ${FN_ATTRS} {${comment ? ` ; ${comment}` : ""}`,
     `entry:`,
     `  %isnull = icmp eq ptr %o, null`,
@@ -793,8 +845,10 @@ export function releaseFastPath(
   slow: string,
   traced: boolean,
   comment = "",
+  immortal = false,
 ): string[] {
   const S = host.sizeType;
+  if (immortal) return immortalRcBody(fnName, "void", comment);
   return [
     `define internal void @${fnName}(ptr %o) ${FN_ATTRS} {${comment ? ` ; ${comment} (fast path)` : ""}`,
     `entry:`,
@@ -826,15 +880,38 @@ export function releaseFastPath(
 
 /** The possible-cycle-root step of a release that left a headered object
  * alive: scr_cyc_on_release with its early return inlined. Read `buffered`
- * (the i16 four bytes after color; nonzero for a queued candidate or a
+ * (the i16 at obj-6; nonzero for a queued candidate or a
  * tenured object) and call the runtime only to enqueue a new candidate.
  * Every emitted release of a headered object shares this sequence
  * (scr_runtime.h asserts the offset); it ends by branching to `done`. */
+/** One traced field of an emitted trace function: load the slot and visit
+ * it unless it is null. Every collector visitor ignores null children, and
+ * most traced slots of a typical heap are empty (optional links, unset
+ * caches), so testing here saves an indirect call per empty slot on every
+ * collector walk. The sequence ends in the new block `tv<i>.next`. */
+export function traceFieldVisitLines(
+  struct: string,
+  index: number,
+  i: number,
+  comment: string,
+): string[] {
+  return [
+    `  %f${i} = getelementptr inbounds %${struct}, ptr %o, i64 0, i32 ${index}`,
+    `  %v${i} = load ptr, ptr %f${i}`,
+    `  %z${i} = icmp eq ptr %v${i}, null`,
+    `  br i1 %z${i}, label %tv${i}.next, label %tv${i}.visit`,
+    `tv${i}.visit:`,
+    `  call void %visit(ptr %v${i}, ptr %ctx) ; ${comment}`,
+    `  br label %tv${i}.next`,
+    `tv${i}.next:`,
+  ];
+}
+
 export function cycleRootLines(host: ShapeHost, done: string): string[] {
   const S = host.sizeType;
   host.declare(`declare void @scr_cyc_on_release(ptr)`);
   return [
-    `  %bufp = getelementptr i8, ptr %o, ${S} -${host.cycleColorOffset - 4}`,
+    `  %bufp = getelementptr i8, ptr %o, ${S} -${host.cycleBufferedOffset}`,
     `  %buf = load i16, ptr %bufp`,
     `  %queued = icmp ne i16 %buf, 0`,
     `  br i1 %queued, label %${done}, label %enqueue`,
@@ -852,7 +929,7 @@ export function cycleDeadLines(host: ShapeHost, next: string): string[] {
   const S = host.sizeType;
   host.declare(`declare void @scr_cyc_on_dead(ptr)`);
   return [
-    `  %dbufp = getelementptr i8, ptr %o, ${S} -${host.cycleColorOffset - 4}`,
+    `  %dbufp = getelementptr i8, ptr %o, ${S} -${host.cycleBufferedOffset}`,
     `  %dbuf = load i16, ptr %dbufp`,
     `  %dqueued = icmp ne i16 %dbuf, 0`,
     `  br i1 %dqueued, label %unbuffer, label %${next}`,
@@ -936,18 +1013,18 @@ export function emitRecordShapes(
       `define internal ptr @${mangleRecordNew(shape.id)}() ${FN_ATTRS} {`,
       `entry:`,
     ];
-    nw.push(
-      ...emitObjectAlloc(
-        host,
-        sizeOf,
-        traced
-          ? {
-              trace: `@${mangleRecordTrace(shape.id)}`,
-              free: `@${mangleRecordGcFree(shape.id)}`,
-            }
-          : null,
-      ),
-    );
+    const cycType = `@${mangleRecordTrace(shape.id)}.cyctype`;
+    if (traced)
+      defs.push(
+        cycTypeDescriptor(
+          cycType,
+          `@${mangleRecordTrace(shape.id)}`,
+          `@${mangleRecordGcFree(shape.id)}`,
+          host.nextCycKind?.() ?? 0,
+        ),
+        ``,
+      );
+    nw.push(...emitObjectAlloc(host, sizeOf, traced ? { type: cycType } : null));
     nw.push(`  store ${host.sizeType} 1, ptr %o`);
     if (shape.indexValue) {
       // The overflow map (string-keyed): value handling is type-directed
@@ -1006,11 +1083,7 @@ export function emitRecordShapes(
         `entry:`,
       ];
       tracedMembers.forEach((m, i) => {
-        tr.push(
-          `  %f${i} = getelementptr inbounds %${struct}, ptr %o, i64 0, i32 ${m.index}`,
-          `  %v${i} = load ptr, ptr %f${i}`,
-          `  call void %visit(ptr %v${i}, ptr %ctx) ; ${llvmCommentText(m.name)}`,
-        );
+        tr.push(...traceFieldVisitLines(struct, m.index, i, llvmCommentText(m.name)));
       });
       tr.push(`  ret void`, `}`, ``);
       defs.push(...tr);

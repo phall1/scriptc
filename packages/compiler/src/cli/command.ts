@@ -77,7 +77,6 @@ async function main(args: string[], host: CliHost): Promise<number> {
       fail(`unknown cache command "${inputArg ?? ""}" (supported: warm)\n\n${USAGE}`);
     if (
       values.lib ||
-      values.dynamic ||
       values.backend !== undefined ||
       values.emit !== undefined ||
       values.print !== undefined ||
@@ -86,6 +85,7 @@ async function main(args: string[], host: CliHost): Promise<number> {
       values.profile !== undefined ||
       values.strip ||
       values["windows-subsystem"] !== undefined ||
+      values["detached-exit"] ||
       (values["npm-static"] ?? []).length > 0 ||
       values["provenance-sources"] ||
       externalTypeArgs.length > 0 ||
@@ -102,10 +102,10 @@ async function main(args: string[], host: CliHost): Promise<number> {
       fail(`unknown optimization "${optimization}" (supported: release, dev, speed)\n\n${USAGE}`);
     }
     const profileArgs = positionals.slice(2);
-    const knownProfiles = new Set<NativeCacheWarmProfile>(["runtime", "tls", "dynamic"]);
+    const knownProfiles = new Set<NativeCacheWarmProfile>(["runtime", "tls"]);
     for (const profile of profileArgs) {
       if (!knownProfiles.has(profile as NativeCacheWarmProfile)) {
-        fail(`unknown cache warm profile "${profile}" (supported: runtime, tls, dynamic)`);
+        fail(`unknown cache warm profile "${profile}" (supported: runtime, tls)`);
       }
     }
     let result;
@@ -142,7 +142,6 @@ async function main(args: string[], host: CliHost): Promise<number> {
       fail("scriptc build --lib takes no input positional: the profile names the entry module");
     }
     if (
-      values.dynamic ||
       values.backend !== undefined ||
       values.emit !== undefined ||
       values.print !== undefined ||
@@ -151,11 +150,12 @@ async function main(args: string[], host: CliHost): Promise<number> {
       values.strip ||
       values.ffi !== undefined ||
       values["windows-subsystem"] !== undefined ||
+      values["detached-exit"] ||
       (values["npm-static"] ?? []).length > 0 ||
       externalTypeArgs.length > 0
     ) {
       fail(
-        "scriptc build --lib takes no --dynamic/--backend/--emit/--print/--optimization/--strip/--windows-subsystem/--npm-static/--ffi/--external-types: the profile pins the emission and optimization, npm imports are judged automatically, outbound FFI belongs to executable builds, and external type mappings belong to coverage",
+        "scriptc build --lib takes no --backend/--emit/--print/--optimization/--strip/--windows-subsystem/--detached-exit/--npm-static/--ffi/--external-types: the profile pins the emission and optimization, npm imports are judged automatically, outbound FFI belongs to executable builds, and external type mappings belong to coverage",
       );
     }
     const profilePath = resolve(profileArg);
@@ -197,6 +197,9 @@ async function main(args: string[], host: CliHost): Promise<number> {
   }
   if (command === "coverage" && values.strip) {
     fail(`--strip is a build/run option\n\n${USAGE}`);
+  }
+  if (command === "coverage" && values["detached-exit"]) {
+    fail(`--detached-exit is a build/run option\n\n${USAGE}`);
   }
   if (
     values.print !== undefined &&
@@ -292,6 +295,7 @@ async function main(args: string[], host: CliHost): Promise<number> {
           sanitize: values.sanitize,
           ...(values.optimization === undefined ? {} : { optimization: values.optimization }),
           strip: values.strip,
+          detachedExit: values["detached-exit"],
           ...(windowsSubsystem === undefined ? {} : { windowsSubsystem }),
           ...(values.ffi === undefined ? {} : { ffi: values.ffi }),
         });
@@ -333,7 +337,6 @@ async function main(args: string[], host: CliHost): Promise<number> {
 
   if (command === "coverage") {
     const { coverage, sourceTexts } = await host.analyze(input, {
-      dynamic: values.dynamic,
       ...(npmStatic !== undefined ? { npmStatic } : {}),
       ...(ffiProfilePath !== undefined ? { ffiProfilePath } : {}),
       ...(Object.keys(externalTypes).length > 0 ? { externalTypes } : {}),
@@ -375,11 +378,11 @@ async function main(args: string[], host: CliHost): Promise<number> {
       outputKind: output.outputKind,
       emitIr: output.emitIr,
       sanitize: values.sanitize,
-      dynamic: values.dynamic,
       ...(backend !== undefined ? { backend } : {}),
       ...(optimization !== undefined ? { optimization } : {}),
       ...(values.strip ? { strip: true } : {}),
       ...(windowsSubsystem !== undefined ? { windowsSubsystem } : {}),
+      ...(values["detached-exit"] ? { detachedExit: true } : {}),
       ...(npmStatic !== undefined ? { npmStatic } : {}),
       ...(ffiProfilePath !== undefined ? { ffiProfilePath } : {}),
       ...(printNativeLinkInfo ? { nativeLinkInfo: true } : {}),

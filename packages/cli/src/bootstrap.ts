@@ -122,10 +122,10 @@ async function tryFastPath(): Promise<number | null> {
     outPath,
     emitIr: values["emit-ir"],
     sanitize: values.sanitize,
-    dynamic: values.dynamic,
     backend: "llvm",
     ...(optimization === "dev" || optimization === "speed" ? { optimization } : {}),
     ...(values.strip ? { strip: true as const } : {}),
+    ...(values["detached-exit"] ? { detachedExit: true as const } : {}),
     npmStatic,
     ffiProfile: ffiPath === null ? null : { path: ffiPath, bytes: ffiBytes! },
     target: `${process.env["SCRIPTC_TARGET"] ?? "native"}:${buildPlatform}:${process.arch}:${
@@ -183,6 +183,7 @@ async function coverageFastPath(
     (failOn !== undefined && failOn !== "blockers" && failOn !== "divergences") ||
     values.emit !== undefined ||
     values.strip ||
+    values["detached-exit"] ||
     values.lib ||
     values.profile !== undefined ||
     values.ffi !== undefined ||
@@ -201,9 +202,7 @@ async function coverageFastPath(
   } catch {
     return null;
   }
-  const hit = await startup
-    .readCoverageVerdict(resolve(inputArg), { dynamic: values.dynamic })
-    .catch(() => null);
+  const hit = await startup.readCoverageVerdict(resolve(inputArg), {}).catch(() => null);
   if (hit === null) return null;
   const { coverage, sourceTexts } = hit;
   if (print === "diagnostics") {

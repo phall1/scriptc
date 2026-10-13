@@ -1,5 +1,6 @@
 import { typedRefConstructor } from "./shapes.js";
-import { BYTES_ELEM_NUM, f64Lit } from "./common.js";
+import { bindLiveArrayOps } from "./expr-stream-bridges.js";
+import { BYTES_ELEM_NUM, SCR_ARR_FIELD, f64Lit } from "./common.js";
 import { emitUnionPeek, emitUnionTag } from "./union-repr.js";
 import { InternalCompilerError } from "../../errors.js";
 /* ScrDyn helpers for the LLVM backend: per-type match predicates
@@ -41,6 +42,7 @@ import {
 } from "./shapes.js";
 import { LlvmUnsupportedError } from "./unsupported.js";
 import type { WalkerHost } from "./walkers.js";
+import type { LlStreamTypedRefAdapter } from "./expr-context.js";
 
 /** ScrDynKind values (scr_runtime.h). */
 /** ScrDynHandleTag numeric values (scr_runtime.h's enum order). */
@@ -68,7 +70,6 @@ export const DYN_KIND = {
   FUNC: 8,
   HANDLE: 9,
   PROMISE: 10,
-  JSVAL: 11 /* SCR_DYN_JSVAL — island values held by reference */,
   TYPED_REF: 12 /* SCR_DYN_TYPED_REF — static Web-stream transit capsule */,
   PROXY: 13,
   BIGINT: 14,
@@ -79,11 +80,17 @@ export const DYN_KIND = {
  * unit instances (undefined-armed dynCheck targets build them). */
 export interface DynHost extends WalkerHost {
   unitInstanceRef(unionId: string, tag: number): string;
+  /** See LlEmitter.retypeGuardRef. */
+  retypeGuardRef(unionId: string): string;
   /** See ClassHost.virtualEntry. */
   virtualEntry?(implFn: string): string;
+  /** See ClassHost.programLifetime. */
+  readonly programLifetime?: ReadonlySet<string>;
   /** The immortal ABSENT field-slot state of an undefined-armed union. */
   absentInstanceRef(unionId: string): string;
-  liveDynRefAdapter(t: IrType): { snapshot: string; commit: string };
+  /** The shared adapter record: live array capsules read its `arrayOps`, so a
+   * narrower return type would hand the native compiler a copy without it. */
+  liveDynRefAdapter(t: IrType): LlStreamTypedRefAdapter;
   liveDynUnionRefAdapter(t: IrType & { kind: "union" }): string;
   dynPromiseAdapter(t: IrType): string;
   isErrorClass(className: string): boolean;
@@ -101,7 +108,6 @@ const FN_ATTRS = "#0";
 function elementStoresDynUndefined(elem: IrType, unions: DynHost["unionsById"]): boolean {
   return (
     elem.kind === "dyn" ||
-    elem.kind === "jsval" ||
     elem.kind === "undefinedT" ||
     undefinedArmTag(elem, unions) >= 0
   );
@@ -225,6 +231,7 @@ export class LlDyn {
         B.line(
           `%result = call ptr ${typedRefConstructor(this.host, type)}(ptr %value, ptr ${rc.retain}, ptr ${rc.release}, ptr ${this.host.cstr(typeId)}, ${this.S} ${Buffer.byteLength(typeId, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit})`,
         );
+        for (const line of bindLiveArrayOps(this.host, adapter, "%result")) B.line(line);
       } else {
         B.line(`%result = call ptr @${this.toDynHelper(type)}(${ty} %value)`);
       }
@@ -1207,14 +1214,9 @@ export class LlDyn {
               : [
                   { index: 1, type: host.sizeType, name: "length" },
                   { index: 2, type: host.sizeType, name: "capacity" },
-                  { index: 7, type: "ptr" as const, name: "data" },
-                  { index: 8, type: "ptr" as const, name: "presence" },
-                  { index: 9, type: "ptr" as const, name: "sparse slots" },
-                  { index: 10, type: host.sizeType, name: "sparse length" },
-                  { index: 11, type: host.sizeType, name: "sparse capacity" },
-                  { index: 12, type: "ptr" as const, name: "numeric properties" },
-                  { index: 13, type: host.sizeType, name: "property length" },
-                  { index: 14, type: host.sizeType, name: "property capacity" },
+                  { index: SCR_ARR_FIELD.data, type: "ptr" as const, name: "data" },
+                  { index: SCR_ARR_FIELD.present, type: "ptr" as const, name: "presence" },
+                  { index: SCR_ARR_FIELD.filled, type: "i32" as const, name: "filled" },
                 ];
           members.forEach((member) => {
             const cachedPtr = B.tmp();
@@ -1235,6 +1237,12 @@ export class LlDyn {
             B.line(`store ${member.type} ${newValue}, ptr ${cachedPtr}`);
             B.line(`store ${member.type} ${oldValue}, ptr ${checkedPtr}`);
           });
+          if (t.kind !== "record") {
+            // Sparse slots and numeric properties live out of line; each
+            // array keeps its own match metadata.
+            host.declare("declare void @scr_arr_swap_indexed_ext(ptr, ptr)");
+            B.line(`call void @scr_arr_swap_indexed_ext(ptr ${cached}, ptr ${checked})`);
+          }
           B.line(`call void ${releaseSym(host, t)}(ptr ${checked})`);
           B.terminate(`ret ptr ${cached}`);
           B.startBlock(lCache);
@@ -1681,7 +1689,7 @@ export class LlDyn {
           host.declare(`declare void @scr_arr_set_len(ptr, double)`);
           const index = B.tmp();
           const length = B.tmp();
-          B.line(`${index} = uitofp ${this.S} ${i} to double`);
+          B.line(`${index} = sitofp ${this.S} ${i} to double`);
           B.line(`${length} = fadd double ${index}, 1.0`);
           B.line(`call void @scr_arr_set_len(ptr ${a}, double ${length})`);
           B.br(doneLabel);
@@ -1880,6 +1888,9 @@ export class LlDyn {
         B.line(`call void @scr_union_release(ptr ${checked})`);
         B.terminate(`ret ptr ${cached}`);
         B.startBlock(lCache);
+        // Later casts refresh this box in place (above), so from now on
+        // retypes of this union must not share a box (unionRetype).
+        B.line(`store i8 1, ptr ${host.retypeGuardRef(t.unionId)}`);
         B.line(
           `call void @scr_dyn_typed_ref_cache_cast(ptr %d, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr ${checked}, ptr ${rc.retain}, ptr ${rc.release}, i1 ${traceAdapter(host, t) !== null ? "true" : "false"})`,
         );
@@ -2651,7 +2662,6 @@ export class LlDyn {
         DYN_KIND.FUNC,
         DYN_KIND.HANDLE,
         DYN_KIND.PROMISE,
-        DYN_KIND.JSVAL,
         DYN_KIND.TYPED_REF,
         DYN_KIND.PROXY,
         DYN_KIND.BIGINT,
@@ -2666,14 +2676,6 @@ export class LlDyn {
       host.declare(`declare void @scr_dyn_proxy_unsupported(ptr)`);
       B.line(`call void @scr_dyn_proxy_unsupported(ptr ${host.cstr("string conversion")})`);
       B.br(done);
-      B.startBlock(labels.get(DYN_KIND.JSVAL)!);
-      {
-        // Island-held: the engine's own ToString (a bridged failure
-        // leaves the exception pending and appends nothing).
-        host.declare(`declare void @scr_dyn_isl_tostr_buf(ptr, ptr)`);
-        B.line(`call void @scr_dyn_isl_tostr_buf(ptr %b, ptr %d)`);
-        B.br(done);
-      }
       B.startBlock(labels.get(DYN_KIND.TYPED_REF)!);
       {
         host.declare(`declare ptr @scr_dyn_typed_ref_materialize(ptr)`);
@@ -3216,6 +3218,19 @@ export class LlDyn {
       const lNext = B.newLabel("kg.n");
       B.condBr(isTyped, lTyped, lNext);
       B.startBlock(lTyped);
+      // Live arrays answer `length` and own elements from the native array;
+      // rebuilding the snapshot per read would make index loops quadratic.
+      host.declare(`declare ptr @scr_dyn_typed_ref_key_get(ptr, ptr)`);
+      const fast = B.tmp();
+      const hit = B.tmp();
+      B.line(`${fast} = call ptr @scr_dyn_typed_ref_key_get(ptr %d, ptr %k)`);
+      B.line(`${hit} = icmp ne ptr ${fast}, null`);
+      const lFast = B.newLabel("kg.tr.fast");
+      const lView = B.newLabel("kg.tr.view");
+      B.condBr(hit, lFast, lView);
+      B.startBlock(lFast);
+      B.terminate(`ret ptr ${fast}`);
+      B.startBlock(lView);
       host.declare(`declare ptr @scr_dyn_typed_ref_materialize(ptr)`);
       host.declare(`declare void @scr_dyn_release_v(ptr)`);
       const materialized = B.tmp();
@@ -3226,9 +3241,7 @@ export class LlDyn {
       B.terminate(`ret ptr ${r}`);
       B.startBlock(lNext);
     }
-    // ISLAND-held receivers: o[k] reads the REAL engine property (getters
-    // included, throws bridged catchably) and the result wraps back
-    // scalar-normalized — the routed keyed read that retired the fence.
+
     {
       const isProxy = B.tmp();
       B.line(`${isProxy} = icmp eq i32 ${kd}, ${DYN_KIND.PROXY}`);
@@ -3242,19 +3255,7 @@ export class LlDyn {
       B.terminate(`ret ptr ${r}`);
       B.startBlock(lNext);
     }
-    {
-      const isJv = B.tmp();
-      B.line(`${isJv} = icmp eq i32 ${kd}, ${DYN_KIND.JSVAL}`);
-      const lJv = B.newLabel("kg.jv");
-      const lNext = B.newLabel("kg.n");
-      B.condBr(isJv, lJv, lNext);
-      B.startBlock(lJv);
-      host.declare(`declare ptr @scr_dyn_isl_key_get(ptr, ptr)`);
-      const r = B.tmp();
-      B.line(`${r} = call ptr @scr_dyn_isl_key_get(ptr %d, ptr %k)`);
-      B.terminate(`ret ptr ${r}`);
-      B.startBlock(lNext);
-    }
+
     // OBJ: the own member or the inherited builtin Error constructor.
     {
       const isObj = B.tmp();
@@ -3446,7 +3447,7 @@ export class LlDyn {
         const n = this.lenOf(B, "%d");
         const nd = B.tmp();
         const r = B.tmp();
-        B.line(`${nd} = uitofp ${host.sizeType} ${n} to double`);
+        B.line(`${nd} = sitofp ${host.sizeType} ${n} to double`);
         B.line(`${r} = call ptr @scr_dyn_new_num(double ${nd})`);
         B.terminate(`ret ptr ${r}`);
         B.startBlock(lStr);
@@ -3485,7 +3486,7 @@ export class LlDyn {
         const n2 = B.tmp();
         B.line(`${n2} = call double @scr_str_utf16_len(ptr ${s})`);
         const idxD = B.tmp();
-        B.line(`${idxD} = uitofp ${host.sizeType} ${idx} to double`);
+        B.line(`${idxD} = sitofp ${host.sizeType} ${idx} to double`);
         const inR2 = B.tmp();
         B.line(`${inR2} = fcmp olt double ${idxD}, ${n2}`);
         const lHit2 = B.newLabel("kg.ash");
@@ -3624,23 +3625,7 @@ export class LlDyn {
       B.terminate(`ret ptr ${out}`);
       B.startBlock(lNext);
     }
-    // Island-held sources keep the engine's iterator and IteratorClose
-    // behavior while returning checked values for the destructuring slots.
-    {
-      const isJv = B.tmp();
-      B.line(`${isJv} = icmp eq i32 ${kd}, ${DYN_KIND.JSVAL}`);
-      const lJv = B.newLabel("din.jv");
-      const lNotJv = B.newLabel("din.njv");
-      B.condBr(isJv, lJv, lNotJv);
-      B.startBlock(lJv);
-      host.declare(`declare ptr @scr_dyn_jsval_iter_n(ptr, double)`);
-      const count = B.tmp();
-      const out = B.tmp();
-      B.line(`${count} = uitofp ${host.sizeType} %n to double`);
-      B.line(`${out} = call ptr @scr_dyn_jsval_iter_n(ptr %d, double ${count})`);
-      B.terminate(`ret ptr ${out}`);
-      B.startBlock(lNotJv);
-    }
+
     const okA = B.tmp();
     const okS = B.tmp();
     const okB = B.tmp();
@@ -3774,7 +3759,7 @@ export class LlDyn {
         const index = B.tmp();
         const bd = B.tmp();
         const r = B.tmp();
-        B.line(`${index} = uitofp ${host.sizeType} ${i} to double`);
+        B.line(`${index} = sitofp ${host.sizeType} ${i} to double`);
         B.line(`${bd} = call double @scr_bytes_get(ptr ${bts}, double ${index})`);
         B.line(`${r} = call ptr @scr_dyn_new_num(double ${bd})`);
         B.line(`store ptr ${r}, ptr ${itemSlot}`);
@@ -3878,14 +3863,7 @@ export class LlDyn {
       B.line(`${r} = call ptr @${box}(ptr ${expr}, ptr null)`);
       return r;
     }
-    if (t.kind === "jsval") {
-      // An island value wraps by reference (scalar-normalizing) — the
-      // jsval-returning callback shape of the routed-dispatch lane.
-      this.host.declare(`declare ptr @scr_dyn_from_jsval(ptr)`);
-      const r = B.tmp();
-      B.line(`${r} = call ptr @scr_dyn_from_jsval(ptr ${expr})`);
-      return r;
-    }
+
     const r = B.tmp();
     B.line(`${r} = call ptr @${this.toDynHelper(t)}(${this.valTy(t)} ${expr})`);
     return r;
@@ -3981,26 +3959,6 @@ export class LlDyn {
       B.line(`${ad} = load ptr, ptr ${adSlot}`);
       if (p.kind === "dyn") {
         argNames.push(this.retainDyn(B, ad));
-      } else if (p.kind === "jsval") {
-        // A checker-'any' param: the dyn argument enters the island —
-        // wrapped cells unwrap by reference, data deep-copies, boxed
-        // functions cross through the host shim; a kind with no crossing
-        // throws the catchable TypeError (null + pending).
-        host.declare(`declare ptr @scr_jsval_from_dyn(ptr)`);
-        const a = B.tmp();
-        B.line(`${a} = call ptr @scr_jsval_from_dyn(ptr ${ad})`);
-        const isNull = B.tmp();
-        B.line(`${isNull} = icmp eq ptr ${a}, null`);
-        const lFail = B.newLabel("dfk.jf");
-        const lOk = B.newLabel("dfk.jo");
-        B.condBr(isNull, lFail, lOk);
-        B.startBlock(lFail);
-        t.params.slice(0, i).forEach((q, j) => {
-          if (isRefCounted(q)) B.line(`call void ${releaseSym(host, q)}(ptr ${argNames[j]})`);
-        });
-        B.terminate(`ret ptr null`);
-        B.startBlock(lOk);
-        argNames.push(a);
       } else {
         const pathSlot = B.slot();
         B.entryAllocas.push(`${pathSlot} = alloca %ScrDynPath`);

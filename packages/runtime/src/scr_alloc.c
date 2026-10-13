@@ -6,9 +6,10 @@
  * and the out-of-line entry points the LLVM backend calls for acyclic
  * records and class instances.
  *
- * Freed blocks are recycled within their class and never returned to the
- * operating system; the reservation itself costs address space only, and
- * pages are committed as the bump pointers first touch them. */
+ * Freed blocks are recycled within their class; the reservation itself
+ * costs address space only, and pages are committed as the bump pointers
+ * first touch them. Only an exiting worker thread returns pages, those
+ * holding nothing but free blocks (scr_sa_trim, Linux). */
 #include "scr_runtime.h"
 
 /* Defined in every build: the emitted fast paths read it (see the layout
@@ -26,9 +27,474 @@ ScrSaState scr_sa = {0};
 #if SCR_SMALL_ALLOC
 #include <sys/mman.h>
 
+/* Page policy. Slice pages are committed by first touch, which on 4 KiB
+ * pages is one fault (and page clear) per 4 KiB the bump pointers cross.
+ * Transparent huge pages fault 2 MiB at a time and shrink the TLB working
+ * set, but make the whole 2 MiB page around a bump pointer resident at once,
+ * so every class slice in use (per arena, in worker executables) would cost
+ * up to 2 MiB more than it holds. A slice therefore starts on small pages
+ * and moves the rest of its range to huge pages once it has carved
+ * SCR_SA_HUGE_AFTER bytes: only slices that already hold that much pay the
+ * partial last huge page. The reservation is huge-page aligned so the
+ * switch point and every slice start on a huge-page boundary. */
+#if defined(__linux__) && defined(MADV_HUGEPAGE) && defined(MADV_NOHUGEPAGE)
+#define SCR_SA_THP 1
+#define SCR_SA_HUGE_PAGE ((size_t)2 << 20)
+#define SCR_SA_HUGE_AFTER ((size_t)8 << 20)
+#endif
+
+#if defined(SCR_SA_THP) && defined(__GLIBC__)
+#include <stdio.h>
+#include <string.h>
+/* The system's THP mode: 'a' (always), 'm' (madvise), 'n' (never), or 0
+ * when the kernel has no THP setting to read. */
+static char scr_sa_thp_mode(void) {
+  FILE *f = fopen("/sys/kernel/mm/transparent_hugepage/enabled", "r");
+  if (!f) return 0;
+  char buf[96] = {0};
+  size_t n = fread(buf, 1, sizeof buf - 1, f);
+  fclose(f);
+  buf[n] = 0;
+  if (strstr(buf, "[always]")) return 'a';
+  if (strstr(buf, "[madvise]")) return 'm';
+  return strstr(buf, "[never]") ? 'n' : 0;
+}
+#endif
+
+/* Core dumps. The reservation is tens of GiB of address space, almost none
+ * of it ever touched. A core written to a file skips untouched pages, but a
+ * core piped to a handler (a kernel.core_pattern of "|...", such as apport
+ * or systemd-coredump) carries every page of a dumped mapping, untouched
+ * ones as zeros, and RLIMIT_CORE does not bound it: an aborting program
+ * would take seconds to minutes to die. The reservation is therefore mapped
+ * MADV_DONTDUMP, and whenever the slow path raises a slice's bump limit,
+ * the slice up to that limit becomes dumpable again (scr_sa_dumpable), so a
+ * core still holds every carved block. Without pre-faulting, limits advance
+ * in bounded steps for this (SCR_SA_DUMP_STEP on small pages, one huge page
+ * past the switch point). The dumpable part ends on a grid that coarsens as
+ * the slice grows (scr_sa_dump_edge): its untouched tail is at most
+ * SCR_SA_DUMP_GRAIN or a quarter of what the slice has carved, and a slice
+ * makes a few madvise calls per doubling, not one per step (each takes the
+ * mmap lock for writing, which would wait for the pre-fault helper). Grid
+ * points are huge-page aligned: a mapping boundary inside a huge page would
+ * split it. */
+#if defined(__linux__) && defined(MADV_DONTDUMP)
+#define SCR_SA_DUMP 1
+#define SCR_SA_DUMP_STEP ((size_t)1 << 20)
+#define SCR_SA_DUMP_GRAIN ((size_t)2 << 20) /* a multiple of the page size */
+#endif
+
+/* Maps span bytes of address space for slices (huge-page aligned where the
+ * policy above applies), or NULL. */
+static void *scr_sa_map(size_t span) {
+  int flags = MAP_PRIVATE | MAP_ANON;
+#ifdef MAP_NORESERVE
+  flags |= MAP_NORESERVE;
+#endif
+#ifdef SCR_SA_THP
+  size_t pad = SCR_SA_HUGE_PAGE;
+#else
+  size_t pad = 0;
+#endif
+  char *p = mmap(NULL, span + pad, PROT_READ | PROT_WRITE, flags, -1, 0);
+  if (p == MAP_FAILED) return NULL;
+#ifdef SCR_SA_THP
+  char *a = (char *)(((uintptr_t)p + pad - 1) & ~(uintptr_t)(pad - 1));
+  if (a > p) (void)munmap(p, (size_t)(a - p));
+  (void)munmap(a + span, (size_t)(p + pad - a)); /* a < p + pad */
+  p = a;
+  (void)madvise(p, span, MADV_NOHUGEPAGE);
+#endif
+#ifdef SCR_SA_DUMP
+  (void)madvise(p, span, MADV_DONTDUMP);
+#endif
+  return p;
+}
+
+#ifdef SCR_SA_DUMP
+/* The end of the dumpable part of the class slice [start, end) whose
+ * limit is p: p rounded up to a multiple of SCR_SA_DUMP_GRAIN or of a
+ * quarter of the largest power of two at or below p - start, whichever is
+ * larger (see above). Monotonic in p. */
+static char *scr_sa_dump_edge(char *start, char *end, char *p) {
+  size_t off = (size_t)(p - start), grain = SCR_SA_DUMP_GRAIN;
+  if (off) {
+    size_t quarter = ((size_t)1 << (63 - __builtin_clzll((unsigned long long)off))) >> 2;
+    if (quarter > grain) grain = quarter;
+  }
+  off = (off + grain - 1) & ~(grain - 1);
+  return off < (size_t)(end - start) ? start + off : end;
+}
+
+/* The slice [start, end) raised its bump limit from lim to next: makes
+ * the memory up to next dumpable (see above). */
+static void scr_sa_dumpable(char *start, char *end, char *lim, char *next) {
+  char *lo = scr_sa_dump_edge(start, end, lim), *hi = scr_sa_dump_edge(start, end, next);
+  if (hi > lo) (void)madvise(lo, (size_t)(hi - lo), MADV_DODUMP);
+}
+#endif
+
+/* Pre-faulting (Linux executables). First touch of a fresh slice page costs
+ * a fault and a page clear on the allocating thread. With pre-faulting the
+ * bump limits advance in steps, and each step asks a helper thread to fault
+ * in the memory just ahead of it (MADV_POPULATE_WRITE: the kernel commits
+ * zeroed pages as for a write, without storing anything, so it cannot race
+ * with the owner's carving). The owner still faults any page the helper has
+ * not reached; the fast paths are unchanged. Small-page prefixes advance in
+ * SCR_SA_PF_STEP chunks and fault one chunk ahead; huge-page ranges advance
+ * in half huge pages and fault the next huge page once the bump is in the
+ * second half of the current one, so a slice keeps at most about one step
+ * of untouched committed memory. Nothing is faulted ahead before a slice
+ * reaches SCR_SA_PF_START: a lightly used class commits nothing extra.
+ * SCR_SA_PREFAULT=0 turns it off. Library archives run on embedder threads
+ * and keep the plain policy. */
+#if defined(SCR_SA_THP) && !defined(SCR_LIB)
+#ifndef MADV_POPULATE_WRITE
+#define MADV_POPULATE_WRITE 23 /* Linux 5.14 */
+#endif
+#define SCR_SA_PREFAULT 1
+#define SCR_SA_PF_STEP ((size_t)256 << 10)
+#define SCR_SA_PF_START ((size_t)1 << 20)
+#define SCR_SA_PF_HUGE_STEP (SCR_SA_HUGE_PAGE / 2)
+#include <errno.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdatomic.h>
+
+typedef struct {
+  char *lo, *hi;
+} ScrSaPfRange;
+#define SCR_SA_PF_RING 64u
+static pthread_mutex_t scr_sa_pf_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t scr_sa_pf_cond = PTHREAD_COND_INITIALIZER;
+static ScrSaPfRange scr_sa_pf_ring[SCR_SA_PF_RING];
+static unsigned scr_sa_pf_head, scr_sa_pf_tail; /* under the lock */
+static bool scr_sa_pf_started, scr_sa_pf_waiting;
+/* 0 = not decided yet, 1 = on, -1 = off (environment, no thread, or a
+ * kernel without MADV_POPULATE_WRITE). */
+static _Atomic(int) scr_sa_pf_state;
+
+static void scr_sa_pf_populate(char *lo, char *hi) {
+  if (madvise(lo, (size_t)(hi - lo), MADV_POPULATE_WRITE) != 0 && errno == EINVAL)
+    atomic_store_explicit(&scr_sa_pf_state, -1, memory_order_relaxed);
+}
+
+/* The system allocator's heap (glibc): blocks above SCR_SA_MAX come from
+ * malloc, whose main arena grows by brk. Once the heap has grown by
+ * SCR_SA_PF_HEAP_MIN since the helper first looked, the helper gives malloc
+ * a larger top pad (SCR_SA_PF_TOP_PAD), so every extension runs that far
+ * ahead of use, and faults in each new extension as soon as it sees the
+ * break move. Smaller heaps keep glibc's defaults (a top pad also fixes
+ * glibc's otherwise dynamic mmap threshold), so a small program commits
+ * nothing extra. The helper checks after every request and then polls while
+ * the program keeps allocating (SCR_SA_PF_POLL_NS, up to SCR_SA_PF_POLLS
+ * times without growth before it sleeps until the next request), so an idle
+ * program does not wake it. Only the helper reads the break; a stale read
+ * only delays a fault-in, and a shrunk break (malloc trimming its top)
+ * restarts the watermarks there. Past the threshold the pad costs at most
+ * SCR_SA_PF_TOP_PAD of committed memory beyond what malloc would have;
+ * SCR_SA_PREFAULT_HEAP=0 keeps glibc's defaults and no polling.
+ *
+ * Where THP is in madvise mode none of this runs. The heap policy below
+ * moves the heap to huge pages at the same 32 MiB, so the owner takes one
+ * fault per 2 MiB and faulting ahead saves it little, while the helper's
+ * populates cost more: ranges it reaches before the owner advises them (and
+ * the partial huge pages at the ends of each extension) stay on small pages,
+ * 230-620 MB on large type checks; the owner's brk and madvise
+ * wait for the mmap lock a multi-megabyte populate holds; and the helper's
+ * top pad would replace the heap policy's larger one. */
+#if defined(__GLIBC__)
+#include <malloc.h>
+#include <time.h>
+#include <unistd.h>
+#define SCR_SA_PF_HEAP 1
+#define SCR_SA_PF_HEAP_MIN ((size_t)32 << 20)
+#define SCR_SA_PF_TOP_PAD ((size_t)16 << 20)
+#define SCR_SA_PF_POLL_NS 1000000L
+#define SCR_SA_PF_POLLS 64u
+static int scr_sa_pf_heap_mode;  /* 0 off, 1 on; decided before the helper starts */
+static uintptr_t scr_sa_pf_page; /* likewise */
+static char *scr_sa_pf_brk0, *scr_sa_pf_brk; /* helper only: first and last break seen */
+static bool scr_sa_pf_heap_big;              /* helper only: past SCR_SA_PF_HEAP_MIN */
+
+/* Faults in the heap's growth since the last check; true if it grew. */
+static bool scr_sa_pf_heap(void) {
+  char *cur = sbrk(0);
+  if (cur == (char *)-1) return false;
+  char *seen = scr_sa_pf_brk;
+  scr_sa_pf_brk = cur;
+  if (!seen || cur < scr_sa_pf_brk0) scr_sa_pf_brk0 = cur;
+  if (!seen || cur <= seen) return false;
+  if (!scr_sa_pf_heap_big) {
+    if ((size_t)(cur - scr_sa_pf_brk0) < SCR_SA_PF_HEAP_MIN) return true;
+    scr_sa_pf_heap_big = true;
+    (void)mallopt(M_TOP_PAD, (int)SCR_SA_PF_TOP_PAD);
+  }
+  scr_sa_pf_populate((char *)((uintptr_t)seen & ~(scr_sa_pf_page - 1)), cur);
+  return true;
+}
+#endif
+
+static void *scr_sa_pf_main(void *arg) {
+  (void)arg;
+#ifdef SCR_SA_PF_HEAP
+  unsigned idle = SCR_SA_PF_POLLS;
+#endif
+  pthread_mutex_lock(&scr_sa_pf_lock);
+  for (;;) {
+    while (scr_sa_pf_head == scr_sa_pf_tail) {
+      scr_sa_pf_waiting = true;
+#ifdef SCR_SA_PF_HEAP
+      if (scr_sa_pf_heap_mode && idle < SCR_SA_PF_POLLS) {
+        struct timespec t;
+        clock_gettime(CLOCK_MONOTONIC, &t);
+        t.tv_nsec += SCR_SA_PF_POLL_NS;
+        if (t.tv_nsec >= 1000000000L) {
+          t.tv_sec++;
+          t.tv_nsec -= 1000000000L;
+        }
+        int rc = pthread_cond_timedwait(&scr_sa_pf_cond, &scr_sa_pf_lock, &t);
+        scr_sa_pf_waiting = false;
+        if (rc != 0 && scr_sa_pf_head == scr_sa_pf_tail) {
+          pthread_mutex_unlock(&scr_sa_pf_lock);
+          idle = scr_sa_pf_heap() ? 0 : idle + 1;
+          pthread_mutex_lock(&scr_sa_pf_lock);
+        }
+        continue;
+      }
+#endif
+      pthread_cond_wait(&scr_sa_pf_cond, &scr_sa_pf_lock);
+      scr_sa_pf_waiting = false;
+    }
+    ScrSaPfRange r = scr_sa_pf_ring[scr_sa_pf_tail++ % SCR_SA_PF_RING];
+    pthread_mutex_unlock(&scr_sa_pf_lock);
+    scr_sa_pf_populate(r.lo, r.hi);
+#ifdef SCR_SA_PF_HEAP
+    if (scr_sa_pf_heap_mode) {
+      (void)scr_sa_pf_heap();
+      idle = 0;
+    }
+#endif
+    pthread_mutex_lock(&scr_sa_pf_lock);
+  }
+  return NULL;
+}
+
+static bool scr_sa_pf_on(void) {
+  int s = atomic_load_explicit(&scr_sa_pf_state, memory_order_relaxed);
+  if (s == 0) {
+    const char *v = getenv("SCR_SA_PREFAULT");
+    s = v && v[0] == '0' ? -1 : 1;
+    atomic_store_explicit(&scr_sa_pf_state, s, memory_order_relaxed);
+  }
+  return s > 0;
+}
+
+/* Asks the helper to fault in [lo, hi) (page aligned). Dropped when the
+ * ring is full: the owner then faults those pages itself. */
+static void scr_sa_prefault(char *lo, char *hi) {
+  if (hi <= lo || !scr_sa_pf_on()) return;
+  pthread_mutex_lock(&scr_sa_pf_lock);
+  if (!scr_sa_pf_started) {
+    scr_sa_pf_started = true;
+#ifdef SCR_SA_PF_HEAP
+    /* Nobody waits on the condition yet: give it the monotonic clock for
+     * the helper's polls (no polls without it). */
+    const char *v = getenv("SCR_SA_PREFAULT_HEAP");
+    long page = sysconf(_SC_PAGESIZE);
+    char thp = scr_sa_thp_mode();
+    pthread_condattr_t ca;
+    if (!(v && v[0] == '0') && thp != 'm' && page > 0 && pthread_condattr_init(&ca) == 0) {
+      if (pthread_condattr_setclock(&ca, CLOCK_MONOTONIC) == 0) {
+        pthread_cond_destroy(&scr_sa_pf_cond);
+        pthread_cond_init(&scr_sa_pf_cond, &ca);
+        scr_sa_pf_page = (uintptr_t)page;
+        scr_sa_pf_heap_mode = 1;
+      }
+      pthread_condattr_destroy(&ca);
+    }
+#endif
+    /* The helper takes no signals: they stay with the program's threads. */
+    pthread_attr_t attr;
+    pthread_t helper;
+    sigset_t all, old;
+    sigfillset(&all);
+    bool ok = pthread_attr_init(&attr) == 0;
+    if (ok) {
+      bool masked = pthread_sigmask(SIG_SETMASK, &all, &old) == 0;
+      ok = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0 &&
+           pthread_attr_setstacksize(&attr, (size_t)64 << 10) == 0 &&
+           pthread_create(&helper, &attr, scr_sa_pf_main, NULL) == 0;
+      if (masked) (void)pthread_sigmask(SIG_SETMASK, &old, NULL);
+      pthread_attr_destroy(&attr);
+    }
+    if (!ok) atomic_store_explicit(&scr_sa_pf_state, -1, memory_order_relaxed);
+  }
+  if (atomic_load_explicit(&scr_sa_pf_state, memory_order_relaxed) > 0 &&
+      scr_sa_pf_head - scr_sa_pf_tail < SCR_SA_PF_RING) {
+    scr_sa_pf_ring[scr_sa_pf_head++ % SCR_SA_PF_RING] = (ScrSaPfRange){lo, hi};
+    if (scr_sa_pf_waiting) pthread_cond_signal(&scr_sa_pf_cond);
+  }
+  pthread_mutex_unlock(&scr_sa_pf_lock);
+}
+#endif
+
+/* The next bump limit of a class slice [start, end) whose limit is lim
+ * (< end): its small-page prefix ends at SCR_SA_HUGE_AFTER, where the rest
+ * of the slice switches to huge pages. Limits advance in steps: the
+ * pre-fault steps (see above), or else the core-dump steps (SCR_SA_DUMP). */
+static char *scr_sa_extend(char *start, char *lim, char *end) {
+#ifdef SCR_SA_THP
+  char *sw = start + SCR_SA_HUGE_AFTER;
+  bool tiered = (size_t)(end - start) > SCR_SA_HUGE_AFTER;
+#ifdef SCR_SA_PREFAULT
+  if (scr_sa_pf_on()) {
+    if (!tiered) return end;
+    if (lim < sw) {
+      char *next = lim + SCR_SA_PF_STEP < sw ? lim + SCR_SA_PF_STEP : sw;
+      if (next == sw) {
+        /* The last small-page chunk: switch the rest now, so the first huge
+         * page can be faulted ahead like every later one. */
+        (void)madvise(sw, (size_t)(end - sw), MADV_HUGEPAGE);
+        scr_sa_prefault(sw, sw + SCR_SA_HUGE_PAGE < end ? sw + SCR_SA_HUGE_PAGE : end);
+      } else if ((size_t)(next - start) >= SCR_SA_PF_START) {
+        scr_sa_prefault(next, next + SCR_SA_PF_STEP < sw ? next + SCR_SA_PF_STEP : sw);
+      }
+      return next;
+    }
+    char *next = lim + SCR_SA_PF_HUGE_STEP < end ? lim + SCR_SA_PF_HUGE_STEP : end;
+    /* Entering the second half of a huge page: fault the next one. */
+    if (((uintptr_t)next & (SCR_SA_HUGE_PAGE - 1)) == 0 && next < end)
+      scr_sa_prefault(next, next + SCR_SA_HUGE_PAGE < end ? next + SCR_SA_HUGE_PAGE : end);
+    return next;
+  }
+#endif
+  if (tiered && lim < sw) {
+#ifdef SCR_SA_DUMP
+    if ((size_t)(sw - lim) > SCR_SA_DUMP_STEP) return lim + SCR_SA_DUMP_STEP;
+#endif
+    return sw;
+  }
+  if (tiered && lim == sw) (void)madvise(sw, (size_t)(end - sw), MADV_HUGEPAGE);
+#ifdef SCR_SA_DUMP
+  if (tiered && (size_t)(end - lim) > SCR_SA_HUGE_PAGE) return lim + SCR_SA_HUGE_PAGE;
+#endif
+#else
+  (void)start;
+#ifdef SCR_SA_DUMP
+  if ((size_t)(end - lim) > SCR_SA_DUMP_STEP) return lim + SCR_SA_DUMP_STEP;
+#else
+  (void)lim;
+#endif
+#endif
+  return end;
+}
+
+/* Blocks above SCR_SA_MAX (array storage, hash tables, link pages, large
+ * strings) come from glibc, whose heap and per-block mappings use small
+ * pages where THP is in madvise mode (the common distribution default);
+ * in large compiler-like programs that is most of the page faults and a
+ * share of the TLB misses. glibc only advises huge pages for its own
+ * memory when the glibc.malloc.hugetlb tunable is set in the environment,
+ * which a program cannot do for itself. So once the brk heap has grown
+ * past SCR_SA_HEAP_HUGE_AFTER (small programs keep small pages and their
+ * RSS), every large allocation advises the heap grown since the previous
+ * one, and the aligned interior of a block mapped outside the heap.
+ * glibc grows the heap by its top pad beyond each request; the default
+ * (128 KiB) is smaller than a huge page, so every 2 MiB range would be
+ * first touched while it still straddles the heap end, where it can only
+ * get small pages. The policy therefore raises the top pad. Setting it
+ * fixes glibc's otherwise adaptive mmap and trim thresholds, so they are
+ * set to the adaptive maxima the heap of such a program reaches anyway. */
+#if defined(SCR_SA_THP) && defined(__GLIBC__)
+#include <malloc.h>
+#include <stdatomic.h>
+#include <unistd.h>
+#define SCR_SA_HEAP_HUGE_AFTER ((uintptr_t)32 << 20)
+#define SCR_SA_HEAP_TOP_PAD (32 << 20)
+#define SCR_SA_HEAP_MMAP_THRESHOLD (32 << 20) /* glibc's adaptive maximum */
+#define SCR_SA_HEAP_TRIM_THRESHOLD (64 << 20) /* twice that, as glibc keeps it */
+/* 0 = undecided, 1 = following, 2 = off (THP not in madvise mode). */
+static _Atomic(int) scr_sa_heap_state;
+static _Atomic(uintptr_t) scr_sa_heap_lo; /* heap start seen at the first large block */
+static _Atomic(uintptr_t) scr_sa_heap_hi; /* end of the advised heap prefix */
+static _Atomic(uintptr_t) scr_sa_heap_page; /* the page size, read with the mode */
+/* The page size is stored before scr_sa_heap_lo is published (the CAS is a
+ * release), and every thread loads scr_sa_heap_lo, then scr_sa_heap_hi, with
+ * acquire before reading it; each scr_sa_heap_hi update is an RMW by a thread
+ * that already sees it, so any thread that wins the advice CAS sees a nonzero
+ * page size. A zero read still skips the advice rather than align to 0.
+ * These loads run only on blocks too large for the small allocator, next to
+ * a glibc malloc call: plain loads on x86-64, LDAR (or LDAPR) on arm64. */
+
+static void scr_sa_large_note(void *p, size_t n) {
+  int state = atomic_load_explicit(&scr_sa_heap_state, memory_order_relaxed);
+  if (state == 2 || !p) return;
+  uintptr_t top = (uintptr_t)sbrk(0);
+  if (state == 0) {
+    uintptr_t lo = atomic_load_explicit(&scr_sa_heap_lo, memory_order_acquire);
+    if (!lo) {
+      long page = sysconf(_SC_PAGESIZE);
+      if (page <= 0 || scr_sa_thp_mode() != 'm') {
+        atomic_store_explicit(&scr_sa_heap_state, 2, memory_order_relaxed);
+        return;
+      }
+      atomic_store_explicit(&scr_sa_heap_page, (uintptr_t)page, memory_order_relaxed);
+      lo = (top + (uintptr_t)page - 1) & ~((uintptr_t)page - 1);
+      uintptr_t none = 0;
+      if (!atomic_compare_exchange_strong(&scr_sa_heap_lo, &none, lo)) lo = none;
+    }
+    if (top < lo + SCR_SA_HEAP_HUGE_AFTER) return;
+    uintptr_t unset = 0; /* the whole heap seen so far gets the advice */
+    (void)atomic_compare_exchange_strong(&scr_sa_heap_hi, &unset, lo);
+    int undecided = 0;
+    if (atomic_compare_exchange_strong(&scr_sa_heap_state, &undecided, 1)) {
+      (void)mallopt(M_MMAP_THRESHOLD, SCR_SA_HEAP_MMAP_THRESHOLD);
+      (void)mallopt(M_TRIM_THRESHOLD, SCR_SA_HEAP_TRIM_THRESHOLD);
+      (void)mallopt(M_TOP_PAD, SCR_SA_HEAP_TOP_PAD);
+    }
+  }
+  /* The heap end moved since the last look: advise what it gained (pages
+   * already touched keep their small pages), or follow a trim down. */
+  uintptr_t hi = atomic_load_explicit(&scr_sa_heap_hi, memory_order_acquire);
+  if (!hi) return; /* another thread is switching the policy on */
+  if (top > hi) {
+    if (atomic_compare_exchange_strong(&scr_sa_heap_hi, &hi, top)) {
+      /* madvise wants a page-aligned start */
+      uintptr_t page = atomic_load_explicit(&scr_sa_heap_page, memory_order_relaxed);
+      if (page) {
+        uintptr_t from = hi & ~(page - 1);
+        (void)madvise((void *)from, top - from, MADV_HUGEPAGE);
+      }
+    }
+  } else if (top < hi) {
+    (void)atomic_compare_exchange_strong(&scr_sa_heap_hi, &hi, top);
+  }
+  /* A block glibc mapped by itself (or carved from a thread's heap). */
+  uintptr_t a = (uintptr_t)p, lo = atomic_load_explicit(&scr_sa_heap_lo, memory_order_relaxed);
+  if ((a < lo || a >= top) && n >= 2 * SCR_SA_HUGE_PAGE) {
+    uintptr_t s = (a + SCR_SA_HUGE_PAGE - 1) & ~(uintptr_t)(SCR_SA_HUGE_PAGE - 1);
+    uintptr_t e = (a + n) & ~(uintptr_t)(SCR_SA_HUGE_PAGE - 1);
+    if (e > s) (void)madvise((void *)s, e - s, MADV_HUGEPAGE);
+  }
+}
+#define SCR_SA_LARGE_NOTE(p, n) scr_sa_large_note((p), (n))
+#else
+#define SCR_SA_LARGE_NOTE(p, n) ((void)0)
+#endif
+
 #ifdef SCR_WORKERS
 #include <pthread.h>
 #include <stdatomic.h>
+#if defined(__linux__) && defined(MADV_DONTNEED)
+#define SCR_SA_TRIM 1
+#include <stdio.h>
+#include <time.h>
+#include <unistd.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
+#endif
 
 /* Per-thread arenas (contract in scr_runtime.h). The region is reserved
  * once; arena i spans [region + i * arena_span, + arena_span) and is split
@@ -55,15 +521,8 @@ static bool scr_sa_reserve_region(void) {
     for (unsigned shift = 30; shift >= 22; shift -= 2) {
       size_t arena = (size_t)SCR_SA_NCLASS << shift;
       size_t span = arena * SCR_SA_ARENAS;
-      int flags = MAP_PRIVATE | MAP_ANON;
-#ifdef MAP_NORESERVE
-      flags |= MAP_NORESERVE;
-#endif
-      void *p = mmap(NULL, span, PROT_READ | PROT_WRITE, flags, -1, 0);
-      if (p == MAP_FAILED) continue;
-#if defined(__linux__) && defined(MADV_NOHUGEPAGE)
-      (void)madvise(p, span, MADV_NOHUGEPAGE);
-#endif
+      void *p = scr_sa_map(span);
+      if (!p) continue;
       scr_sa_arena_span = arena;
       scr_sa_region_shift = shift;
       atomic_store_explicit(&scr_sa_region, (uintptr_t)p, memory_order_release);
@@ -74,6 +533,13 @@ static bool scr_sa_reserve_region(void) {
   pthread_mutex_unlock(&scr_sa_region_lock);
   return atomic_load_explicit(&scr_sa_region, memory_order_acquire) != 0;
 }
+
+#ifdef SCR_SA_TRIM
+/* The arena's carved bytes when the current thread claimed it (see
+ * scr_sa_trim). */
+static size_t scr_sa_claim_carved[SCR_SA_ARENAS];
+static size_t scr_sa_carved(void);
+#endif
 
 /* Moves every block other threads freed into this arena's free lists. */
 static void scr_sa_drain_remote(void) {
@@ -113,14 +579,287 @@ static bool scr_sa_reserve(void) {
         scr_sa.shift = scr_sa_region_shift;
       }
       scr_sa_drain_remote();
+#ifdef SCR_SA_TRIM
+      scr_sa_claim_carved[i] = scr_sa_carved();
+#endif
       return true;
     }
   }
 }
 
+#ifdef SCR_SA_TRIM
+/* Returning an exited thread's free memory (Linux). When a script thread
+ * exits, every page of its arena that holds only free blocks goes back to
+ * the system (MADV_DONTNEED, after which it reads as zero), so other
+ * threads can use that memory while the arena is parked. The free blocks on
+ * the kept pages are relinked in address order; the returned runs of pages
+ * become zeroed carve regions (`ScrSaHoles`), which the next thread to claim
+ * the arena carves before the slice's own frontier: the bump fast paths
+ * already rely on carved memory being zero. A thread that carved less than
+ * SCR_SA_TRIM_MIN, or whose arena holds less than that in free blocks,
+ * leaves the arena as it is. */
+#define SCR_SA_TRIM_MIN ((size_t)16 << 20)
+typedef struct {
+  char *lo, *hi;
+} ScrSaRun;
+typedef struct {
+  ScrSaRun *runs; /* zeroed regions left to carve, carved from the end */
+  size_t n, cap;
+  char *bump, *lim; /* the frontier while a region is carved (lim != NULL) */
+} ScrSaHoles;
+static ScrSaHoles scr_sa_holes[SCR_SA_ARENAS][SCR_SA_NCLASS];
+
+/* Bytes carved from the calling thread's slices: up to each frontier. */
+static size_t scr_sa_carved(void) {
+  size_t carved = 0;
+  for (unsigned c = 0; c < SCR_SA_NCLASS; c++) {
+    if (!scr_sa.lim[c]) continue;
+    const ScrSaHoles *h = &scr_sa_holes[scr_sa_arena][c];
+    char *top = h->lim ? h->bump : scr_sa.bump[c];
+    carved += (size_t)(top - ((char *)scr_sa.base + ((size_t)c << scr_sa.shift)));
+  }
+  return carved;
+}
+
+/* For the slow path of class c, whose bump room is below sz: moves the
+ * bump pointer to the next zeroed region, or back to the frontier. */
+static void scr_sa_next_hole(unsigned c, size_t sz) {
+  ScrSaHoles *h = &scr_sa_holes[scr_sa_arena][c];
+  if ((size_t)(scr_sa.lim[c] - scr_sa.bump[c]) >= sz || (!h->n && !h->lim)) return;
+  if (h->n) {
+    if (!h->lim) {
+      h->bump = scr_sa.bump[c];
+      h->lim = scr_sa.lim[c];
+    }
+    ScrSaRun r = h->runs[--h->n];
+    scr_sa.bump[c] = r.lo;
+    scr_sa.lim[c] = r.hi;
+  } else {
+    scr_sa.bump[c] = h->bump;
+    scr_sa.lim[c] = h->lim;
+    h->bump = h->lim = NULL;
+  }
+}
+
+static bool scr_sa_push_run(ScrSaHoles *h, char *lo, char *hi) {
+  if (h->n == h->cap) {
+    size_t cap = h->cap ? 2 * h->cap : 64;
+    ScrSaRun *runs = realloc(h->runs, cap * sizeof *runs);
+    if (!runs) return false;
+    h->runs = runs;
+    h->cap = cap;
+  }
+  h->runs[h->n++] = (ScrSaRun){lo, hi};
+  return true;
+}
+
+/* With SCR_SA_STATS=1: carved, free and returned bytes of the parking thread. */
+static _Thread_local size_t scr_sa_trim_stats[3];
+
+/* Returns the pages of class c that hold only free blocks (see above). */
+static void scr_sa_trim_class(unsigned c, size_t page) {
+  ScrSaHoles *h = &scr_sa_holes[scr_sa_arena][c];
+  size_t sz = (size_t)(c + 1) * SCR_SA_STEP;
+  char *start = (char *)scr_sa.base + ((size_t)c << scr_sa.shift);
+  /* Close the region being carved: its rest is still zero. */
+  if (h->lim) {
+    char *lo = scr_sa.bump[c], *hi = scr_sa.lim[c];
+    scr_sa.bump[c] = h->bump;
+    scr_sa.lim[c] = h->lim;
+    h->bump = h->lim = NULL;
+    if ((size_t)(hi - lo) >= sz && !scr_sa_push_run(h, lo, hi)) return;
+  }
+  char *top = scr_sa.bump[c];
+  size_t nblocks = (size_t)(top - start) / sz;
+  if (!nblocks) return;
+  size_t words = (nblocks + 63) / 64;
+  uint64_t *bits = mmap(NULL, words * 8, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (bits == MAP_FAILED) return;
+  size_t nfree = 0;
+  for (ScrSaBlock *b = scr_sa.free[c]; b; b = b->next) {
+    size_t k = (size_t)((char *)b - start) / sz;
+    bits[k / 64] |= (uint64_t)1 << (k % 64);
+    nfree++;
+  }
+  /* Uncarved zeroed regions count as free; they are rebuilt below. */
+  for (size_t r = 0; r < h->n; r++) {
+    for (char *q = h->runs[r].lo; q + sz <= h->runs[r].hi; q += sz) {
+      size_t k = (size_t)(q - start) / sz;
+      bits[k / 64] |= (uint64_t)1 << (k % 64);
+    }
+  }
+  scr_sa_trim_stats[0] += nblocks * sz;
+  scr_sa_trim_stats[1] += nfree * sz;
+#define SCR_SA_BIT(k) ((bits[(k) / 64] >> ((k) % 64)) & 1)
+  /* Whole pages below the frontier whose blocks are all free. */
+  uintptr_t first = ((uintptr_t)start + page - 1) & ~(uintptr_t)(page - 1);
+  uintptr_t last = (uintptr_t)top & ~(uintptr_t)(page - 1);
+  h->n = 0;
+  char *run = NULL;
+  for (uintptr_t pg = first; pg <= last; pg += page) {
+    bool empty = false;
+    if (pg < last) {
+      size_t k0 = (size_t)((char *)pg - start) / sz;
+      size_t k1 = (size_t)((char *)pg + page - 1 - start) / sz;
+      if (k1 >= nblocks) k1 = nblocks - 1;
+      empty = true;
+      for (size_t k = k0; k <= k1 && empty; k++) empty = SCR_SA_BIT(k);
+    }
+    if (empty && !run) run = (char *)pg;
+    if (!empty && run) {
+      (void)madvise(run, (size_t)((char *)pg - run), MADV_DONTNEED);
+      scr_sa_trim_stats[2] += (size_t)((char *)pg - run);
+      /* Blocks wholly inside the returned pages carve from it later. */
+      char *lo = start + ((size_t)(run - start) + sz - 1) / sz * sz;
+      char *hi = start + ((size_t)((char *)pg - start) / sz) * sz;
+      if (hi > lo) (void)scr_sa_push_run(h, lo, hi);
+      for (char *q = lo; q < hi; q += sz) {
+        size_t k = (size_t)(q - start) / sz;
+        bits[k / 64] &= ~((uint64_t)1 << (k % 64));
+      }
+      /* A block starting in the returned pages but ending on a kept one is
+       * dropped: relinking it would fault its page back in. */
+      if (hi < (char *)pg && hi >= run) {
+        size_t k = (size_t)(hi - start) / sz;
+        bits[k / 64] &= ~((uint64_t)1 << (k % 64));
+      }
+      run = NULL;
+    }
+  }
+#undef SCR_SA_BIT
+  /* The remaining free blocks, in address order. */
+  ScrSaBlock *head = NULL, **tail = &head;
+  for (size_t w = 0; w < words; w++) {
+    for (uint64_t m = bits[w]; m; m &= m - 1) {
+      size_t k = w * 64 + (size_t)__builtin_ctzll(m);
+      ScrSaBlock *b = (ScrSaBlock *)(start + k * sz);
+      *tail = b;
+      tail = &b->next;
+    }
+  }
+  *tail = NULL;
+  scr_sa.free[c] = head;
+  munmap(bits, words * 8);
+  /* The next owner carves the returned regions before the frontier. */
+  if (h->n) {
+    h->bump = scr_sa.bump[c];
+    h->lim = scr_sa.lim[c];
+    ScrSaRun r = h->runs[--h->n];
+    scr_sa.bump[c] = r.lo;
+    scr_sa.lim[c] = r.hi;
+  }
+}
+
+/* Whether the calling thread carved at least SCR_SA_TRIM_MIN since it
+ * claimed its arena: a short-lived thread reusing the arena's free blocks
+ * leaves them for the next one. */
+static bool scr_sa_trim_worth(void) {
+  return scr_sa_carved() - scr_sa_claim_carved[scr_sa_arena] >= SCR_SA_TRIM_MIN;
+}
+
+/* Returns the free pages of the calling thread's arena (see above). */
+static void scr_sa_trim(void) {
+  scr_sa_drain_remote();
+  size_t free_bytes = 0;
+  for (unsigned c = 0; c < SCR_SA_NCLASS; c++) {
+    size_t n = 0;
+    for (ScrSaBlock *b = scr_sa.free[c]; b && n * (c + 1) * SCR_SA_STEP < SCR_SA_TRIM_MIN;
+         b = b->next)
+      n++;
+    free_bytes += n * (c + 1) * SCR_SA_STEP;
+    if (free_bytes >= SCR_SA_TRIM_MIN) break;
+  }
+  const char *stats = getenv("SCR_SA_STATS");
+  const char *off = getenv("SCR_SA_TRIM");
+  bool trim = free_bytes >= SCR_SA_TRIM_MIN && !(off && off[0] == '0');
+  memset(scr_sa_trim_stats, 0, sizeof scr_sa_trim_stats);
+  if (!trim && stats && stats[0] == '1')
+    for (unsigned c = 0; c < SCR_SA_NCLASS; c++) {
+      if (!scr_sa.lim[c]) continue;
+      size_t sz = (size_t)(c + 1) * SCR_SA_STEP;
+      char *start = (char *)scr_sa.base + ((size_t)c << scr_sa.shift);
+      scr_sa_trim_stats[0] += (size_t)(scr_sa.bump[c] - start);
+      for (ScrSaBlock *b = scr_sa.free[c]; b; b = b->next) scr_sa_trim_stats[1] += sz;
+    }
+  if (trim) {
+    long page = sysconf(_SC_PAGESIZE);
+    for (unsigned c = 0; c < SCR_SA_NCLASS; c++)
+      if (scr_sa.lim[c]) scr_sa_trim_class(c, page > 0 ? (size_t)page : 4096);
+  }
+#if defined(__GLIBC__)
+  /* Large blocks: the system allocator's free pages too. */
+  if (trim) (void)malloc_trim(0);
+#endif
+  if (stats && stats[0] == '1')
+    fprintf(stderr, "scr_sa: park arena %d trim %d carved %zu MB free %zu MB returned %zu MB\n",
+            scr_sa_arena, (int)trim, scr_sa_trim_stats[0] >> 20, scr_sa_trim_stats[1] >> 20,
+            scr_sa_trim_stats[2] >> 20);
+}
+#endif
+
+#ifdef SCR_SA_TRIM
+/* Trims run on a detached helper thread: the parent of a worker joins it
+ * when it handles the worker's exit, which must not wait for the trim (at
+ * the end of a program every worker exits at once, and the process ends
+ * right after). The helper takes over the exiting thread's claim on the
+ * arena, so no thread claims it during the trim. */
+static _Atomic(unsigned) scr_sa_trimming; /* helpers running */
+
+static void scr_sa_release(unsigned i) {
+  scr_sa_parked[i] = scr_sa;
+  memset(&scr_sa, 0, sizeof scr_sa);
+  scr_sa_arena = -1;
+  scr_sa_refused = true;
+  atomic_fetch_and_explicit(&scr_sa_claimed, ~(1u << i), memory_order_release);
+}
+
+static void *scr_sa_trim_main(void *arg) {
+  unsigned i = (unsigned)(uintptr_t)arg;
+  scr_sa_arena = (int)i;
+  scr_sa = scr_sa_parked[i];
+  scr_sa_trim();
+  scr_sa_release(i);
+  atomic_fetch_sub_explicit(&scr_sa_trimming, 1, memory_order_release);
+  return NULL;
+}
+
+void scr_sa_wait_trims(void) {
+  while (atomic_load_explicit(&scr_sa_trimming, memory_order_acquire)) {
+    struct timespec pause = {0, 1000000};
+    nanosleep(&pause, NULL);
+  }
+}
+#else
+void scr_sa_wait_trims(void) {}
+#endif
+
 void scr_sa_thread_park(void) {
   if (scr_sa_arena < 0) return;
   unsigned i = (unsigned)scr_sa_arena;
+#ifdef SCR_SA_TRIM
+  if (scr_sa_trim_worth()) {
+    scr_sa_parked[i] = scr_sa;
+    atomic_fetch_add_explicit(&scr_sa_trimming, 1, memory_order_relaxed);
+    pthread_attr_t attr;
+    pthread_t helper;
+    bool started = pthread_attr_init(&attr) == 0;
+    if (started) {
+      started = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0 &&
+                pthread_create(&helper, &attr, scr_sa_trim_main, (void *)(uintptr_t)i) == 0;
+      pthread_attr_destroy(&attr);
+    }
+    if (started) {
+      /* Later frees on this thread take the foreign path into the arena's
+       * remote list; the helper releases the claim. */
+      memset(&scr_sa, 0, sizeof scr_sa);
+      scr_sa_arena = -1;
+      scr_sa_refused = true;
+      return;
+    }
+    atomic_fetch_sub_explicit(&scr_sa_trimming, 1, memory_order_relaxed);
+    scr_sa_trim();
+  }
+#endif
   scr_sa_parked[i] = scr_sa;
   /* Later frees on this thread (thread-exit destructors) take the foreign
    * path into the parked arena's remote list. */
@@ -161,17 +900,8 @@ static bool scr_sa_refused;
 static bool scr_sa_reserve(void) {
   for (unsigned shift = 30; shift >= 24; shift -= 2) {
     size_t span = (size_t)SCR_SA_NCLASS << shift;
-    int flags = MAP_PRIVATE | MAP_ANON;
-#ifdef MAP_NORESERVE
-    flags |= MAP_NORESERVE;
-#endif
-    void *p = mmap(NULL, span, PROT_READ | PROT_WRITE, flags, -1, 0);
-    if (p == MAP_FAILED) continue;
-#if defined(__linux__) && defined(MADV_NOHUGEPAGE)
-    /* Each class touches its own slice; transparent huge pages would make
-     * every touched slice a 2 MiB resident minimum. */
-    (void)madvise(p, span, MADV_NOHUGEPAGE);
-#endif
+    void *p = scr_sa_map(span);
+    if (!p) continue;
     scr_sa.base = (uintptr_t)p;
     scr_sa.shift = shift;
     scr_sa.span = span;
@@ -198,22 +928,35 @@ __attribute__((cold, noinline)) void *scr_sa_slow(size_t n, bool zero) {
       if (zero) memset(b, 0, n);
       return b;
     }
+#endif
+    /* Carve from the slice, opening it or raising its limit as needed;
+     * fresh pages are zero. */
     size_t sz = (size_t)(c + 1) * SCR_SA_STEP;
-    char *p = scr_sa.bump[c];
-    if (scr_sa.lim[c] && (size_t)(scr_sa.lim[c] - p) >= sz) {
+#ifdef SCR_SA_TRIM
+    if (scr_sa.lim[c]) scr_sa_next_hole(c, sz);
+#endif
+    char *start = (char *)scr_sa.base + ((size_t)c << scr_sa.shift);
+    char *end = start + ((size_t)1 << scr_sa.shift);
+    char *p = scr_sa.lim[c] ? scr_sa.bump[c] : start;
+    char *lim = scr_sa.lim[c] ? scr_sa.lim[c] : start;
+#ifdef SCR_SA_DUMP
+    char *from = lim;
+#endif
+    while ((size_t)(lim - p) < sz && lim < end) lim = scr_sa_extend(start, lim, end);
+#ifdef SCR_SA_DUMP
+    if (lim > from) scr_sa_dumpable(start, end, from, lim);
+#endif
+    scr_sa.lim[c] = lim;
+    if ((size_t)(lim - p) >= sz) {
       scr_sa.bump[c] = p + sz;
       return p;
     }
-#endif
-    if (!scr_sa.lim[c]) { /* open the class slice; fresh pages are zero */
-      char *p = (char *)scr_sa.base + ((size_t)c << scr_sa.shift);
-      scr_sa.lim[c] = p + ((size_t)1 << scr_sa.shift);
-      scr_sa.bump[c] = p + (size_t)(c + 1) * SCR_SA_STEP;
-      return p;
-    }
+    scr_sa.bump[c] = p;
   }
   /* Large or zero-sized, an exhausted slice, or no reservation. */
-  return zero ? calloc(1, n) : malloc(n);
+  void *q = zero ? calloc(1, n) : malloc(n);
+  if (n > SCR_SA_MAX) SCR_SA_LARGE_NOTE(q, n);
+  return q;
 }
 
 void *scr_mem_realloc(void *p, size_t n) {
@@ -226,7 +969,11 @@ void *scr_mem_realloc(void *p, size_t n) {
     /* Another arena's block: move it into this thread's allocator. */
   }
 #endif
-  else return realloc(p, n);
+  else {
+    void *q = realloc(p, n);
+    if (n > SCR_SA_MAX) SCR_SA_LARGE_NOTE(q, n);
+    return q;
+  }
   if (n && n <= have) return p; /* still fits its block */
   void *q = scr_mem_alloc(n ? n : 1);
   if (!q) return NULL;
@@ -238,6 +985,7 @@ void *scr_mem_realloc(void *p, size_t n) {
 void *scr_mem_realloc(void *p, size_t n) { return realloc(p, n); }
 #ifdef SCR_WORKERS
 void scr_sa_thread_park(void) {}
+void scr_sa_wait_trims(void) {}
 void scr_sa_free_foreign(void *p) { free(p); }
 #endif
 #endif

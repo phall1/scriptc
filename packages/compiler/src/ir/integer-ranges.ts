@@ -13,6 +13,10 @@ export type IntegerRanges = ReadonlyMap<IrExpr, IntegerRange | null>;
 const SIGNED: IntegerRange = { min: -2147483648, max: 2147483647 };
 const UNSIGNED: IntegerRange = { min: 0, max: 4294967295 };
 const EXACT_LIMIT = 2 ** 53;
+/** The most UTF-16 code units a runtime string holds: SCR_STR_MAX_CAP
+ * (scr_runtime.h) caps a string's UTF-8 bytes, and a UTF-16 length never
+ * exceeds the UTF-8 byte length. */
+const STRING_MAX_UNITS = 0x7fffffff;
 type Facts = Map<string, IntegerRange>;
 
 function union(left: IntegerRange, right: IntegerRange): IntegerRange {
@@ -62,6 +66,132 @@ export const INT32_RANGE: IntegerRange = SIGNED;
 export function withinInt32(range: IntegerRange | null | undefined): boolean {
   return !!range && range.min >= SIGNED.min && range.max <= SIGNED.max;
 }
+export function withinUint32(range: IntegerRange | null | undefined): boolean {
+  return !!range && range.min >= UNSIGNED.min && range.max <= UNSIGNED.max;
+}
+
+export type BitwiseOp = "&" | "|" | "^" | "<<" | ">>" | ">>>";
+export function isBitwiseOp(op: string): op is BitwiseOp {
+  return op === "&" || op === "|" || op === "^" || op === "<<" || op === ">>" || op === ">>>";
+}
+
+/** What an operand of a bitwise operator is known to be: a range of exact
+ * integers, or, for a numeric literal that is not one (2^53 + 2, 0.5, NaN,
+ * Infinity), its value. Unknown operands are null. */
+export type BitwiseOperand = IntegerRange | number | null;
+function operandView(e: IrExpr, range: IntegerRange | null): BitwiseOperand {
+  return range ?? (e.kind === "numLit" ? e.value : null);
+}
+
+/** The values ToInt32 can produce from the operand. A range inside int32 is
+ * its own image; [2^31, 2^32) shifts down by 2^32; anything wider or unknown
+ * wraps to the whole int32 range. */
+function int32View(operand: BitwiseOperand): IntegerRange {
+  if (typeof operand === "number") return { min: operand | 0, max: operand | 0 };
+  if (withinInt32(operand)) return operand!;
+  if (operand && operand.min > SIGNED.max && operand.max <= UNSIGNED.max)
+    return { min: operand.min - 2 ** 32, max: operand.max - 2 ** 32 };
+  return SIGNED;
+}
+/** The values ToUint32 can produce from the operand. */
+function uint32View(operand: BitwiseOperand): IntegerRange {
+  if (typeof operand === "number") return { min: operand >>> 0, max: operand >>> 0 };
+  if (withinUint32(operand)) return operand!;
+  if (operand && operand.min >= SIGNED.min && operand.max < 0)
+    return { min: operand.min + 2 ** 32, max: operand.max + 2 ** 32 };
+  return UNSIGNED;
+}
+/** The shift counts (`ToUint32(count) & 31`) the operand can produce. */
+function shiftCounts(operand: BitwiseOperand): IntegerRange {
+  const counts = uint32View(operand);
+  return counts.max - counts.min < 32 && (counts.min & 31) <= (counts.max & 31)
+    ? { min: counts.min & 31, max: counts.max & 31 }
+    : { min: 0, max: 31 };
+}
+/** The smallest 2^k - 1 at or above a non-negative int32 or uint32. */
+function bitCover(value: number): number {
+  let cover = 0;
+  while (cover < value) cover = cover * 2 + 1;
+  return cover;
+}
+
+/** The result range of a JS bitwise operator over its operands' ranges.
+ * Every result is an exact integer and never -0. */
+export function bitwiseRange(
+  op: BitwiseOp,
+  leftOperand: BitwiseOperand,
+  rightOperand: BitwiseOperand,
+): IntegerRange {
+  if (op === ">>>") {
+    const value = uint32View(leftOperand),
+      counts = shiftCounts(rightOperand);
+    return {
+      min: Math.floor(value.min / 2 ** counts.max),
+      max: Math.floor(value.max / 2 ** counts.min),
+    };
+  }
+  const left = int32View(leftOperand);
+  if (op === ">>" || op === "<<") {
+    const counts = shiftCounts(rightOperand);
+    if (op === ">>")
+      return {
+        min: Math.min(
+          Math.floor(left.min / 2 ** counts.min),
+          Math.floor(left.min / 2 ** counts.max),
+        ),
+        max: Math.max(
+          Math.floor(left.max / 2 ** counts.min),
+          Math.floor(left.max / 2 ** counts.max),
+        ),
+      };
+    const min = Math.min(left.min * 2 ** counts.min, left.min * 2 ** counts.max),
+      max = Math.max(left.max * 2 ** counts.min, left.max * 2 ** counts.max);
+    return withinInt32({ min, max }) ? { min, max } : SIGNED;
+  }
+  const right = int32View(rightOperand);
+  if (op === "&") {
+    // Clearing bits of a non-negative value cannot raise it; a negative
+    // operand keeps the result at or below the other operand's maximum.
+    if (left.min >= 0 && right.min >= 0) return { min: 0, max: Math.min(left.max, right.max) };
+    if (left.min >= 0) return { min: 0, max: left.max };
+    if (right.min >= 0) return { min: 0, max: right.max };
+    if (left.max < 0 && right.max < 0)
+      return { min: SIGNED.min, max: Math.min(left.max, right.max) };
+    return SIGNED;
+  }
+  if (left.min === 0 && left.max === 0) return right;
+  if (right.min === 0 && right.max === 0) return left;
+  if (left.min >= 0 && right.min >= 0) {
+    const max = bitCover(Math.max(left.max, right.max));
+    return op === "|" ? { min: Math.max(left.min, right.min), max } : { min: 0, max };
+  }
+  if (op === "|") {
+    // Setting bits of a negative int32 raises it toward -1.
+    if (left.max < 0 && right.max < 0) return { min: Math.max(left.min, right.min), max: -1 };
+    if (left.max < 0) return { min: left.min, max: -1 };
+    if (right.max < 0) return { min: right.min, max: -1 };
+  }
+  return SIGNED;
+}
+
+/** The operand a bitwise operator returns unchanged when that operand is an
+ * int32 (a uint32 for `>>>`): `x | 0`, `x ^ 0`, `x & -1`, `x << 0`, `x >> 0`
+ * and `x >>> 0`, with the literal on either side where the operator is
+ * commutative. Literals count by their converted value (`x | 2 ** 32`). */
+export function bitwiseIdentityOperand(e: IrExpr & { kind: "bin" }): "left" | "right" | null {
+  const neutral = (literal: IrExpr): boolean => {
+    if (literal.kind !== "numLit") return false;
+    if (e.op === "&") return (literal.value | 0) === -1;
+    if (e.op === "|" || e.op === "^") return (literal.value | 0) === 0;
+    return false;
+  };
+  if (e.op === "<<" || e.op === ">>" || e.op === ">>>")
+    return e.right.kind === "numLit" && ((e.right.value >>> 0) & 31) === 0 ? "left" : null;
+  if (e.op !== "&" && e.op !== "|" && e.op !== "^") return null;
+  if (neutral(e.right)) return "left";
+  if (neutral(e.left)) return "right";
+  return null;
+}
 
 /** Whole-program facts about storage outside the analyzed function, each
  * proven by the caller (int32-slots.ts): every value a field slot, a
@@ -72,16 +202,19 @@ export interface IntegerSlotFacts {
   field?: (className: string, field: string) => IntegerRange | null;
   call?: (callee: string) => IntegerRange | null;
   boxed?: (localId: string) => IntegerRange | null;
+  /** Locals and globals an Int32 contract covers (ir/contract-check.ts):
+   * every write anywhere is proven int32, so every read is one. */
+  locals?: (localId: string) => IntegerRange | null;
 }
 
 /** Structured local dataflow. Calls cannot write uncaptured local slots,
  * but argument expressions can; unknown evaluation forms invalidate all
  * syntactically written slots before their children are inspected. Loops
  * discard loop-carried facts and retain only invariant or induction facts,
- * except int32-closed locals: a local whose region-entry value is an int32
- * and whose every write inside the region is int32 by construction
- * (bitwise results, int32 literals and slots, other such locals) remains a
- * full int32 range across the region. Suspensions and captured bindings
+ * except closed locals: a local whose region-entry value is an int32 (a
+ * uint32) and whose every write inside the region is one by construction
+ * (bitwise results, `>>>` results for uint32, literals and slots in range,
+ * other such locals) remains a full int32 (uint32) range across the region. Suspensions and captured bindings
  * deliberately remain outside the proof. */
 export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {}): IntegerRanges {
   const ranges = new Map<IrExpr, IntegerRange | null>();
@@ -97,8 +230,10 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
   const loopLocals = new Map(fn.locals.filter((l) => !captures.has(l.id)).map((l) => [l.id, l]));
   // A captured binding has no local dataflow: only a proof that covers
   // every write of the shared box anywhere applies to its reads.
-  const boxedRange = (localId: string): IntegerRange | null =>
-    eligible.has(localId) ? null : (slots.boxed?.(localId) ?? null);
+  const boxedRange = (localId: string): IntegerRange | null => {
+    const boxed = eligible.has(localId) ? null : (slots.boxed?.(localId) ?? null);
+    return boxed ?? slots.locals?.(localId) ?? null;
+  };
   const slotRange = (e: IrExpr): IntegerRange | null =>
     e.type.kind !== "f64"
       ? null
@@ -145,69 +280,88 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
   }
   let functionWrites: Map<string, (IrExpr | null)[]> | null = null;
 
-  /** Locals that hold an int32 everywhere inside and after a region whose
-   * control flow this analysis does not follow. A candidate either enters
-   * with an int32 fact or is declared inside the region and written only
-   * there (definite assignment: every read follows one of those writes).
-   * The greatest fixpoint keeps candidates whose every write is int32 by
-   * construction given the other candidates. */
-  function closedLocals(nodes: (IrExpr | IrStmt)[], entry: Facts): Set<string> {
+  /** Locals that hold an int32 or a uint32 everywhere inside and after a
+   * region whose control flow this analysis does not follow, with that
+   * range. A candidate either enters with a fact inside the range or is
+   * declared inside the region and written only there (definite assignment:
+   * every read follows one of those writes). For each range, the greatest
+   * fixpoint keeps candidates whose every write lands in it by construction
+   * given the other candidates; the two closures are independent, so a local
+   * written both ways (`x | 0` and `x >>> 0`) closes under neither. */
+  function closedLocals(nodes: (IrExpr | IrStmt)[], entry: Facts): Map<string, IntegerRange> {
     const { values, declared } = regionWrites(nodes);
-    const closed = new Set<string>();
-    if (values.size === 0) return closed;
-    for (const [id, list] of values) {
-      if (withinInt32(entry.get(id))) closed.add(id);
-      else if (declared.has(id)) {
-        functionWrites ??= regionWrites(fn.body).values;
-        if (functionWrites.get(id)?.length === list.length) closed.add(id);
-      }
-    }
-    const int32 = (e: IrExpr): boolean => {
-      if (e.type.kind !== "f64") return false;
-      switch (e.kind) {
-        case "numLit":
-          return (
-            Number.isInteger(e.value) &&
-            withinInt32({ min: e.value, max: e.value }) &&
-            !Object.is(e.value, -0)
-          );
-        case "bin":
-          return e.op === "&" || e.op === "|" || e.op === "^" || e.op === "<<" || e.op === ">>";
-        case "unary":
-          return e.op === "~";
-        case "libCall":
-          return e.fn === "math.imul" || e.fn === "math.clz32";
-        case "ternary":
-          return int32(e.then) && int32(e.else_);
-        case "logical":
-          return int32(e.left) && int32(e.right);
-        case "assignExpr":
-          return int32(e.value);
-        case "seqExpr":
-          return int32(e.result);
-        case "varRef":
-          return (
-            closed.has(e.localId) ||
-            (!values.has(e.localId) && withinInt32(entry.get(e.localId))) ||
-            withinInt32(boxedRange(e.localId))
-          );
-        case "fieldGet":
-        case "call":
-          return withinInt32(slotRange(e));
-        default:
-          return false;
-      }
-    };
-    for (let changed = true; changed;) {
-      changed = false;
-      for (const id of closed)
-        if (values.get(id)!.some((value) => value === null || !int32(value))) {
-          closed.delete(id);
-          changed = true;
+    const result = new Map<string, IntegerRange>();
+    if (values.size === 0) return result;
+    const within = (bound: IntegerRange, range: IntegerRange | null | undefined): boolean =>
+      !!range && range.min >= bound.min && range.max <= bound.max;
+    const closure = (bound: IntegerRange): Set<string> => {
+      const signed = bound === SIGNED;
+      const closed = new Set<string>();
+      for (const [id, list] of values) {
+        if (within(bound, entry.get(id))) closed.add(id);
+        else if (declared.has(id)) {
+          functionWrites ??= regionWrites(fn.body).values;
+          if (functionWrites.get(id)?.length === list.length) closed.add(id);
         }
+      }
+      const member = (e: IrExpr): boolean => {
+        if (e.type.kind !== "f64") return false;
+        switch (e.kind) {
+          case "numLit":
+            return (
+              Number.isInteger(e.value) &&
+              within(bound, { min: e.value, max: e.value }) &&
+              !Object.is(e.value, -0)
+            );
+          case "bin":
+            return signed
+              ? e.op === "&" || e.op === "|" || e.op === "^" || e.op === "<<" || e.op === ">>"
+              : e.op === ">>>";
+          case "unary":
+            return signed && e.op === "~";
+          case "libCall":
+            return (signed && e.fn === "math.imul") || e.fn === "math.clz32";
+          case "ternary":
+            return member(e.then) && member(e.else_);
+          case "logical":
+            return member(e.left) && member(e.right);
+          case "assignExpr":
+            return member(e.value);
+          case "seqExpr":
+            return member(e.result);
+          case "varRef":
+            return (
+              closed.has(e.localId) ||
+              (!values.has(e.localId) && within(bound, entry.get(e.localId))) ||
+              within(bound, boxedRange(e.localId))
+            );
+          case "fieldGet":
+          case "call":
+            return within(bound, slotRange(e));
+          default:
+            return false;
+        }
+      };
+      for (let changed = true; changed;) {
+        changed = false;
+        for (const id of closed)
+          if (values.get(id)!.some((value) => value === null || !member(value))) {
+            closed.delete(id);
+            changed = true;
+          }
+      }
+      return closed;
+    };
+    const int32 = closure(SIGNED),
+      uint32 = closure(UNSIGNED);
+    for (const id of entry.keys()) {
+      const signed = int32.has(id),
+        unsigned = uint32.has(id);
+      if (signed && unsigned) result.set(id, { min: 0, max: SIGNED.max });
+      else if (signed) result.set(id, SIGNED);
+      else if (unsigned) result.set(id, UNSIGNED);
     }
-    for (const id of closed) if (!entry.has(id)) closed.delete(id);
-    return closed;
+    return result;
   }
 
   function remember(e: IrExpr, range: IntegerRange | null): IntegerRange | null {
@@ -246,12 +400,13 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
   function invalidate(facts: Facts, nodes: (IrExpr | IrStmt)[]): void {
     for (const node of nodes) for (const id of writes(node)) facts.delete(id);
   }
-  /** Invalidate the region's writes, keeping int32-closed locals as int32.
-   * `entry` is the state before any of the region's writes can run. */
+  /** Invalidate the region's writes, keeping int32- and uint32-closed
+   * locals at their closed range. `entry` is the state before any of the
+   * region's writes can run. */
   function havoc(facts: Facts, nodes: (IrExpr | IrStmt)[], entry: Facts): void {
     const closed = closedLocals(nodes, entry);
     invalidate(facts, nodes);
-    for (const id of closed) facts.set(id, SIGNED);
+    for (const [id, range] of closed) facts.set(id, range);
   }
   function refine(condition: IrExpr, truth: boolean, facts: Facts): void {
     // A comparison constrains operand snapshots. If evaluating it writes a
@@ -288,7 +443,11 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
         ? { min: bound.value, max: bound.value }
         : ranges.get(bound);
     if (!boundRange) return;
-    const previous = facts.get(ref.localId);
+    // An Int32 contract local holds an int32 even where the dataflow has
+    // no fact for it (loop headers, after unknown regions).
+    const previous =
+      facts.get(ref.localId) ??
+      (eligible.has(ref.localId) ? (slots.locals?.(ref.localId) ?? undefined) : undefined);
     if (!previous) return;
     if (!truth)
       op =
@@ -335,25 +494,17 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
         const left = expr(e.left, facts);
         const right = expr(e.right, facts);
         if (e.type.kind !== "f64") break;
-        if (e.op === ">>>") {
-          const shift = e.right.kind === "numLit" ? e.right.value & 31 : 0;
-          range = { min: 0, max: 4294967295 >>> shift };
-        } else if (e.op === "&") {
-          const mask =
-            e.left.kind === "numLit"
-              ? e.left.value | 0
-              : e.right.kind === "numLit"
-                ? e.right.value | 0
-                : -1;
-          range = mask >= 0 ? { min: 0, max: mask } : SIGNED;
-        } else if (e.op === "|" || e.op === "^" || e.op === "<<" || e.op === ">>") range = SIGNED;
+        if (isBitwiseOp(e.op))
+          range = bitwiseRange(e.op, operandView(e.left, left), operandView(e.right, right));
         else if (left && right) range = integerArithmeticRange(e.op, left, right);
         break;
       }
       case "unary": {
         const operand = expr(e.operand, facts);
-        if (e.op === "~") range = SIGNED;
-        else if (e.op === "-" && operand && (operand.max < 0 || operand.min > 0))
+        if (e.op === "~") {
+          const value = int32View(operandView(e.operand, operand));
+          range = { min: -value.max - 1, max: -value.min - 1 };
+        } else if (e.op === "-" && operand && (operand.max < 0 || operand.min > 0))
           range = { min: -operand.max, max: -operand.min };
         break;
       }
@@ -435,6 +586,27 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
           },
         );
         if (e.method === "length") range = UNSIGNED;
+        break;
+      case "strIntrinsic":
+        // The conservative child handling of unknown forms; only the result
+        // range is new: a length or a found index is an int32.
+        havoc(facts, [e], facts);
+        everyExprChild(
+          e,
+          (child) => {
+            expr(child, new Map(facts));
+            return true;
+          },
+          (child) => {
+            body([child], new Map(facts));
+            return true;
+          },
+        );
+        if (e.type.kind === "f64") {
+          if (e.method === "length") range = { min: 0, max: STRING_MAX_UNITS };
+          // An empty needle is found at the clamped position, up to the length.
+          else if (e.method === "indexOf") range = { min: -1, max: STRING_MAX_UNITS };
+        }
         break;
       case "fieldGet":
         expr(e.obj, facts);
@@ -559,8 +731,20 @@ export function analyzeIntegerRanges(fn: IrFunction, slots: IntegerSlotFacts = {
           if (s.cond) refine(s.cond, true, inside);
           body(s.body, inside);
           // Continue can bypass any body assignment. The update therefore
-          // starts from header invariants rather than the body's exit facts.
-          if (s.update) body([s.update], new Map(loop));
+          // starts from header invariants rather than the body's exit facts,
+          // plus what the condition proved about bindings the body never
+          // writes (they still hold the values the condition tested).
+          if (s.update) {
+            const entry = new Map(loop);
+            if (s.cond) {
+              const refined = new Map(loop);
+              refine(s.cond, true, refined);
+              const written = new Set<string>();
+              for (const node of s.body) for (const id of writes(node)) written.add(id);
+              for (const [id, range] of refined) if (!written.has(id)) entry.set(id, range);
+            }
+            body([s.update], entry);
+          }
           havoc(facts, [s], facts);
           break;
         }

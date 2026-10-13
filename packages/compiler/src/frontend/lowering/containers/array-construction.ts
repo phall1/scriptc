@@ -280,7 +280,6 @@ export function lowerArrayConstructor(
   // reference. Known element forms retain native arrays, including their
   // existing sparse storage and indexed property contracts.
   if (
-    !lowerer.dynamic &&
     isJsSourceFile(expr.getSourceFile()) &&
     (result?.kind !== "array" || result.elem.kind === "dyn")
   ) {
@@ -347,7 +346,7 @@ export function lowerArrayConstructor(
       loc,
     };
   }
-  if (argType?.kind === "dyn" || argType?.kind === "jsval") {
+  if (argType?.kind === "dyn") {
     lowerer.noLowering("Array constructor with a dynamically typed sole argument", args[0]!);
   }
   if (
