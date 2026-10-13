@@ -4726,7 +4726,12 @@ ScrDyn *scr_error_dyn_fields(const ScrError *e) {
     scr_dyn_obj_set(d, "message", 7, scr_dyn_new_str(e->message));
     d->v.obj.entries[d->v.obj.len - 1].enumerable = e->message_enumerable;
   }
-  if (e->stack) scr_dyn_obj_set(d, "stack", 5, scr_dyn_new_str(e->stack));
+  if (e->stack) {
+    scr_dyn_obj_set(d, "stack", 5, scr_dyn_new_str(e->stack));
+    /* Node's stack is an own data property and is not enumerable, so
+     * Object.keys and object spread omit it. */
+    d->v.obj.entries[d->v.obj.len - 1].enumerable = false;
+  }
   if (e->system_call) scr_dyn_obj_set(d, "errno", 5, scr_dyn_new_num(e->system_errno));
   if (e->code) scr_dyn_obj_set(d, "code", 4, scr_dyn_new_str(e->code));
   if (e->system_call) scr_dyn_obj_set(d, "syscall", 7, scr_dyn_new_str(e->system_call));

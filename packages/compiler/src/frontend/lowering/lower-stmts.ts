@@ -5452,8 +5452,30 @@ function falsyExitRuntimeOptionalLocals(lowerer: Lowerer, stmt: ts.IfStatement):
 /** A condition lowered to a boolean constant, including `seqExpr` wrappers
  * that still evaluate their operand (`value instanceof Date` on an array
  * folds false and keeps the read). Null when the test is dynamic. */
+/** A value JS's ToBoolean answers false for, without running it. A missing
+ * record field specialized to undefined boxes as dyn, and `if (options.until)`
+ * must not lower the call in that arm. */
+function constantFalsy(expr: IrExpr): { effects: IrStmt[] } | null {
+  if (expr.kind === "boolLit") return expr.value ? null : { effects: [] };
+  if (expr.kind === "seqExpr") {
+    const inner = constantFalsy(expr.result);
+    if (inner === null) return null;
+    return { effects: [...expr.stmts, ...inner.effects] };
+  }
+  if (expr.kind === "dynTest" && expr.test === "truthy") return constantFalsy(expr.value);
+  if (expr.kind === "dynFrom" && isUnitType(expr.value.type)) {
+    return expr.value.kind === "unitLit"
+      ? { effects: [] }
+      : { effects: [{ kind: "exprStmt", expr: expr.value, loc: expr.loc }] };
+  }
+  if (expr.kind === "unitLit") return { effects: [] };
+  return null;
+}
+
 function foldedCondition(expr: IrExpr): { value: boolean; effects: IrStmt[] } | null {
   if (expr.kind === "boolLit") return { value: expr.value, effects: [] };
+  const falsy = constantFalsy(expr);
+  if (falsy !== null) return { value: false, effects: falsy.effects };
   if (expr.kind === "seqExpr") {
     const inner = foldedCondition(expr.result);
     if (inner === null) return null;

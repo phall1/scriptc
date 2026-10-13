@@ -7610,11 +7610,16 @@ function lowerObjectStaticCall(
       probed?.type.kind === "union" &&
       isJsSourceFile(call.getSourceFile()) &&
       lowerer.dynConvertible(probed.type);
+    // Built-in errors box as dyn objects. Object.keys walks the enumerable
+    // own names (stack/name/message stay non-enumerable; assigned fields show).
+    const isRuntimeError =
+      probed?.type.kind === "object" && lowerer.errorHierarchyClassOf(probed.type.className);
     if (
       isDyn ||
       isPrimitive ||
       isFunction ||
       isJsUnion ||
+      isRuntimeError ||
       (probed && isDynTypedRefType(probed.type))
     ) {
       const fn =
@@ -8829,13 +8834,7 @@ export function lowerObjectMethodCall(
         loc,
       };
     }
-    const inherited = lowerInheritedPrototypeCall(
-      lowerer,
-      call,
-      access,
-      info,
-      lowerReceiver(),
-    );
+    const inherited = lowerInheritedPrototypeCall(lowerer, call, access, info, lowerReceiver());
     if (inherited) return inherited;
     return null;
   }

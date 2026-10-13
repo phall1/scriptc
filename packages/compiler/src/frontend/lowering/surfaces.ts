@@ -1805,6 +1805,13 @@ export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
     note: "UTC ISO formatting over constructed and stored Date values",
   },
   {
+    id: "stdlib.date.toJSON",
+    kind: "stdlib",
+    name: "Date.prototype.toJSON",
+    fns: ["date.getTime", "date.toISOStringValue", "number.isFinite"],
+    note: "ignores its key; null when the time is not finite, otherwise the same UTC text as toISOString()",
+  },
+  {
     id: "stdlib.date.getFullYear",
     kind: "stdlib",
     name: "Date.prototype.getFullYear",

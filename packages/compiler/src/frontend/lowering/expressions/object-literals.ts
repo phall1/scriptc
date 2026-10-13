@@ -801,6 +801,18 @@ export function lowerObjectLiteral(
   ) {
     return lowerDynObjectLiteral(lowerer, expr);
   }
+  // `{ ...error, name, message }` copies an Error's enumerable own fields.
+  // The field list is not a record shape; the dyn copy is Node's spread.
+  if (
+    isJsSourceFile(expr.getSourceFile()) &&
+    expr.properties.some((prop) => {
+      if (!ts.isSpreadAssignment(prop)) return false;
+      const mapped = lowerer.mapTypeOf(lowerer.typeOf(prop.expression));
+      return mapped?.kind === "object" && lowerer.errorHierarchyClassOf(mapped.className);
+    })
+  ) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
   // A checked spread carries runtime symbol keys and receiver-sensitive
   // methods absent from its inferred record shape. Copy the real properties.
   if (

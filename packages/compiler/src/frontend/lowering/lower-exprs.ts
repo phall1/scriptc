@@ -5304,6 +5304,7 @@ export function lowerIntrinsicProperty(
       "getTime",
       "valueOf",
       "toISOString",
+      "toJSON",
       "getFullYear",
       "getUTCFullYear",
       "getMonth",
@@ -5328,7 +5329,7 @@ export function lowerIntrinsicProperty(
     lowerer.noLowering(
       `Date.prototype.${name}`,
       expr,
-      "getTime(), valueOf(), toISOString(), the local/UTC calendar getters, and getTimezoneOffset() are supported; Date setters and locale/string formatters have no lowering",
+      "getTime(), valueOf(), toISOString(), toJSON(), the local/UTC calendar getters, and getTimezoneOffset() are supported; Date setters and locale/string formatters have no lowering",
       lowerer.checker.getSymbolAtLocation(expr.name),
     );
   }

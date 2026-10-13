@@ -1,7 +1,19 @@
 import * as ts from "../../ts7/adapter.js";
+import { InternalCompilerError } from "../../../errors.js";
 import { type Lowerer, own } from "../lowerer.js";
 import { locOf } from "../../program.js";
-import { DATE_T, DYN, F64, type IrExpr, type IrLibFn, STRING } from "../../../ir/ir.js";
+import {
+  BOOL,
+  DATE_T,
+  DYN,
+  F64,
+  NULL_T,
+  STRING,
+  type IrExpr,
+  type IrLibFn,
+  type IrStmt,
+  type IrType,
+} from "../../../ir/ir.js";
 
 const DATE_GETTER_FNS: Readonly<Record<string, IrLibFn>> = {
   getFullYear: "date.getFullYear",
@@ -24,7 +36,7 @@ const DATE_GETTER_FNS: Readonly<Record<string, IrLibFn>> = {
 };
 
 const DATE_METHOD_HINT =
-  "getTime(), valueOf(), toISOString(), the local/UTC calendar getters, getTimezoneOffset(), and UTC setters on a local Date are supported; local-time setters and locale/string formatters have no lowering";
+  "getTime(), valueOf(), toISOString(), toJSON(), the local/UTC calendar getters, getTimezoneOffset(), and UTC setters on a local Date are supported; local-time setters and locale/string formatters have no lowering";
 
 const DATE_UTC_SETTERS: Readonly<
   Record<string, { fn: IrLibFn; min: number; max: number; slots: number }>
@@ -94,6 +106,16 @@ export function lowerDateCall(
   const name = access.name.text;
   const utcSetter = own(DATE_UTC_SETTERS, name);
   if (utcSetter) return lowerUtcDateSetter(lowerer, call, access, name, utcSetter);
+  if (name === "toJSON") {
+    const raw = lowerer.lowerExpr(access.expression);
+    const receiver: IrExpr =
+      raw.type.kind === "dyn"
+        ? { kind: "libCall", fn: "date.checkedValue", args: [raw], type: DATE_T, loc }
+        : raw;
+    if (receiver.type.kind !== "date")
+      lowerer.badType(access.expression, lowerer.typeOf(access.expression));
+    return lowerDateToJson(lowerer, call, receiver);
+  }
   if (call.arguments.length !== 0) {
     lowerer.noLowering(`Date.prototype.${name} with arguments`, call, DATE_METHOD_HINT);
   }
@@ -128,12 +150,63 @@ export function lowerDateCall(
   );
 }
 
+/** Date.prototype.toJSON ignores every argument. A non-finite time value
+ * answers null; every other date answers the same text as toISOString.
+ * The ISO call stays in the taken arm so an invalid date does not throw. */
+function lowerDateToJson(lowerer: Lowerer, call: ts.CallExpression, receiver: IrExpr): IrExpr {
+  if (call.arguments.some((arg) => ts.isSpreadElement(arg))) {
+    lowerer.noLowering("Date.prototype.toJSON", call, "toJSON does not accept a spread");
+  }
+  const loc = locOf(call);
+  const saved = lowerer.declareHiddenLocal("%dateToJson", DATE_T);
+  const stable: IrExpr = { kind: "varRef", localId: saved.id, type: DATE_T, loc };
+  const stmts: IrStmt[] = [{ kind: "varDecl", localId: saved.id, init: receiver, loc }];
+  for (const arg of call.arguments) {
+    if (ts.isSpreadElement(arg)) continue;
+    stmts.push({ kind: "exprStmt", expr: lowerer.lowerExpr(arg), loc: locOf(arg) });
+  }
+  const time: IrExpr = { kind: "libCall", fn: "date.getTime", args: [stable], type: F64, loc };
+  const finite: IrExpr = {
+    kind: "libCall",
+    fn: "number.isFinite",
+    args: [time],
+    type: BOOL,
+    loc,
+  };
+  const iso: IrExpr = {
+    kind: "libCall",
+    fn: "date.toISOStringValue",
+    args: [stable],
+    type: STRING,
+    loc,
+  };
+  const unionId = lowerer.unions.intern([STRING, NULL_T]);
+  const resultT: IrType = { kind: "union", unionId };
+  const stringTag = lowerer.armTag(unionId, STRING);
+  const nullTag = lowerer.armTag(unionId, NULL_T);
+  if (stringTag < 0 || nullTag < 0)
+    throw new InternalCompilerError("lowerer bug: Date toJSON result union");
+  const result: IrExpr = {
+    kind: "ternary",
+    cond: finite,
+    then: { kind: "unionWrap", unionId, tag: stringTag, value: iso, type: resultT, loc },
+    else_: {
+      kind: "unionWrap",
+      unionId,
+      tag: nullTag,
+      value: { kind: "unitLit", unit: "null", type: NULL_T, loc },
+      type: resultT,
+      loc,
+    },
+    type: resultT,
+    loc,
+  };
+  return { kind: "seqExpr", stmts, result, type: resultT, loc };
+}
+
 /** JS `new Date` is a native handle. A UTC setter mutates that handle;
  * the call's number result is the new time value. */
-function nativeDateReceiver(
-  lowerer: Lowerer,
-  access: ts.PropertyAccessExpression,
-): IrExpr | null {
+function nativeDateReceiver(lowerer: Lowerer, access: ts.PropertyAccessExpression): IrExpr | null {
   const expr = access.expression;
   if (ts.isIdentifier(expr)) {
     const local = lowerer.resolveLocal(expr);
@@ -169,11 +242,7 @@ function dynUtcDateSetter(
 
 type UtcSetterSpec = { fn: IrLibFn; min: number; max: number; slots: number };
 
-function rejectSpreadUtcSetter(
-  lowerer: Lowerer,
-  call: ts.CallExpression,
-  name: string,
-): void {
+function rejectSpreadUtcSetter(lowerer: Lowerer, call: ts.CallExpression, name: string): void {
   if (!call.arguments.some((arg) => ts.isSpreadElement(arg))) return;
   lowerer.noLowering(`Date.prototype.${name}`, call, "UTC setters do not accept a spread");
 }
