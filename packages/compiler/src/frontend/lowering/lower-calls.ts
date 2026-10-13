@@ -72,7 +72,11 @@ import {
   lowerObjectFromEntriesCall,
   lowerObjectIterOverIndexShape,
 } from "./containers/indexed-objects.js";
-import { lowerTupleReadMethodCall } from "./containers/array-methods.js";
+import {
+  lowerDynInvokePushApply,
+  lowerDynPushSpread,
+  lowerTupleReadMethodCall,
+} from "./containers/array-methods.js";
 import { tryFuseIndexRead } from "./array-values.js";
 import { lowerBytesStaticCall } from "./containers/bytes.js";
 import {
@@ -8795,6 +8799,42 @@ function lowerObjLitGenericMethodCall(
       lowerer.checker.getCallSignatures(recvT).length > 0
     ) {
       const value = tryLowerExpression(lowerer, access.expression);
+      // `segments.push.apply(segments, items)` is `segments.push(...items)`.
+      if (
+        name === "apply" &&
+        ts.isPropertyAccessExpression(access.expression) &&
+        access.expression.name.text === "push" &&
+        call.arguments.length === 2 &&
+        !call.arguments.some((arg) => ts.isSpreadElement(arg)) &&
+        isJsSourceFile(call.getSourceFile()) &&
+        ts.isIdentifier(access.expression.expression) &&
+        ts.isIdentifier(call.arguments[0]!) &&
+        lowerer.checker.getSymbolAtLocation(access.expression.expression) ===
+          lowerer.checker.getSymbolAtLocation(call.arguments[0]!)
+      ) {
+        const receiver = lowerer.lowerExpr(access.expression.expression);
+        const items = lowerer.lowerExpr(call.arguments[1]!);
+        if (receiver.type.kind === "dyn") {
+          return lowerDynInvokePushApply(lowerer, receiver, items, locOf(call));
+        }
+        if (receiver.type.kind === "array" && items.type.kind === "dyn") {
+          return lowerDynPushSpread(lowerer, receiver, items, receiver.type.elem, locOf(call));
+        }
+        if (
+          receiver.type.kind === "array" &&
+          items.type.kind === "array" &&
+          typeEquals(items.type.elem, receiver.type.elem)
+        ) {
+          return {
+            kind: "arrIntrinsic",
+            method: "pushSpread",
+            receiver,
+            args: [items],
+            type: F64,
+            loc: locOf(call),
+          };
+        }
+      }
       if (
         value?.type.kind === "func" &&
         lowerer.dynConvertible(value.type) &&

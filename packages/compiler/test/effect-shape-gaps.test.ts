@@ -662,3 +662,33 @@ console.log(countdown(3));
 test("a named function expression can call itself from a nested function", async () => {
   await matchesNode("named-loop-fixture", namedLoopProbe, namedLoopProgram);
 });
+
+const pushSpreadProbe = `
+export function joinParts(parts) {
+  const segments = ["a"];
+  segments.push(...parts);
+  return segments.join(",");
+}
+export function joinApply(parts) {
+  const segments = ["a"];
+  segments.push.apply(segments, parts);
+  return segments.join(",");
+}
+export function joinEmpty(parts) {
+  const segments = [];
+  segments.push.apply(segments, parts);
+  return segments.join(",");
+}
+`;
+
+const pushSpreadProgram = `
+import { joinApply, joinEmpty, joinParts } from "push-spread-fixture/probe.js";
+
+console.log(joinParts(["b", "c"]));
+console.log(joinApply(["d"]));
+console.log(joinEmpty(["b", "c"]));
+`;
+
+test("pushing a spread of unknown values checks them into the array", async () => {
+  await matchesNode("push-spread-fixture", pushSpreadProbe, pushSpreadProgram);
+});
