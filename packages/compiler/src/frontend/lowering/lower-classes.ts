@@ -72,6 +72,7 @@ import { lowerObjectConstructor } from "./containers/indexed-objects.js";
 import { bufEncoding } from "./containers/bytes.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { lowerSearchParamsNew } from "./builtins/url.js";
+import { lowerFormDataNew } from "./builtins/form-data.js";
 import { lowerTextCodecNew } from "./builtins/text-codecs.js";
 import { lowerGcHandleNew } from "./builtins/weak-refs.js";
 import { lowerWorkerNew } from "./builtins/workers.js";
@@ -8533,6 +8534,11 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     // see lowerSearchParamsNew for the lowered init shapes).
     if (symbol && symbol.name === "URLSearchParams" && lowerer.isStdlibSymbol(symbol)) {
       return lowerSearchParamsNew(lowerer, expr, loc);
+    }
+    if (identifier.text === "FormData" && isJsSourceFile(expr.getSourceFile())) {
+      const declarations = symbol ? lowerer.checker.declarationsOf(symbol) : [];
+      const userDeclared = declarations.some((decl) => !lowerer.isStdlibFile(decl.getSourceFile()));
+      if (!userDeclared) return lowerFormDataNew(lowerer, expr);
     }
     // TypeScript stores the TimeClip scalar. JavaScript stores a mutable
     // native date, so a UTC setter updates that same handle. Copying the

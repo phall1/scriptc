@@ -12260,6 +12260,32 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
         "statically-decided 'instanceof' on computed operands (bind the values to variables first)",
       );
     }
+    if (
+      ts.isIdentifier(expr.right) &&
+      (lowerer.isStdlibGlobal(expr.right, "Blob") || lowerer.isStdlibGlobal(expr.right, "File"))
+    ) {
+      // No compiled value is a Blob or File. Evaluate the left operand,
+      // then answer false — the same result Node gives every value this
+      // compiler can construct.
+      const left = lowerer.lowerExpr(expr.left);
+      const no: IrExpr = { kind: "boolLit", value: false, type: BOOL, loc };
+      if (
+        left.kind === "varRef" ||
+        left.kind === "strLit" ||
+        left.kind === "numLit" ||
+        left.kind === "boolLit" ||
+        left.kind === "unitLit"
+      )
+        return no;
+      const local = lowerer.declareHiddenLocal("%instanceofBlob", left.type);
+      return {
+        kind: "seqExpr",
+        stmts: [{ kind: "varDecl", localId: local.id, init: left, loc }],
+        result: no,
+        type: BOOL,
+        loc,
+      };
+    }
     const constructor = tryLowerExpression(lowerer, expr.right);
     if (constructor?.type.kind === "dyn" && isJsSourceFile(expr.getSourceFile())) {
       const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);

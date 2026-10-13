@@ -278,3 +278,28 @@ console.log(find(chunk, new Uint8Array([9]), 0));
 test("Buffer.prototype.indexOf.call matches Node", async () => {
   await matchesNode("buffer-search-fixture", bufferProbe, bufferProgram);
 });
+
+const formProbe = `
+export function build(pairs) {
+  const out = new FormData();
+  for (const pair of pairs) out.append(pair[0], pair[1]);
+  const parts = [];
+  for (const pair of out.entries()) parts.push(pair[0] + "=" + pair[1]);
+  return parts.join("&");
+}
+export function isBlob(value) {
+  return typeof Blob !== "undefined" && value instanceof Blob;
+}
+`;
+
+const formProgram = `
+import { build, isBlob } from "form-data-fixture/probe.js";
+
+console.log(build([["a", "1"], ["b", "2"]]));
+console.log(isBlob("x"));
+console.log(isBlob({ a: 1 }));
+`;
+
+test("empty FormData append and entries match Node", async () => {
+  await matchesNode("form-data-fixture", formProbe, formProgram);
+});
