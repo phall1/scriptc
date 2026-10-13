@@ -478,3 +478,25 @@ console.log(cookie.options.expires.getTime());
 test("Object.assign copies a record that holds a Date", async () => {
   await matchesNode("cookie-date-fixture", cookieDateProbe, cookieDateProgram);
 });
+
+const literalProbe = `
+export function Literal(literal) {
+  const out = {
+    literal,
+    transform(to) {
+      return out.literal + ":" + String(to) + ":" + Literal(to).literal;
+    },
+  };
+  return out;
+}
+`;
+
+const literalProgram = `
+import { Literal } from "literal-capture-fixture/probe.js";
+
+console.log(Literal("a").transform("b"));
+`;
+
+test("a nested method can capture the const it initializes, including a recursive call", async () => {
+  await matchesNode("literal-capture-fixture", literalProbe, literalProgram);
+});

@@ -478,6 +478,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
       ? lowerer.genBodyReturnType(sig.returnType)
       : lowerer.bodyReturnType(sig.isAsync === true, sig.returnType);
   const ctx = newFnCtx(false, null, null, bodyReturn);
+  ctx.bodyDecl = decl;
   ctx.isAsync = sig.isAsync === true;
   if (sig.generator !== undefined) ctx.generator = sig.generator;
   const diagsBefore = lowerer.diags.length;

@@ -772,6 +772,7 @@ export function lowerGenericInstance(
     ? lowerer.genBodyReturnType(inst.returnType)
     : lowerer.bodyReturnType(isAsync, inst.returnType);
   const fnCtx = newFnCtx(false, null, null, bodyReturn);
+  fnCtx.bodyDecl = decl;
   fnCtx.isAsync = isAsync;
   // Implicit-any instances whose declared return did not map lower in
   // return-INFERENCE mode: `return` statements record here bare, and the
