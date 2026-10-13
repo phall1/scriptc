@@ -8054,6 +8054,47 @@ function lowerObjectAssignHybrid(lowerer: Lowerer, call: ts.CallExpression): IrE
   return { kind: "recordLit", fields, type: mapped, loc };
 }
 
+/** Call an own member of a value that has already been boxed as checked-dynamic.
+ * The member is read before arguments, matching JavaScript, and a missing
+ * function throws the same catchable TypeError as a direct call. */
+function lowerDynStoredMemberCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+  recv: IrExpr,
+): IrExpr {
+  const loc = locOf(call);
+  const receiverLocal = lowerer.declareHiddenLocal("%dynCallReceiver", DYN);
+  const receiver = varRef(receiverLocal.id, DYN, loc);
+  const member: IrExpr = {
+    kind: "dynKeyGet",
+    key: { kind: "strLit", value: access.name.text, type: STRING, loc: locOf(access) },
+    value: receiver,
+    type: DYN,
+    loc: locOf(access),
+  };
+  const calleeLocal = lowerer.declareHiddenLocal("%dynCallCallee", DYN);
+  const callee = varRef(calleeLocal.id, DYN, loc);
+  return {
+    kind: "seqExpr",
+    stmts: [
+      { kind: "varDecl", localId: receiverLocal.id, init: recv, loc },
+      { kind: "varDecl", localId: calleeLocal.id, init: member, loc },
+    ],
+    result: {
+      kind: "dynCall",
+      callee,
+      receiver,
+      calleeName: access.getText(),
+      args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)),
+      type: DYN,
+      loc,
+    },
+    type: DYN,
+    loc,
+  };
+}
+
 export function lowerRecordFieldCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -8065,6 +8106,32 @@ export function lowerRecordFieldCall(
     : undefined;
   const receiverType =
     stored?.kind === "record" ? stored : lowerer.mapTypeOf(lowerer.typeOf(access.expression));
+  // `nodes[0].get(s)` stores a record|undefined element. The checker still
+  // says `any` for the local, so the record path never sees the field.
+  // Box the value and call the own member: a missing element throws, and a
+  // present record answers the function stored in that field.
+  if (
+    stored?.kind === "union" &&
+    isJsSourceFile(call.getSourceFile()) &&
+    !call.questionDotToken &&
+    !access.questionDotToken &&
+    !call.arguments.some(ts.isSpreadElement) &&
+    lowerer.dynConvertible(stored)
+  ) {
+    const present = lowerer.stripUndefinedArm(stored);
+    const field =
+      present.kind === "record"
+        ? lowerer.shapes.get(present.shapeId)?.fields.find((item) => item.name === access.name.text)
+        : undefined;
+    if (field?.type.kind === "dyn" || field?.type.kind === "func") {
+      return lowerDynStoredMemberCall(
+        lowerer,
+        call,
+        access,
+        lowerer.coerceToExpected(lowerer.lowerExpr(access.expression), DYN),
+      );
+    }
+  }
   if (receiverType?.kind !== "record" && receiverType?.kind !== "union") return null;
   // A union of records can share a closure-valued field. Its normal
   // property read performs the tag dispatch before arguments evaluate.

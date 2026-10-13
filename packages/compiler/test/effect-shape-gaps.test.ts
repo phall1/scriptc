@@ -173,3 +173,34 @@ console.log(seen.join(","));
 test("unknown array callbacks match Node", async () => {
   await matchesNode("array-callback-fixture", callbackProbe, callbackProgram);
 });
+
+const memberProbe = `
+export function compileGet(nodes) {
+  return (s) => {
+    const op = nodes[0];
+    return op.get(s);
+  };
+}
+export function fromIterator(iterator) {
+  const iter = iterator();
+  const state = iter.next();
+  return state.done ? "done" : state.value;
+}
+`;
+
+const memberProgram = `
+import { compileGet, fromIterator } from "member-call-fixture/probe.js";
+
+const step: { _tag: string; get: unknown; kind: unknown; set: unknown } = {
+  _tag: "Iso",
+  get: (s: number) => s + 1,
+  kind: "Iso",
+  set: (a: number) => a,
+};
+console.log(compileGet([step])(3));
+console.log(fromIterator(() => [7][Symbol.iterator]()));
+`;
+
+test("record field calls and generator next match Node", async () => {
+  await matchesNode("member-call-fixture", memberProbe, memberProgram);
+});

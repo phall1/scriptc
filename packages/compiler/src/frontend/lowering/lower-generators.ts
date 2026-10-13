@@ -109,7 +109,18 @@ export function lowerGenMethodCall(
   if (lowerer.chainBlocked(access, call)) return null;
   const name = access.name.text;
   if (name !== "next" && name !== "return" && name !== "throw") return null;
-  if (lowerer.mapTypeOf(lowerer.typeOf(access.expression))?.kind !== "generator") return null;
+  // A JS local the checker still types as `any` can hold a specialized
+  // generator (`const iter = iterator()` inside an implicit-any instance).
+  // Dispatch on that stored value; the checker type has nothing to map.
+  const storedGenerator =
+    ts.isIdentifier(access.expression) &&
+    (lowerer.peekLocal(access.expression)?.type.kind === "generator" ||
+      lowerer.globalOf(access.expression)?.type.kind === "generator");
+  if (
+    lowerer.mapTypeOf(lowerer.typeOf(access.expression))?.kind !== "generator" &&
+    !storedGenerator
+  )
+    return null;
   if (call.arguments.some(ts.isSpreadElement)) {
     lowerer.unsupported("SC1090", call, "spread arguments");
   }
