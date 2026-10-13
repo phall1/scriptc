@@ -1,7 +1,18 @@
 import * as ts from "../../ts7/adapter.js";
 import { type Lowerer, own } from "../lowerer.js";
 import { locOf } from "../../program.js";
-import { DATE_T, DYN, F64, type IrExpr, type IrLibFn, STRING } from "../../../ir/ir.js";
+import {
+  BOOL,
+  DATE_T,
+  DYN,
+  F64,
+  type IrExpr,
+  type IrLibFn,
+  type IrType,
+  NULL_T,
+  STRING,
+  type SrcLoc,
+} from "../../../ir/ir.js";
 
 const DATE_GETTER_FNS: Readonly<Record<string, IrLibFn>> = {
   getFullYear: "date.getFullYear",
@@ -37,6 +48,31 @@ const DATE_UTC_SETTERS: Readonly<
   setUTCSeconds: { fn: "date.setUTCSeconds", min: 1, max: 2, slots: 2 },
   setUTCMilliseconds: { fn: "date.setUTCMilliseconds", min: 1, max: 1, slots: 1 },
 };
+
+/** Date.prototype.toJSON returns null when the time is not finite, and
+ * otherwise the same ISO string as toISOString. toISOString still throws. */
+function dateToJson(lowerer: Lowerer, receiver: IrExpr, loc: SrcLoc): IrExpr {
+  const stored = lowerer.declareHiddenLocal("%dateJson", receiver.type);
+  const ref: IrExpr = { kind: "varRef", localId: stored.id, type: stored.type, loc };
+  const time: IrExpr = { kind: "libCall", fn: "date.getTime", args: [ref], type: F64, loc };
+  const finite: IrExpr = { kind: "libCall", fn: "number.isFinite", args: [time], type: BOOL, loc };
+  const type: IrType = { kind: "union", unionId: lowerer.unions.intern([STRING, NULL_T]) };
+  const text = lowerer.coerceToExpected(
+    { kind: "libCall", fn: "date.toISOStringValue", args: [ref], type: STRING, loc },
+    type,
+  );
+  const empty = lowerer.coerceToExpected(
+    { kind: "unitLit", unit: "null", type: NULL_T, loc },
+    type,
+  );
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "varDecl", localId: stored.id, init: receiver, loc }],
+    result: { kind: "ternary", cond: finite, then: text, else_: empty, type, loc },
+    type,
+    loc,
+  };
+}
 
 /** The Date slice: statics plus TimeClip millisecond scalars. UTC setters
  * write the new scalar back onto a local or parameter. Construction lives
@@ -113,10 +149,8 @@ export function lowerDateCall(
       loc,
     };
   }
-  if (name === "toISOString" || name === "toJSON") {
-    // Date.prototype.toJSON is toISOString for a finite time. A non-finite
-    // Date returns null from toJSON and throws from toISOString; that split
-    // is still the toISOString path.
+  if (name === "toJSON") return dateToJson(lowerer, receiver, loc);
+  if (name === "toISOString") {
     return { kind: "libCall", fn: "date.toISOStringValue", args: [receiver], type: STRING, loc };
   }
   const fn = own(DATE_GETTER_FNS, name);
