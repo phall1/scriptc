@@ -1,7 +1,7 @@
 import { lowerArrayIteratorValue } from "../iterator-adapters.js";
 import { identityPreservingWidening } from "../coercions/identity.js";
 import { arrayConcatHelper } from "./array-concat.js";
-import { boolLit, countedFor, numLit, strLit, varRef } from "../../../ir/build.js";
+import { boolLit, countedFor, dynUndefinedExpr, numLit, strLit, varRef } from "../../../ir/build.js";
 import { InternalCompilerError } from "../../../errors.js";
 import * as ts from "../../ts7/adapter.js";
 import type { Lowerer } from "../lowerer.js";
@@ -1506,6 +1506,30 @@ function lowerArraySearchCall(
   const receiver = lowerer.lowerExpr(access.expression);
   if (call.arguments.some(ts.isSpreadElement))
     lowerer.noLowering(`.${method} with spread arguments`, call);
+  // `unknown[]` stores checked values. SameValueZero has to see the
+  // needle as a checked value too — a fresh string box is not pointer-
+  // equal to the element — so the search goes through the dyn array
+  // method. `members.includes("*")` after splitting an untyped header.
+  if (elem.kind === "dyn") {
+    const args: IrExpr[] = [
+      call.arguments[0]
+        ? lowerer.lowerExprExpecting(call.arguments[0], DYN)
+        : dynUndefinedExpr(loc),
+    ];
+    if (call.arguments[1]) args.push(lowerer.lowerExprExpecting(call.arguments[1], DYN));
+    return lowerer.coerceToExpected(
+      {
+        kind: "dynInvoke",
+        recv: lowerer.coerceToExpected(receiver, DYN),
+        method,
+        calleeName: access.getText(),
+        args,
+        type: DYN,
+        loc,
+      },
+      method === "includes" ? BOOL : F64,
+    );
+  }
   const needle: IrExpr = call.arguments[0]
     ? lowerer.lowerExpr(call.arguments[0])
     : { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc };

@@ -174,6 +174,17 @@ export function lowerOptionalChain(
     dotNode = tail;
     recvNode = tail.expression;
   }
+  // `const process = globalThis.process; process?.stdout`. The alias has
+  // no object value — member reads go through the process surface — and
+  // Node's process object is never nullish, so `?.` is `.`.
+  if (lowerer.isStdlibGlobal(recvNode, "process")) {
+    lowerer.chainHandled.add(dotNode);
+    try {
+      return lowerer.lowerExpr(expr);
+    } finally {
+      lowerer.chainHandled.delete(dotNode);
+    }
+  }
   const loweredReceiver = lowerer.lowerExpr(recvNode);
   const receiver = lowerer.runtimeOptionalSourceValue(recvNode, loweredReceiver) ?? loweredReceiver;
   if (receiver.type.kind === "dyn") {

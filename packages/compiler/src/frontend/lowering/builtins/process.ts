@@ -390,6 +390,11 @@ export function lowerProcessProperty(
       "process.env as a value of this type (read one variable: process.env.NAME or process.env[name])",
     );
   }
+  // Effect's pretty logger probes `process?.isBun`. Node has no such
+  // property; the read is undefined and the comparison is false.
+  if (member === "isBun") {
+    return { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc: locOf(expr) };
+  }
   if (member === "exit" || member === "cwd" || member === "getuid" || member === "kill") {
     lowerer.unsupported("SC1090", expr, `process methods as values (call '${member}' directly)`);
   }

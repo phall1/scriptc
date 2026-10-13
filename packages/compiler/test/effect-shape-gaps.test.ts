@@ -801,3 +801,92 @@ console.log(escapeControl("ok"));
 test("a code point formats in hex and pads", async () => {
   await matchesNode("code-point-fixture", codePointProbe, codePointProgram);
 });
+
+const codeHexProbe = `
+export function quoteUnit(text) {
+  const parts = [];
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    parts.push(code.toString(16).toUpperCase().padStart(4, "0"));
+  }
+  return parts.join(" ");
+}
+`;
+
+const codeHexProgram = `
+import { quoteUnit } from "code-hex-fixture/probe.js";
+
+console.log(quoteUnit("A\\n"));
+console.log(quoteUnit("ok"));
+`;
+
+test("a stored code unit formats in hex", async () => {
+  await matchesNode("code-hex-fixture", codeHexProbe, codeHexProgram);
+});
+
+const parseIntProbe = `
+export function hour(value) {
+  return Number.parseInt(value.slice(-2));
+}
+export function prefixed(text) {
+  return globalThis.Number.parseInt(text);
+}
+`;
+
+const parseIntProgram = `
+import { hour, prefixed } from "parse-int-fixture/probe.js";
+
+console.log(hour("2026-10-13T12"));
+console.log(prefixed("0x10"));
+console.log(prefixed("08"));
+console.log(prefixed("zz"));
+console.log(prefixed("  -12px"));
+`;
+
+test("Number.parseInt omits the radix the way the global does", async () => {
+  await matchesNode("parse-int-fixture", parseIntProbe, parseIntProgram);
+});
+
+const varyProbe = `
+export function varyWith(headers, dimension) {
+  const vary = headers["vary"];
+  if (vary === undefined) return dimension;
+  const members = vary.split(",").map((member) => member.trim().toLowerCase());
+  return members.includes("*") || members.includes(dimension.toLowerCase())
+    ? vary
+    : vary + ", " + dimension;
+}
+`;
+
+const varyProgram = `
+import { varyWith } from "vary-fixture/probe.js";
+
+console.log(varyWith({}, "accept-encoding"));
+console.log(varyWith({ vary: "Accept-Encoding" }, "origin"));
+console.log(varyWith({ vary: "*" }, "origin"));
+console.log(varyWith({ vary: "origin, *" }, "accept-encoding"));
+`;
+
+test("an untyped header list includes the star token", async () => {
+  await matchesNode("vary-fixture", varyProbe, varyProgram);
+});
+
+const processProbe = `
+export function loggerMode() {
+  const process = globalThis.process;
+  const hasProcessStdout = typeof process?.stdout === "object" && process.stdout !== null;
+  const processStdoutIsTTY = hasProcessStdout && process.stdout.isTTY === true;
+  const processIsBun = process?.isBun === true;
+  return [hasProcessStdout, processStdoutIsTTY, processIsBun];
+}
+`;
+
+const processProgram = `
+import { loggerMode } from "process-probe-fixture/probe.js";
+
+console.log(JSON.stringify(loggerMode()));
+`;
+
+test("a process alias probes stdout and isBun", async () => {
+  await matchesNode("process-probe-fixture", processProbe, processProgram);
+});

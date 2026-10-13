@@ -72,17 +72,20 @@ export function lowerNumberStaticCall(
     return { kind: "libCall", fn, args: [arg], type: BOOL, loc };
   }
   if (member === "parseFloat" || member === "parseInt") {
-    const want = member === "parseFloat" ? 1 : 2;
-    if (call.arguments.length !== want) {
+    // Omitted parseInt radix is the spec default (radix 0): decimal, with
+    // a 0x prefix still read as hex. Effect's date prompts call
+    // Number.parseInt(text) in that form.
+    const max = member === "parseFloat" ? 1 : 2;
+    if (call.arguments.length < 1 || call.arguments.length > max) {
       lowerer.noLowering(
         `Number.${member} with ${call.arguments.length} argument${call.arguments.length === 1 ? "" : "s"}`,
         call,
-        member === "parseInt" ? "pass an explicit radix: Number.parseInt(s, 10)" : undefined,
       );
     }
     // Number.parseFloat/Number.parseInt ARE the global parsers: over a
     // string argument they lower to the same static parse (parseInt with
-    // its explicit radix); only the coercing argument shapes are refused.
+    // its radix, or 0 when the radix is omitted); only the coercing
+    // argument shapes are refused.
     const probed = tryLowerExpression(lowerer, call.arguments[0]!);
     if (probed !== null && isStringLike(lowerer, probed.type)) {
       const parsed = lowerStaticNumberGlobal(lowerer, member, call, call.arguments, loc);
@@ -99,7 +102,9 @@ export function lowerNumberStaticCall(
         type: STRING,
         loc,
       };
-      const radix = lowerer.lowerExprExpecting(call.arguments[1]!, F64);
+      const radix = call.arguments[1]
+        ? lowerer.lowerExprExpecting(call.arguments[1], F64)
+        : { kind: "numLit", value: 0, type: F64, loc };
       return { kind: "libCall", fn: "num.parseInt", args: [text, radix], type: F64, loc };
     }
     const argText =
