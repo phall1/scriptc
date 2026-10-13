@@ -1682,6 +1682,7 @@ static ScrDyn *dyn_builtin_method_call(ScrClosure *closure, ScrDyn *const *args,
     bool compatible = false;
     if (!strcmp(prototype->data, "String")) compatible = receiver->kind != SCR_DYN_UNDEF && receiver->kind != SCR_DYN_NULL;
     else if (!strcmp(prototype->data, "Number")) compatible = receiver->kind == SCR_DYN_NUM;
+    else if (!strcmp(prototype->data, "Boolean")) compatible = receiver->kind == SCR_DYN_BOOL;
     else if (receiver->kind == SCR_DYN_HANDLE) {
       const ScrDynHandleOps *ops = scr_dyn_handle_ops_of(receiver);
       compatible = !strcmp(ops->cls, prototype->data);

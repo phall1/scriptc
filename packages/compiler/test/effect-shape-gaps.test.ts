@@ -118,3 +118,30 @@ test("a missing option method is not called", async () => {
 test("Object.keys and object spread of Error match Node", async () => {
   await matchesNode("error-spread-fixture", errorProbe, errorProgram);
 });
+
+const wrapperProbe = `
+export function kind(value) {
+  for (const valueOf of [Number.prototype.valueOf, Boolean.prototype.valueOf, String.prototype.valueOf]) {
+    try {
+      Reflect.apply(valueOf, value, []);
+      return "yes";
+    } catch {
+      continue;
+    }
+  }
+  return "no";
+}
+`;
+
+const wrapperProgram = `
+import { kind } from "primitive-wrapper-fixture/probe.js";
+
+console.log(kind({ a: 1 }));
+console.log(kind(true));
+console.log(kind(1));
+console.log(kind("ab"));
+`;
+
+test("boxed primitive valueOf probes match Node", async () => {
+  await matchesNode("primitive-wrapper-fixture", wrapperProbe, wrapperProgram);
+});

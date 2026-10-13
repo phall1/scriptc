@@ -45,6 +45,7 @@ const PROTOTYPE_METHODS: Record<string, readonly string[]> = {
     "toString",
     "valueOf",
   ],
+  Boolean: ["toString", "valueOf"],
   Number: ["toString", "valueOf"],
   Object: ["hasOwnProperty", "propertyIsEnumerable", "toString", "valueOf"],
 };
