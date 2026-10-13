@@ -3690,8 +3690,8 @@ export function canConvertToDyn(
   if (isJsonSafeType(t, getRecord, getUnion)) return true;
   // A typed Date is a TimeClip scalar. Boxing it as a number would make
   // `instanceof Date` and `getTime` fail. The dyn value is a native Date
-  // handle. Nested dates stay fenced: array and union walkers still treat
-  // the scalar as a pointer.
+  // handle. Record fields box the same way. A date that is an array element
+  // or a union arm stays unboxed: those walkers pass a pointer.
   if (t.kind === "date") return true;
   // numeric typed arrays and boxable functions are dyn kinds the walker boxes
   // ANYWHERE (bytes and functions held by identity), including nested
@@ -3787,6 +3787,10 @@ function canBoxDynCompositeAt(
     case "regex":
     case "url":
     case "searchParams":
+    case "date":
+      // A Date field boxes as a native handle (toDyn loads the TimeClip
+      // double). A Date array element or union arm does not: those walkers
+      // pass a pointer into the helper.
       return true;
     case "func":
       return canBoxFuncIntoDyn(t, getRecord, getUnion, visiting);
@@ -3807,8 +3811,11 @@ function canBoxDynCompositeAt(
     case "array":
       // Process streams have scalar storage only in fields, closures and
       // unions. A direct procStream array has no native ScrArr layout.
+      // Date elements are TimeClip doubles; the array walker loads a pointer.
       return (
-        t.elem.kind !== "procStream" && canBoxDynComposite(t.elem, getRecord, getUnion, visiting)
+        t.elem.kind !== "procStream" &&
+        t.elem.kind !== "date" &&
+        canBoxDynComposite(t.elem, getRecord, getUnion, visiting)
       );
     case "record": {
       const shape = getRecord(t.shapeId);
@@ -3831,6 +3838,8 @@ function canBoxDynCompositeAt(
     case "union": {
       const def = getUnion(t.unionId);
       if (!def) return false;
+      // A date arm is a double payload. The union walker peeks a pointer.
+      if (def.arms.some((arm) => arm.kind === "date")) return false;
       if (visiting.has(t.unionId)) return true;
       visiting.add(t.unionId);
       try {

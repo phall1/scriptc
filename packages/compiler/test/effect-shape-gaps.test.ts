@@ -451,3 +451,30 @@ console.log(attempt({ try: () => { throw new Error("bad"); }, catch: (error: unk
 test("isFunction folds so object and function attempts both match Node", async () => {
   await matchesNode("try-predicate-fixture", tryProbe, tryProgram);
 });
+
+const cookieDateProbe = `
+const Proto = { kind: "cookie" };
+export function stamp(name, when) {
+  const options = { expires: when, path: "/" };
+  const cookie = Object.assign(Object.create(Proto), {
+    name,
+    options: options ? options : undefined,
+  });
+  return cookie;
+}
+`;
+
+const cookieDateProgram = `
+import { stamp } from "cookie-date-fixture/probe.js";
+
+const cookie = stamp("id", new Date(0));
+console.log(cookie.kind);
+console.log(cookie.name);
+console.log(cookie.options.path);
+console.log(cookie.options.expires.toISOString());
+console.log(cookie.options.expires.getTime());
+`;
+
+test("Object.assign copies a record that holds a Date", async () => {
+  await matchesNode("cookie-date-fixture", cookieDateProbe, cookieDateProgram);
+});
