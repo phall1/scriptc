@@ -258,3 +258,23 @@ console.log(segment("ab"));
 test("a lazily created Set accepts add and has", async () => {
   await matchesNode("set-failure-fixture", setProbe, setProgram);
 });
+
+const bufferProbe = `
+export function find(chunk, needle, fromIndex) {
+  return Buffer.prototype.indexOf.call(chunk, needle, fromIndex);
+}
+`;
+
+const bufferProgram = `
+import { find } from "buffer-search-fixture/probe.js";
+
+const chunk = new Uint8Array([1, 2, 3, 2, 3]);
+const needle = new Uint8Array([2, 3]);
+console.log(find(chunk, needle, 0));
+console.log(find(chunk, needle, 2));
+console.log(find(chunk, new Uint8Array([9]), 0));
+`;
+
+test("Buffer.prototype.indexOf.call matches Node", async () => {
+  await matchesNode("buffer-search-fixture", bufferProbe, bufferProgram);
+});

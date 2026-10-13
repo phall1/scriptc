@@ -25,6 +25,7 @@ import {
 } from "./class-prototypes.js";
 import {
   BYTES_ELEMENT_NAME,
+  BYTES_U8,
   BIGINT_T,
   BOOL,
   CAUGHT,
@@ -1299,6 +1300,7 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
       // TestContext surface (t.test/t.skip/t.diagnostic), t.assert.*.
       lowerer.lowerTestMethodCall(expr, expr.expression) ??
       lowerer.lowerTimeoutMethodCall(expr, expr.expression) ??
+      lowerBufferPrototypeBorrowCall(lowerer, expr, expr.expression) ??
       lowerArrayPrototypeBorrowCall(lowerer, expr, expr.expression) ??
       lowerObjectOwnPrototypeCall(lowerer, expr, expr.expression) ??
       lowerObjectPrototypeCall(lowerer, expr, expr.expression) ??
@@ -2368,6 +2370,59 @@ const ARRAY_BORROW_METHODS = new Set([
   "slice",
   "some",
 ]);
+
+/** `Buffer.prototype.indexOf.call(chunk, needle, fromIndex)` searches the
+ * byte receiver. The arguments are often still untyped inside the helper
+ * that Effect builds after `"Buffer" in globalThis`, so a dynamic value is
+ * checked as bytes and then uses the same search as a typed Buffer. */
+function lowerBufferPrototypeBorrowCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
+  if (
+    call.questionDotToken ||
+    access.questionDotToken ||
+    access.name.text !== "call" ||
+    !ts.isPropertyAccessExpression(access.expression) ||
+    call.arguments.some(ts.isSpreadElement) ||
+    call.arguments.length < 2 ||
+    call.arguments.length > 3
+  )
+    return null;
+  const method = access.expression;
+  if (
+    method.questionDotToken ||
+    method.name.text !== "indexOf" ||
+    !ts.isPropertyAccessExpression(method.expression) ||
+    method.expression.questionDotToken ||
+    method.expression.name.text !== "prototype" ||
+    !lowerer.isStdlibGlobal(method.expression.expression, "Buffer")
+  )
+    return null;
+  const loc = locOf(call);
+  const asBytes = (arg: ts.Expression): IrExpr => {
+    const value = lowerer.lowerExpr(arg);
+    if (value.type.kind === "bytes" && value.type.elem === "u8") return value;
+    return {
+      kind: "dynCheck",
+      value: lowerer.coerceToExpected(value, DYN),
+      type: BYTES_U8,
+      loc,
+    };
+  };
+  const from = call.arguments[2]
+    ? lowerer.lowerExprExpecting(call.arguments[2], F64)
+    : { kind: "numLit", value: 0, type: F64, loc };
+  return {
+    kind: "bytesIntrinsic",
+    method: "indexOf",
+    receiver: asBytes(call.arguments[0]!),
+    args: [asBytes(call.arguments[1]!), { kind: "numLit", value: 1, type: F64, loc }, from],
+    type: F64,
+    loc,
+  };
+}
 
 function lowerArrayPrototypeBorrowCall(
   lowerer: Lowerer,
