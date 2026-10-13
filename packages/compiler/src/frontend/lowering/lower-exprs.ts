@@ -2226,11 +2226,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     // TypeScript `globalThis.crypto` is the WebCrypto object. The bare
     // `crypto` identifier already lowers to it. A read through the stored
     // global object has no crypto member.
-    if (
-      !lowerer.dynamic &&
-      !isJsSourceFile(expr.getSourceFile()) &&
-      lowerer.isStdlibGlobal(expr, "crypto")
-    ) {
+    if (!isJsSourceFile(expr.getSourceFile()) && lowerer.isStdlibGlobal(expr, "crypto")) {
       return { kind: "libCall", fn: "crypto.native", args: [], type: DYN, loc };
     }
     const handled =

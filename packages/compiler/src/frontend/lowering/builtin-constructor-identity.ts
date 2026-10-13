@@ -125,7 +125,6 @@ export function lowerBuiltinConstructorValue(
   expr: ts.Expression,
   loc: SrcLoc,
 ): IrExpr | null {
-  if (lowerer.dynamic) return null;
   if (!ts.isIdentifier(expr) && !ts.isPropertyAccessExpression(expr)) return null;
   const name = ts.isIdentifier(expr) ? expr : expr.name;
   const symbol = lowerer.checker.getSymbolAtLocation(name);

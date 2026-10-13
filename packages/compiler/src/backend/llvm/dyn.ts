@@ -108,7 +108,6 @@ const FN_ATTRS = "#0";
 function elementStoresDynUndefined(elem: IrType, unions: DynHost["unionsById"]): boolean {
   return (
     elem.kind === "dyn" ||
-    elem.kind === "jsval" ||
     elem.kind === "undefinedT" ||
     undefinedArmTag(elem, unions) >= 0
   );

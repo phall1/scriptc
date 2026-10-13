@@ -879,7 +879,7 @@ bool scr_arr_has_key(const ScrArr *a, const ScrStr *key) {
   size_t index;
   if (scr_arr_string_index(key, &index) && scr_arr_has(a, (double)index)) return true;
   if (scr_arr_prop_index(a, key->data, key->len) != SIZE_MAX) return true;
-  if (a->metadata && scr_dyn_has_own(a->metadata, key)) return true;
+  if (SCR_AX(a)->metadata && scr_dyn_has_own(SCR_AX(a)->metadata, key)) return true;
   return scr_dyn_array_prototype_has_key(key);
 }
 

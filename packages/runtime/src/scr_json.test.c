@@ -554,8 +554,8 @@ static void array_key_presence(void) {
   ScrStr *nul = scr_str_new("map\0", 4);
   assert(!scr_arr_has_key(native, nul));
   scr_str_release(nul);
-  native->metadata = scr_dyn_new_obj();
-  scr_dyn_obj_set(native->metadata, "named", 5, scr_dyn_retain(scr_dyn_undefined()));
+  scr_arr_ext(native)->metadata = scr_dyn_new_obj();
+  scr_dyn_obj_set(scr_arr_ext(native)->metadata, "named", 5, scr_dyn_retain(scr_dyn_undefined()));
   assert(native_array_key(native, "named"));
 
   ScrDyn *checked = scr_dyn_new_arr();

@@ -5913,6 +5913,8 @@ void scr_dyn_key_set_computed(ScrDyn *recv, ScrDyn *key, ScrDyn *value) {
 void scr_jb_put_dyn(ScrJsonBuf *b, const ScrDyn *d) {
   if (d->kind == SCR_DYN_PROXY) { scr_dyn_proxy_unsupported("JSON.stringify"); return; }
   switch (d->kind) {
+  case SCR_DYN_PROXY:
+    return;
   case SCR_DYN_NULL:
   case SCR_DYN_UNDEF:
   case SCR_DYN_SYMBOL:
@@ -10321,7 +10323,6 @@ static void scr_dyn_is_frozen_unsupported(const ScrDyn *value) {
   const char *label = "value";
   if (value->kind == SCR_DYN_HANDLE) label = "handle";
   else if (value->kind == SCR_DYN_PROMISE) label = "promise";
-  else if (value->kind == SCR_DYN_JSVAL) label = "jsval";
   char message[96];
   int length = snprintf(message, sizeof message, "Object.isFrozen of this native %s has no lowering", label);
   if (length < 0) length = 0;
