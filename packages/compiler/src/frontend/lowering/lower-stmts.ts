@@ -3996,6 +3996,16 @@ function inferredEvolvingLetType(lowerer: Lowerer, decl: ts.VariableDeclaration)
           invalid = true;
           return "stop";
         }
+        // `pending = []` infers never[]. Mapping that placeholder to
+        // number[] makes a later string push throw "expected number".
+        // An empty literal carries no element type, so it is not a write
+        // this binding can specialize on.
+        if (
+          isEmptyArrayLiteral(node.right) &&
+          neverTaintedJsType(lowerer, node.right, lowerer.typeOf(node.right))
+        ) {
+          return undefined;
+        }
         const mapped = lowerer.mapTypeOf(lowerer.typeOf(node.right));
         if (!mapped || mapped.kind === "dyn" || mapped.kind === "void" || isUnitType(mapped)) {
           invalid = true;

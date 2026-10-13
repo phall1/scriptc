@@ -587,3 +587,30 @@ console.log(here() === process.cwd());
 test("a guarded process.cwd call matches Node", async () => {
   await matchesNode("cwd-fixture", cwdProbe, cwdProgram);
 });
+
+const pendingProbe = `
+export function makeParser() {
+  let pending;
+  function reset() {
+    pending = [];
+  }
+  function feed(chunk) {
+    pending.push(chunk.slice(0, 1));
+    const line = pending.length > 0 ? pending.join("") : "";
+    pending = [];
+    return line;
+  }
+  reset();
+  return { feed };
+}
+`;
+
+const pendingProgram = `
+import { makeParser } from "pending-fixture/probe.js";
+
+console.log(makeParser().feed("ab"));
+`;
+
+test("a let array assigned in a nested function accepts push and join", async () => {
+  await matchesNode("pending-fixture", pendingProbe, pendingProgram);
+});
