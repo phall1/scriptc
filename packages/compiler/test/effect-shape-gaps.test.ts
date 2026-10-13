@@ -518,3 +518,30 @@ console.log(await described(new Uint8Array([1, 2, 3])));
 test("new File records the name, type, time, and byte length", async () => {
   await matchesNode("file-fixture", fileProbe, fileProgram);
 });
+
+const replaceProbe = `
+export function words(input) {
+  const patterns = [/([a-z0-9])([A-Z])/g, /([A-Z])([A-Z][a-z])/g];
+  let result = input;
+  for (const regexp of patterns) result = result.replace(regexp, "$1 $2");
+  return result;
+}
+export function expand(text, parsed) {
+  return String(text).replace(parsed.token, () => parsed.value);
+}
+`;
+
+const replaceProgram = `
+import { expand, words } from "replace-fixture/probe.js";
+
+console.log(words("camelCase"));
+console.log(words("HTTPResponse"));
+console.log(expand("hello NAME", { token: "NAME", value: "world" }));
+console.log(expand("a.b", { token: ".", value: "X" }));
+console.log(expand("a.b", { token: /a\\.b/, value: "z" }));
+console.log(expand("n", { token: "n", value: 7 }));
+`;
+
+test("string replace accepts a RegExp search and a callback replacement", async () => {
+  await matchesNode("replace-fixture", replaceProbe, replaceProgram);
+});
