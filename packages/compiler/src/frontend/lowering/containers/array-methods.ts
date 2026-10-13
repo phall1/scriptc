@@ -745,6 +745,13 @@ export function lowerArrayMethodCall(
           loc,
         };
       }
+      // JavaScript leaves the spread untyped (`parts.push(...value.segments)`
+      // after a runtime brand check). The checker still allowed it. Validate
+      // the unknown value as this array and copy; a mismatch throws.
+      if (src.type.kind === "dyn" && isJsSourceFile(spreadArg.getSourceFile())) {
+        const checked = lowerer.coerceToExpected(src, receiverIr);
+        if (typeEquals(checked.type, receiverIr)) src = checked;
+      }
       if (!typeEquals(src.type, receiverIr)) {
         lowerer.unsupported(
           "SC1090",

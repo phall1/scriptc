@@ -4846,6 +4846,13 @@ export function lowerVarDecl(
   // writes. The empty record cannot hold those keys, so the local stays
   // the checked-dynamic object the writes mutate.
   if (openDynCarryingBinding(lowerer, decl, settledType, init.type)) settledType = DYN;
+  // `segments.push(helper)` where helper carries fields the array's record
+  // element never declared (`returningIdentifier`). A copy into that record
+  // drops them. Keep the array checked-dynamic so the object is stored whole.
+  if (npmStaticArrayKeepsPushedObjects(lowerer, decl, settledType)) {
+    settledType = DYN;
+    init = lowerer.lowerExprExpecting(decl.initializer, DYN);
+  }
   // Slot coercion: `const r: A | B = bValue;` wraps implicitly; width
   // subtyping (`const p: {a: number} = wider;`) is rejected, not coerced.
   // `[]` infers never[] and lowers as number[]. dynFrom of that array is a
@@ -5313,6 +5320,79 @@ function hybridCallableRecord(lowerer: Lowerer, type: IrType | null): boolean {
   if (type?.kind !== "record") return false;
   const call = lowerer.shapes.get(type.shapeId)?.fields.find((field) => field.name === "%call");
   return call?.type.kind === "func";
+}
+
+/** A package-JS array of records is later pushed an untyped value or spread.
+ * The record element cannot grow new fields, so the binding stays a
+ * checked-dynamic array and the pushed object keeps every property. */
+function npmStaticArrayKeepsPushedObjects(
+  lowerer: Lowerer,
+  decl: ts.VariableDeclaration,
+  type: IrType,
+): boolean {
+  if (!unannotatedNpmStaticIdentifier(decl) || !closedRecordArray(lowerer, type)) return false;
+  const symbol = lowerer.resolveValueSymbol(decl.name as ts.Identifier);
+  if (!symbol) return false;
+  const body = enclosingFunctionBody(decl);
+  return body !== undefined && functionPushesUntypedValue(lowerer, body, symbol);
+}
+
+function unannotatedNpmStaticIdentifier(decl: ts.VariableDeclaration): boolean {
+  return (
+    ts.isIdentifier(decl.name) &&
+    !decl.type &&
+    !hasJsTypeAnnotation(decl) &&
+    isJsSourceFile(decl.getSourceFile()) &&
+    npmStaticPackageOfPath(decl.getSourceFile().fileName) !== null
+  );
+}
+
+function closedRecordArray(lowerer: Lowerer, type: IrType): boolean {
+  if (type.kind !== "array" || type.elem.kind !== "record") return false;
+  const shape = lowerer.shapes.get(type.elem.shapeId);
+  return shape !== undefined && shape.indexValue === undefined && !shape.tuple;
+}
+
+function enclosingFunctionBody(decl: ts.VariableDeclaration): ts.Node | undefined {
+  let owner: ts.Node | undefined = decl.parent;
+  while (owner !== undefined && !ts.isFunctionLike(owner)) owner = owner.parent;
+  return owner !== undefined && ts.isFunctionLike(owner) ? owner.body : undefined;
+}
+
+function functionPushesUntypedValue(
+  lowerer: Lowerer,
+  body: ts.Node,
+  symbol: ts.Symbol,
+): boolean {
+  let found = false;
+  ts.walkPreorder(body, (node) => {
+    if (found) return "stop";
+    if (node !== body && ts.isFunctionLike(node)) return "skip";
+    if (!callPushesUntypedOnto(lowerer, node, symbol)) return undefined;
+    found = true;
+    return "stop";
+  });
+  return found;
+}
+
+function callPushesUntypedOnto(lowerer: Lowerer, node: ts.Node, symbol: ts.Symbol): boolean {
+  if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return false;
+  const method = node.expression.name.text;
+  if (method !== "push" && method !== "unshift") return false;
+  const receiver = unwrapParentheses(node.expression.expression);
+  if (!ts.isIdentifier(receiver) || lowerer.resolveValueSymbol(receiver) !== symbol) return false;
+  return node.arguments.some((arg) => argumentIsAnyOrUnknown(lowerer, arg));
+}
+
+function unwrapParentheses(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (ts.isParenthesizedExpression(current)) current = current.expression;
+  return current;
+}
+
+function argumentIsAnyOrUnknown(lowerer: Lowerer, arg: ts.Expression): boolean {
+  const value = ts.isSpreadElement(arg) ? arg.expression : arg;
+  return (lowerer.typeOf(value).flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0;
 }
 
 /** An unannotated binding whose value is already checked-dynamic and
