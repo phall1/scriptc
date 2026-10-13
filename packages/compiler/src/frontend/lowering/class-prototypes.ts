@@ -270,6 +270,16 @@ export function hasClassPrototypeData(info: ClassInfo): boolean {
   );
 }
 
+/** `extends factory()` records the factory's class as the static base, so
+ * two calls are siblings even when the second call's argument is the first
+ * class. The runtime prototype chain is the parent `instanceof` has to see. */
+export function runtimeClassHeritage(info: ClassInfo): boolean {
+  for (let current: ClassInfo | null = info; current; current = current.base) {
+    if (current.callableBase || current.factoryBaseExpression || current.localClass) return true;
+  }
+  return false;
+}
+
 /** Populate the shared prototype view before exposing it to reflection.
  * Methods and accessors are non-enumerable and retain declaration identity. */
 export function reflectClassPrototype(

@@ -200,7 +200,7 @@ import {
 import { recordTextCodecClass } from "../../ir/ir.js";
 import { classSymbolKeyOf } from "./symbol-fields.js";
 import { lowerClassMethodValue } from "./class-method-values.js";
-import { classInstanceOf } from "./class-dynamic-dispatch.js";
+import { callHeritageInstanceOf, classInstanceOf } from "./class-dynamic-dispatch.js";
 import { lowerGlobalValue } from "./lower-global-value.js";
 import { importMetaField, isImportMeta } from "./import-meta.js";
 import {
@@ -12301,7 +12301,10 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
         left.kind === "varRef" &&
         (ts.isIdentifier(expr.right) || expr.right.kind === ts.SyntaxKind.ThisKeyword)
       ) {
-        return { kind: "boolLit", value, type: BOOL, loc };
+        if (value) return { kind: "boolLit", value: true, type: BOOL, loc };
+        const walked = callHeritageInstanceOf(lowerer, left, targetInfo, loc);
+        if (walked) return walked;
+        return { kind: "boolLit", value: false, type: BOOL, loc };
       }
       lowerer.unsupported(
         "SC1090",
@@ -12494,7 +12497,10 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
     left.type.className === target.def.name ||
     lowerer.isSubclassOf(left.type.className, target.def.name);
   if (left.kind === "varRef") {
-    return { kind: "boolLit", value, type: BOOL, loc };
+    if (value) return { kind: "boolLit", value: true, type: BOOL, loc };
+    const walked = callHeritageInstanceOf(lowerer, left, target, loc);
+    if (walked) return walked;
+    return { kind: "boolLit", value: false, type: BOOL, loc };
   }
   lowerer.unsupported(
     "SC1090",

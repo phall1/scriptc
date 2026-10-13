@@ -39,6 +39,7 @@ import {
   classPrototypeData,
   hasClassPrototypeData,
   reflectClassPrototype,
+  runtimeClassHeritage,
 } from "./class-prototypes.js";
 import {
   errorDynamicPropertyWrite,
@@ -248,6 +249,21 @@ export function classInstanceOf(
     type: BOOL,
     loc,
   };
+}
+
+/** Static `instanceof` treats two `extends factory()` results as siblings.
+ * The existing dynamic walk compares prototype identity, which is the link
+ * the factory actually installs. */
+export function callHeritageInstanceOf(
+  lowerer: Lowerer,
+  value: IrExpr,
+  target: ClassInfo,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (value.type.kind !== "object") return null;
+  const lhs = lowerer.classes.get(value.type.className);
+  if (!lhs || (!runtimeClassHeritage(lhs) && !runtimeClassHeritage(target))) return null;
+  return classInstanceOf(lowerer, lowerer.coerceToExpected(value, DYN), target, loc);
 }
 
 const READ_PROPERTIES = "%dyn.class.readProperties";
