@@ -303,3 +303,85 @@ console.log(isBlob({ a: 1 }));
 test("empty FormData append and entries match Node", async () => {
   await matchesNode("form-data-fixture", formProbe, formProgram);
 });
+
+const searchProgram = `
+console.log("a.b".search("."));
+console.log("abc".search("b"));
+console.log("abc".search(/b/));
+let bad = "no";
+try {
+  "a".search("[");
+} catch (e) {
+  bad = e instanceof SyntaxError ? "syntax" : "other";
+}
+console.log(bad);
+`;
+
+test("String.prototype.search compiles a string pattern as a RegExp", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-string-search-"));
+  const entry = join(directory, "main.ts");
+  const binary = join(directory, "main");
+  writeFileSync(entry, searchProgram);
+  try {
+    const coverage = analyze(entry);
+    const fences = [...coverage.coverage.diagnostics, ...(coverage.coverage.runtimeFences ?? [])];
+    expect(fences, JSON.stringify(fences)).toEqual([]);
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, ["--experimental-strip-types", entry], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+const headerSearchProbe = `
+export function dot(value) {
+  return value.search(".");
+}
+export function hit(self, key) {
+  const found = [];
+  const modify = (key) => {
+    if (typeof key === "string") {
+      if (key in self) found.push("s:" + key);
+    } else {
+      for (const name of Object.keys(self)) {
+        if (name.search(key) !== -1) found.push("r:" + name);
+      }
+    }
+  };
+  if (Array.isArray(key)) {
+    for (let i = 0; i < key.length; i++) modify(key[i]);
+  } else modify(key);
+  return found.join(",");
+}
+`;
+
+const headerSearchProgram = `
+import { dot, hit } from "header-search-fixture/probe.js";
+
+const headers = { authorization: "1", "content-type": "2" };
+console.log(dot("a.b"));
+console.log(dot("abc"));
+console.log(hit(headers, /auth/));
+console.log(hit(headers, "content-type"));
+console.log(hit(headers, ["content-type", /auth/]));
+console.log(hit(headers, /nope/));
+`;
+
+test("header name search matches Node for strings and regular expressions", async () => {
+  await matchesNode("header-search-fixture", headerSearchProbe, headerSearchProgram);
+});

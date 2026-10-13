@@ -2594,10 +2594,11 @@ export function stdlibMemberFence(lowerer: Lowerer, access: ts.PropertyAccessExp
     hint =
       "call the function directly — plain and arrow functions here never read `this`, so " +
       "f.call(thisArg, ...args) is f(...args), and bind's partial application is an arrow: (...rest) => f(a, ...rest)";
-  } else if (
-    recvIr?.kind === "string" &&
-    (member === "match" || member === "matchAll" || member === "search")
-  ) {
+  } else if (recvIr?.kind === "string" && member === "search") {
+    hint =
+      "string and RegExp arguments lower (a string is compiled as a RegExp, so '.' matches " +
+      "any character); an object with a custom @@search method has no lowering";
+  } else if (recvIr?.kind === "string" && (member === "match" || member === "matchAll")) {
     hint =
       "the regex-LITERAL argument forms lower (s.match(/re/)); a string pattern constructs " +
       "a RegExp at runtime, which has no lowering";

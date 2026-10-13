@@ -33,6 +33,65 @@ import {
   positionNumber,
 } from "../optional-arguments.js";
 
+/** String.prototype.search accepts a RegExp, or any value RegExpCreate can
+ * compile: a string is the pattern, and other primitives are ToString'd.
+ * Objects with a custom @@search stay fenced. */
+function searchPatternType(lowerer: Lowerer, type: IrType): boolean {
+  switch (type.kind) {
+    case "regex":
+    case "string":
+    case "dyn":
+    case "f64":
+    case "bool":
+    case "bigint":
+    case "nullT":
+    case "undefinedT":
+      return true;
+    case "union": {
+      const arms = lowerer.unions.get(type.unionId)?.arms ?? [];
+      return arms.length > 0 && arms.every((arm) => searchPatternType(lowerer, arm));
+    }
+    default:
+      return false;
+  }
+}
+
+/** Checker `any` hides a specialized local. Prefer that stored type, then
+ * the checker type, so `name.search(key)` sees a RegExp or a string. */
+function predictedSearchPattern(lowerer: Lowerer, arg: ts.Expression): boolean {
+  const stored = ts.isIdentifier(arg)
+    ? (lowerer.peekLocal(arg)?.type ?? lowerer.globalOf(arg)?.type)
+    : undefined;
+  if (stored && searchPatternType(lowerer, stored)) return true;
+  const mapped = lowerer.mapTypeOf(lowerer.typeOf(arg));
+  return mapped !== null && mapped !== undefined && searchPatternType(lowerer, mapped);
+}
+
+/** Build the RegExp String.prototype.search will execute. A string uses
+ * `regex.new` with empty flags; every other accepted value goes through
+ * `regex.newChecked`, which copies a native RegExp and ToStrings the rest.
+ * Undefined becomes the empty pattern, matching RegExpCreate. */
+function compileSearchPattern(lowerer: Lowerer, value: IrExpr, loc: SrcLoc): IrExpr {
+  if (value.type.kind === "regex") return value;
+  if (value.type.kind === "string") {
+    return {
+      kind: "libCall",
+      fn: "regex.new",
+      args: [value, strLit("", loc)],
+      type: { kind: "regex" },
+      loc,
+    };
+  }
+  const boxed = value.type.kind === "dyn" ? value : lowerer.coerceToExpected(value, DYN);
+  return {
+    kind: "libCall",
+    fn: "regex.newChecked",
+    args: [boxed, dynUndefinedExpr(loc)],
+    type: { kind: "regex" },
+    loc,
+  };
+}
+
 function lowerSplitLimitArg(
   lowerer: Lowerer,
   node: ts.Expression | undefined,
@@ -959,13 +1018,15 @@ export function lowerRegexMethodCall(
   // `s.search(re)` — the first match's UTF-16 index, or -1. No g/y fence
   // (unlike test/match): Symbol.search neither reads nor writes lastIndex
   // — a fresh exec from position 0, so /g is irrelevant and /y anchors at
-  // 0, exactly Node. Never throws.
+  // 0, exactly Node. A string pattern is compiled as `new RegExp(pattern)`
+  // (so "." matches any character); a RegExp argument is used as-is.
+  // Never throws on a match, but an invalid pattern throws SyntaxError.
   if (receiverKind === "string" && name === "search") {
     const arg0 = call.arguments[0];
-    if (!arg0 || lowerer.mapTypeOf(lowerer.typeOf(arg0))?.kind !== "regex") return null; // string-pattern form: the SC2020 fence
-    if (call.arguments.length !== 1) return null;
+    if (!arg0 || call.arguments.length !== 1 || ts.isSpreadElement(arg0)) return null;
+    if (!predictedSearchPattern(lowerer, arg0)) return null;
     const receiver = lowerReceiver();
-    const re = lowerer.lowerExprExpecting(arg0, { kind: "regex" });
+    const re = compileSearchPattern(lowerer, lowerer.lowerExpr(arg0), loc);
     return { kind: "regexIntrinsic", method: "search", receiver, args: [re], type: F64, loc };
   }
   if (
