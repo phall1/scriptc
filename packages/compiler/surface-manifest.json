@@ -2816,6 +2816,13 @@
       "note": "ignores its key; null when the time is not finite, otherwise the same UTC text as toISOString()"
     },
     {
+      "id": "stdlib.date.toUTCString",
+      "kind": "stdlib",
+      "name": "Date.prototype.toUTCString",
+      "status": "static",
+      "note": "RFC 7231 UTC formatting; invalid dates answer Invalid Date"
+    },
+    {
       "id": "stdlib.date.valueOf",
       "kind": "stdlib",
       "name": "Date.prototype.valueOf",

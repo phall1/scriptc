@@ -80,6 +80,44 @@ async function matchesNode(name: string, probe: string, program: string): Promis
   }
 }
 
+const utcStringProgram = `
+for (const ms of [0, -1, Date.UTC(2026, 9, 13, 12, 5, 6), 1.9, NaN, 8.64e15, 8.64e15 + 1]) {
+  const date = new Date(ms);
+  console.log(date.toUTCString());
+}
+`;
+
+test("Date toUTCString matches Node, including invalid dates", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-date-utc-"));
+  const entry = join(directory, "main.ts");
+  const binary = join(directory, "main");
+  writeFileSync(entry, utcStringProgram);
+  try {
+    const coverage = analyze(entry);
+    const fences = [...coverage.coverage.diagnostics, ...(coverage.coverage.runtimeFences ?? [])];
+    expect(fences, JSON.stringify(fences)).toEqual([]);
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, ["--experimental-strip-types", entry], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("Date toJSON matches Node for valid and invalid dates", async () => {
   const directory = mkdtempSync(join(tmpdir(), "scriptc-date-json-"));
   const entry = join(directory, "main.ts");
@@ -721,4 +759,26 @@ console.log(wrap(optional, "c", 0));
 
 test("an optional callback runs only after a truthy check", async () => {
   await matchesNode("savepoint-fixture", savepointProbe, savepointProgram);
+});
+
+const mathSpreadProbe = `
+export function widest(rows) {
+  return Math.max(...rows.map((row) => row.width));
+}
+export function narrowest(rows) {
+  return Math.min(...rows);
+}
+`;
+
+const mathSpreadProgram = `
+import { narrowest, widest } from "math-spread-fixture/probe.js";
+
+console.log(widest([{ width: 1 }, { width: 8 }, { width: 3 }]));
+console.log(widest([]));
+console.log(narrowest(["2", "10", "4"]));
+console.log(narrowest("12"));
+`;
+
+test("Math.max and Math.min spread unknown iterables", async () => {
+  await matchesNode("math-spread-fixture", mathSpreadProbe, mathSpreadProgram);
 });

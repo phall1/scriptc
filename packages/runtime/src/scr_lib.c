@@ -7075,6 +7075,44 @@ ScrStr *scr_date_to_iso(double ms) {
   return scr_str_new(buf, (size_t)len);
 }
 
+/* Node's Date.prototype.toUTCString: "Thu, 01 Jan 1970 00:00:00 GMT".
+ * NaN and out-of-range times answer "Invalid Date" and do not throw.
+ * Years pad to four digits inside ±9999; wider years print in full. */
+ScrStr *scr_date_to_utc(double ms) {
+  static const char *WEEKDAY[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+  static const char *MONTH[] = {
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  if (!(fabs(ms) <= 8640000000000000.0)) return scr_str_new("Invalid Date", 12);
+  double t = trunc(ms);
+  double dayd = floor(t / 86400000.0);
+  long long msday = (long long)(t - dayd * 86400000.0);
+  long long z = (long long)dayd + 719468;
+  long long era = (z >= 0 ? z : z - 146096) / 146097;
+  unsigned long long doe = (unsigned long long)(z - era * 146097);
+  unsigned long long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  long long y = (long long)yoe + era * 400;
+  unsigned long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  unsigned long long mp = (5 * doy + 2) / 153;
+  unsigned long long d = doy - (153 * mp + 2) / 5 + 1;
+  unsigned long long m = mp < 10 ? mp + 3 : mp - 9;
+  if (m <= 2) y += 1;
+  int hh = (int)(msday / 3600000), mi = (int)(msday / 60000 % 60), ss = (int)(msday / 1000 % 60);
+  long long days = (long long)dayd;
+  long long weekday = (4 + days) % 7;
+  if (weekday < 0) weekday += 7;
+  char year[24];
+  if (y < 0) {
+    long long ay = -y;
+    snprintf(year, sizeof year, ay < 10000 ? "-%04lld" : "-%lld", ay);
+  } else {
+    snprintf(year, sizeof year, y < 10000 ? "%04lld" : "%lld", y);
+  }
+  char buf[64];
+  int len = snprintf(buf, sizeof buf, "%s, %02llu %s %s %02d:%02d:%02d GMT", WEEKDAY[weekday], d,
+      MONTH[m - 1], year, hh, mi, ss);
+  return scr_str_new(buf, (size_t)len);
+}
+
 /* ── new Date(dateString).getTime() ──────────────────────────────────────
  *
  * The BOUNDED date-string parse (documented divergence — V8's parser
@@ -8273,6 +8311,12 @@ static ScrDyn *scr_native_date_invoke(void *ptr, ScrDyn *self, const char *metho
     if (!strcmp(method, "toJSON") && !isfinite(ms)) return scr_dyn_new_null();
     ScrStr *text = scr_date_to_iso(ms);
     if (!text) return NULL;
+    ScrDyn *result = scr_dyn_new_str(text);
+    scr_str_release(text);
+    return result;
+  }
+  if (!strcmp(method, "toUTCString") || !strcmp(method, "toGMTString")) {
+    ScrStr *text = scr_date_to_utc(ms);
     ScrDyn *result = scr_dyn_new_str(text);
     scr_str_release(text);
     return result;

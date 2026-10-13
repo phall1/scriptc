@@ -1,4 +1,5 @@
-import { dynUndefinedExpr, nodeThrowExpr } from "../../ir/build.js";
+import { dynUndefinedExpr, nodeThrowExpr, numLit, strLit, varRef } from "../../ir/build.js";
+import { checkedIterableSpread } from "./checked-iterable-spread.js";
 import { InternalCompilerError } from "../../errors.js";
 
 import * as ts from "../ts7/adapter.js";
@@ -13,6 +14,7 @@ import {
   type IrExpr,
   type IrStmt,
   type IrType,
+  type SrcLoc,
   STRING,
   VOID,
   canConvertToDyn,
@@ -2361,6 +2363,10 @@ export function lowerStdlibMethodCall(
         src = lowerer.coerceInto(spread.expression, src, inferred);
       }
     }
+    if (src.type.kind === "dyn" || lowerer.dynConvertible(src.type)) {
+      const dynSrc = src.type.kind === "dyn" ? src : lowerer.coerceToExpected(src, DYN);
+      return lowerDynMathSpread(lowerer, name, dynSrc, spread.expression.getText(), loc);
+    }
     if (src.type.kind !== "array" || src.type.elem.kind !== "f64") {
       lowerer.unsupported(
         "SC1090",
@@ -2390,6 +2396,97 @@ export function lowerStdlibMethodCall(
   if (!entry || call.arguments.length !== entry.args.length) return null;
   if (!lowerer.isStdlibMember(access)) return null;
   lowerer.refuseUnsupportedApi(`'.${name}()' on ${kind === "f64" ? "numbers" : "strings"}`, call);
+}
+
+/** `Math.max(...unknown)` / `Math.min(...unknown)` follows the iterator,
+ * then ToNumber, then the scalar fold. An empty spread keeps the seed
+ * (-Infinity for max, +Infinity for min). */
+function lowerDynMathSpread(
+  lowerer: Lowerer,
+  name: "max" | "min",
+  source: IrExpr,
+  spelling: string,
+  loc: SrcLoc,
+): IrExpr {
+  const items = checkedIterableSpread(lowerer, source, spelling, loc);
+  const srcLocal = lowerer.declareHiddenLocal("%mathSrc", DYN);
+  const lenLocal = lowerer.declareHiddenLocal("%mathLen", F64);
+  const indexLocal = lowerer.declareHiddenLocal("%mathIndex", F64);
+  const accLocal = lowerer.declareHiddenLocal("%mathAcc", F64);
+  indexLocal.mutable = true;
+  accLocal.mutable = true;
+  const src = varRef(srcLocal.id, DYN, loc);
+  const len = varRef(lenLocal.id, F64, loc);
+  const index = varRef(indexLocal.id, F64, loc);
+  const acc = varRef(accLocal.id, F64, loc);
+  const element: IrExpr = {
+    kind: "libCall",
+    fn: "dyn.toNumberCoerce",
+    args: [
+      {
+        kind: "dynKeyGet",
+        value: src,
+        key: { kind: "toString", operand: index, type: STRING, loc },
+        type: DYN,
+        loc,
+      },
+    ],
+    type: F64,
+    loc,
+  };
+  const loop: IrStmt = {
+    kind: "while",
+    cond: { kind: "bin", op: "<", left: index, right: len, type: BOOL, loc },
+    body: [
+      {
+        kind: "assign",
+        localId: accLocal.id,
+        value: {
+          kind: "libCall",
+          fn: name === "max" ? "math.max" : "math.min",
+          args: [acc, element],
+          type: F64,
+          loc,
+        },
+        loc,
+      },
+      {
+        kind: "assign",
+        localId: indexLocal.id,
+        value: { kind: "bin", op: "+", left: index, right: numLit(1, loc), type: F64, loc },
+        loc,
+      },
+    ],
+    loc,
+  };
+  return {
+    kind: "seqExpr",
+    stmts: [
+      { kind: "varDecl", localId: srcLocal.id, init: items, loc },
+      {
+        kind: "varDecl",
+        localId: lenLocal.id,
+        init: {
+          kind: "dynCheck",
+          value: { kind: "dynKeyGet", value: src, key: strLit("length", loc), type: DYN, loc },
+          type: F64,
+          loc,
+        },
+        loc,
+      },
+      { kind: "varDecl", localId: indexLocal.id, init: numLit(0, loc), loc },
+      {
+        kind: "varDecl",
+        localId: accLocal.id,
+        init: numLit(name === "max" ? -Infinity : Infinity, loc),
+        loc,
+      },
+      loop,
+    ],
+    result: acc,
+    type: F64,
+    loc,
+  };
 }
 
 export function lowerMathProperty(

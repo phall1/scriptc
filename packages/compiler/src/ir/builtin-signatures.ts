@@ -3274,6 +3274,9 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "date.valueOf": { argTypes: [DATE_T], result: F64 },
   "date.toISOString": { argTypes: [F64], result: STRING },
   "date.toISOStringValue": { argTypes: [DATE_T], result: STRING },
+  /** Date.prototype.toUTCString / toGMTString. Never throws: NaN and
+   * out-of-range times answer "Invalid Date". */
+  "date.toUTCStringValue": { argTypes: [DATE_T], result: STRING },
   "date.getFullYear": { argTypes: [DATE_T], result: F64 },
   "date.getUTCFullYear": { argTypes: [DATE_T], result: F64 },
   "date.getMonth": { argTypes: [DATE_T], result: F64 },

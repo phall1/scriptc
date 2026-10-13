@@ -6002,6 +6002,9 @@ double scr_date_get_time(double ms);
  * 0–9999). THROWS Node's "Invalid time value" RangeError on NaN or
  * |ms| > 8.64e15 and returns NULL; +1 otherwise. */
 ScrStr *scr_date_to_iso(double ms);
+/* Node's Date.prototype.toUTCString ("Thu, 01 Jan 1970 00:00:00 GMT").
+ * NaN and out-of-range times answer "Invalid Date" and never throw. +1. */
+ScrStr *scr_date_to_utc(double ms);
 /* new Date(dateString).getTime(): the BOUNDED parse (the X509 validity
  * shape + ECMA's format with an explicit offset); NaN elsewhere. */
 double scr_date_parse_get_time(ScrStr *s);
