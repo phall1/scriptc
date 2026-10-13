@@ -847,6 +847,11 @@ export class CheckerFacade {
     return this.intrinsic("number", () => this.raw.getNumberType());
   }
 
+  getBigIntType(): Type {
+    this.ensureActive();
+    return this.intrinsic("bigint", () => this.raw.getBigIntType());
+  }
+
   getBooleanType(): Type {
     this.ensureActive();
     return this.intrinsic("boolean", () => this.raw.getBooleanType());

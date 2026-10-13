@@ -95,3 +95,65 @@ test("untyped JS bigint arithmetic and string search match Node", async () => {
     rmSync(directory, { recursive: true, force: true });
   }
 }, 180_000);
+
+// Effect's BigInt.lcm feeds `self * that / gcd(...)` to an untyped abs.
+// TypeScript types that arithmetic as number; the value is a bigint.
+const lcmSource = `const bigint0 = BigInt(0);
+const abs = n => n < bigint0 ? -n : n;
+function dual2(body) {
+  return function (a, b) {
+    if (arguments.length >= 2) return body(a, b);
+    return function (self) { return body(self, a); };
+  };
+}
+const gcd = dual2((self, that) => {
+  while (that !== bigint0) {
+    const t = that;
+    that = self % that;
+    self = t;
+  }
+  return abs(self);
+});
+const lcm = dual2((self, that) => self === bigint0 || that === bigint0 ? bigint0 : abs(self * that / gcd(self, that)));
+export function run(a, b) {
+  const prod = a * b;
+  const quot = prod / gcd(a, b);
+  return [String(abs(quot)), String(lcm(a, b)), String(lcm(b)(a))];
+}
+`;
+
+const lcmEntry = `import { run } from "widgets/lcm.js";
+console.log(JSON.stringify(run(2n, 4n)));
+console.log(JSON.stringify(run(-2n, 4n)));
+console.log(JSON.stringify(run(0n, 4n)));
+`;
+
+test("untyped abs of bigint arithmetic matches Node", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-js-bigint-lcm-"));
+  const pkg = join(directory, "node_modules", "widgets");
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "widgets", version: "0.0.0" }));
+  writeFileSync(join(pkg, "lcm.js"), lcmSource);
+  const entry = join(directory, "main.ts");
+  const binary = join(directory, "main");
+  writeFileSync(entry, lcmEntry);
+  try {
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+      npmStatic: ["widgets"],
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, [entry], { encoding: "utf8", timeout: 30_000 });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 180_000);

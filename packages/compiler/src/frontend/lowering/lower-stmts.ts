@@ -4855,9 +4855,11 @@ export function lowerVarDecl(
     settledType = DYN;
     init = lowerer.lowerExprExpecting(decl.initializer, DYN);
   }
-  // `let quotient = num / den` infers number. The value is a bigint when
-  // both operands are, and this function later multiplies by one.
-  if (jsInferredNumberKeepsBigint(lowerer, decl, settledType, init)) {
+  // `const prod = a * b` infers number. Both operands are already bigints,
+  // so the local is that bigint, not a number check.
+  if (jsStaticBigintBinding(decl, settledType, init)) {
+    settledType = init.type;
+  } else if (jsInferredNumberKeepsBigint(lowerer, decl, settledType, init)) {
     settledType = DYN;
     const symbol = lowerer.resolveValueSymbol(decl.name as ts.Identifier);
     if (symbol) lowerer.jsBigintArithmeticSymbols.add(symbol);
@@ -5382,6 +5384,24 @@ const BIGINT_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.PercentEqualsToken,
   ts.SyntaxKind.AsteriskAsteriskEqualsToken,
 ]);
+
+/** `const prod = a * b` when `a` and `b` are bigints. The checker still
+ * says number, because the parameters were implicit `any`. */
+function jsStaticBigintBinding(
+  decl: ts.VariableDeclaration,
+  settled: IrType,
+  init: IrExpr,
+): boolean {
+  return settled.kind === "f64" && init.type.kind === "bigint" && unannotatedJsIdentifier(decl);
+}
+
+/** True when `expr`'s enclosing function combines a value with a bigint. */
+export function jsEnclosingFunctionMentionsBigint(lowerer: Lowerer, expr: ts.Expression): boolean {
+  let owner: ts.Node | undefined = expr.parent;
+  while (owner !== undefined && !ts.isFunctionLike(owner)) owner = owner.parent;
+  if (owner === undefined || !ts.isFunctionLike(owner) || owner.body === undefined) return false;
+  return functionMentionsBigint(lowerer, owner.body);
+}
 
 /** The checker called this binding a number, but its value is dyn and the
  * function combines it with a bigint. Keep the dyn value. */

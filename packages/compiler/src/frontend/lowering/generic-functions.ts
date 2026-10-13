@@ -23,7 +23,7 @@ import { nsPathPrefix } from "./lower-namespaces.js";
 import { declSymbolOf } from "./lower-modules.js";
 import { npmStaticPackageOfPath } from "../npm-static.js";
 import { rejectStaticThis } from "./static-this.js";
-import { jsBindingHasOpenWrites } from "./lower-stmts.js";
+import { jsBindingHasOpenWrites, jsEnclosingFunctionMentionsBigint } from "./lower-stmts.js";
 import {
   type ParamShape,
   paramShapes,
@@ -1522,12 +1522,45 @@ function jsPrefixMinusStaysDynamic(lowerer: Lowerer, arg: ts.Expression): IrType
   return DYN;
 }
 
+const JS_ARITHMETIC: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.PlusToken,
+  ts.SyntaxKind.MinusToken,
+  ts.SyntaxKind.AsteriskToken,
+  ts.SyntaxKind.SlashToken,
+  ts.SyntaxKind.PercentToken,
+  ts.SyntaxKind.AsteriskAsteriskToken,
+]);
+
+/** TypeScript types `any` arithmetic as `number`. A bigint operand stays a
+ * bigint, so the implicit parameter must take that represented value. */
+function jsArithmeticStaysWide(lowerer: Lowerer, arg: ts.Expression): IrType | null {
+  if (!isJsSourceFile(arg.getSourceFile()) || !ts.isBinaryExpression(arg)) return null;
+  if (!JS_ARITHMETIC.has(arg.operatorToken.kind)) return null;
+  const represented = tryLowerExpression(lowerer, arg);
+  if (represented?.type.kind === "bigint") return represented.type;
+  // `self * that` inside `dual` stays checked-dynamic: `arguments.length`
+  // keeps the parameters from specializing to bigint. The checker still
+  // types the product as number, and a number check throws on a bigint.
+  if (represented?.type.kind !== "dyn") return null;
+  if (!jsEnclosingFunctionMentionsBigint(lowerer, arg)) return null;
+  return DYN;
+}
+
+/** The checker types that arithmetic as `number`. The represented value is
+ * already a bigint, and checking it into `f64` throws. */
+function representedBigintBeatsNumber(stored: IrType | null, mapped: IrType | null): IrType | null {
+  if (stored?.kind !== "bigint" || mapped?.kind !== "f64") return null;
+  return stored;
+}
+
 /** A represented binding or direct callable result can be wider than the
  * checker's inferred shape. Preserve that boundary when specializing JS. */
 function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrType | null {
   while (ts.isParenthesizedExpression(arg)) arg = arg.expression;
   const prefixMinus = jsPrefixMinusStaysDynamic(lowerer, arg);
   if (prefixMinus) return prefixMinus;
+  const arithmetic = jsArithmeticStaysWide(lowerer, arg);
+  if (arithmetic) return arithmetic;
   if (
     isJsSourceFile(arg.getSourceFile()) &&
     (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg))
@@ -1763,9 +1796,15 @@ export function implicitCallInstance(
       } else if (mapped?.kind === "dyn") {
         bound = DYN;
         argTypes.set(sym, t);
-      } else if (bindableImplicitIr(mapped)) {
-        bound = mapped;
-        argTypes.set(sym, t);
+      } else {
+        const asBigint = representedBigintBeatsNumber(stored, mapped);
+        if (asBigint) {
+          bound = asBigint;
+          argTypes.set(sym, lowerer.checker.getBigIntType());
+        } else if (bindableImplicitIr(mapped)) {
+          bound = mapped;
+          argTypes.set(sym, t);
+        }
       }
     }
     shapes.push({ type: bound, mode: "required" });
