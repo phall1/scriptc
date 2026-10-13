@@ -385,3 +385,37 @@ console.log(hit(headers, /nope/));
 test("header name search matches Node for strings and regular expressions", async () => {
   await matchesNode("header-search-fixture", headerSearchProbe, headerSearchProgram);
 });
+
+const cookieProbe = `
+export function attribute(part) {
+  const equalIndex = part.indexOf("=");
+  const key = equalIndex === -1 ? part : part.slice(0, equalIndex);
+  const value = equalIndex === -1 ? undefined : part.slice(equalIndex + 1).trim();
+  if (value === undefined) return key.toLowerCase() + ":missing";
+  return key.toLowerCase() + ":" + value.trim().replace(/^\\./, "").toLowerCase();
+}
+export function maybeTrim(flag, text) {
+  const value = flag ? text : undefined;
+  return value.trim();
+}
+`;
+
+const cookieProgram = `
+import { attribute, maybeTrim } from "cookie-trim-fixture/probe.js";
+
+console.log(attribute("Domain=.Example.COM"));
+console.log(attribute("Secure"));
+console.log(attribute("SameSite=Lax"));
+console.log(maybeTrim(true, " Ab "));
+let threw = "no";
+try {
+  maybeTrim(false, "x");
+} catch (e) {
+  threw = e instanceof Error ? e.message : "other";
+}
+console.log(threw);
+`;
+
+test("nullable string trim and toLowerCase match Node", async () => {
+  await matchesNode("cookie-trim-fixture", cookieProbe, cookieProgram);
+});

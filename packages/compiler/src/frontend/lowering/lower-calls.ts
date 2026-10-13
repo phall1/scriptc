@@ -76,6 +76,7 @@ import { lowerTupleReadMethodCall } from "./containers/array-methods.js";
 import { tryFuseIndexRead } from "./array-values.js";
 import { lowerBytesStaticCall } from "./containers/bytes.js";
 import {
+  lowerNullableStringReceiver,
   lowerRegexMethodCall,
   lowerStringIndexCall,
   lowerStringMethodCall,
@@ -3356,13 +3357,17 @@ function lowerDynReceiverMethodCall(
   // A checker-`any` receiver that already lowered to a real STRING (the
   // chained form — `cfg.host.trim().toLowerCase()`, where the first step
   // extracted): no validation needed, ride the string tables directly.
-  if (recv.type.kind === "union" && lowerer.stripUndefinedArm(recv.type).kind === "string") {
-    const present = lowerer.runtimeOptionalPropertyReceiver(
-      access.expression,
-      recv,
-      STRING,
-      access.name.text,
-    );
+  // `string | undefined` is the same story after `value === undefined`
+  // does not update the stored local: nullish arms throw Node's
+  // property-read TypeError, and the string arm uses the string tables.
+  if (recv.type.kind === "union") {
+    const present =
+      lowerer.runtimeOptionalPropertyReceiver(
+        access.expression,
+        recv,
+        STRING,
+        access.name.text,
+      ) ?? lowerNullableStringReceiver(lowerer, recv, access.name.text, locOf(call));
     if (present) recv = present;
   }
   if (recv.type.kind === "string") {

@@ -377,7 +377,7 @@ function nullableStringStdlibMember(
 /** `string | null | undefined` receiver of a string method. Nullish arms
  * throw Node's property-read TypeError before the call; the string arm is
  * what the intrinsic sees. */
-function lowerNullableStringReceiver(
+export function lowerNullableStringReceiver(
   lowerer: Lowerer,
   value: IrExpr,
   member: string,
