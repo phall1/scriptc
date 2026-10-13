@@ -4509,6 +4509,26 @@ ScrStr *scr_dyn_object_tag(const ScrDyn *d) {
   return scr_str_new(tag, strlen(tag));
 }
 
+/* Collections and buffers whose Node instances have no enumerable own
+ * properties. JSON.stringify answers "{}" for each of them. Date and URL
+ * stay out: they have toJSON, and the replacer walk invokes that first.
+ * Other handles still fence — this runtime does not model their
+ * enumerable properties. */
+static bool scr_json_handle_stringifies_empty(ScrDynHandleTag tag) {
+  switch (tag) {
+  case SCR_DYNH_REGEXP:
+  case SCR_DYNH_SET:
+  case SCR_DYNH_MAP:
+  case SCR_DYNH_WEAK_SET:
+  case SCR_DYNH_WEAK_MAP:
+  case SCR_DYNH_ARRAY_BUFFER:
+  case SCR_DYNH_SHARED_ARRAY_BUFFER:
+    return true;
+  default:
+    return false;
+  }
+}
+
 /* ── JSON.stringify over a dyn value (util.format's %j) ───────────────
  * The RUNTIME walk the type-directed serializers deliberately avoid for
  * static values — a dyn value has no static type, so the checked-dynamic tree's own kinds
@@ -4516,8 +4536,9 @@ ScrStr *scr_dyn_object_tag(const ScrDyn *d) {
  * indices ascending, then other strings in insertion order) with undefined/function
  * members OMITTED, arrays rendering those as null, Buffer's toJSON shape
  * ({"type":"Buffer","data":[...]}), shortest-roundtrip numbers, escaped
- * strings. HANDLE values fence loudly (Node walks own enumerable props
- * this runtime does not model). Returns false when the VALUE ITSELF is
+ * strings. Handles with no enumerable own properties stringify as "{}".
+ * The rest fence loudly (Node walks own enumerable props this runtime
+ * does not model). Returns false when the VALUE ITSELF is
  * absent under stringify (root undefined/function — %j prints
  * "undefined" there, Node's tryStringify tail). */
 static bool scr_dyn_json_write(ScrJsonBuf *b, const ScrDyn *d) {
@@ -4615,8 +4636,7 @@ static bool scr_dyn_json_write(ScrJsonBuf *b, const ScrDyn *d) {
     return present;
   }
   case SCR_DYN_HANDLE:
-    /* RegExp has no enumerable own properties, so Node answers "{}". */
-    if (d->v.handle.tag == SCR_DYNH_REGEXP) {
+    if (scr_json_handle_stringifies_empty(d->v.handle.tag)) {
       scr_jb_puts(b, "{}");
       return true;
     }
