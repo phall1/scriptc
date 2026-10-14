@@ -5,7 +5,8 @@ import { type IrExpr, type IrType, isRefCounted, type SrcLoc, typeEquals } from 
 import { LlvmUnsupportedError } from "./unsupported.js";
 import type { LlvmEmitterContext, LlValue } from "./expr-context.js";
 import { f64Lit, llvmCommentText } from "./common.js";
-import { emitBorrowedInputs, emitBorrowedInput } from "./borrowed-inputs.js";
+import { borrowableInputs, emitBorrowedInputs, emitBorrowedInput } from "./borrowed-inputs.js";
+import { regexLiteralTemplate } from "./expr-primitives.js";
 import { preservesRegexInputs } from "./reference-effects.js";
 
 /** Widen one tagged read. The source is borrowed unless the overflow map
@@ -128,6 +129,26 @@ function rebuildRetype(
   return result;
 }
 
+/** The matching operations whose args[0] is the regex they consume. */
+function directRegexOperandMethod(method: string): boolean {
+  switch (method) {
+    case "exec":
+    case "execGroups":
+    case "execSpans":
+    case "matchGroups":
+    case "match":
+    case "search":
+    case "matchAll":
+    case "matchAllInto":
+    case "replace":
+    case "replaceAll":
+    case "split":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export function emitRegexIntrinsic(
   host: LlvmEmitterContext,
   e: IrExpr & { kind: "regexIntrinsic" },
@@ -135,11 +156,38 @@ export function emitRegexIntrinsic(
   const B = host.B;
   const method = e.method;
   const inputs = [e.receiver, ...e.args];
-  const values = preservesRegexInputs(method)
-    ? emitBorrowedInputs(host, inputs)
-    : method === "matchAllInto"
-      ? inputs.map((a) => emitBorrowedInput(host, a))
-      : inputs.map((a) => host.emitExpr(a));
+  // A regex literal consumed directly by a matching operation cannot be
+  // observed afterwards: nothing else holds the object, so its identity is
+  // unobservable and its lastIndex is never read again. Such a site runs on
+  // the literal's immortal template instead of a fresh copy, resetting a
+  // global or sticky template's lastIndex to the fresh value right before
+  // the call (after every other operand, which may evaluate the same site).
+  const regexAt = method === "test" ? 0 : directRegexOperandMethod(method) ? 1 : -1;
+  const literal = regexAt >= 0 ? inputs[regexAt]! : null;
+  const template =
+    literal !== null && literal.kind === "regexLit" ? regexLiteralTemplate(host, literal) : null;
+  let values: LlValue[];
+  if (template !== null) {
+    const borrowed = borrowableInputs(host, inputs);
+    values = inputs.map((a, index) =>
+      index === regexAt
+        ? { name: template, type: a.type }
+        : borrowed[index]
+          ? host.emitReadReceiver(a)
+          : host.emitExpr(a),
+    );
+    if (/[gy]/.test((literal as IrExpr & { kind: "regexLit" }).flags)) {
+      const field = B.tmp();
+      B.line(`${field} = getelementptr inbounds %ScrRegex, ptr ${template}, i32 0, i32 4`);
+      B.line(`store double 0.0, ptr ${field}`);
+    }
+  } else {
+    values = preservesRegexInputs(method)
+      ? emitBorrowedInputs(host, inputs)
+      : method === "matchAllInto"
+        ? inputs.map((a) => emitBorrowedInput(host, a))
+        : inputs.map((a) => host.emitExpr(a));
+  }
   const r = values[0]!;
   const args = values.slice(1);
   const fallible = (sym: string, argText: string): LlValue => {
@@ -190,7 +238,10 @@ export function emitRegexIntrinsic(
       return { name: t, type: e.type };
     }
     case "match":
-    case "exec": {
+    case "exec":
+    case "execGroups":
+    case "execSpans":
+    case "matchGroups": {
       // +1 string[] or NULL from the runtime; the `string[] | null`
       // union wraps type-directedly, the envGet convention.
       if (e.type.kind !== "union")
@@ -200,10 +251,26 @@ export function emitRegexIntrinsic(
       const nullTag = def ? def.arms.findIndex((a) => a.kind === "nullT") : -1;
       if (arrTag < 0 || nullTag < 0 || !def)
         throw new InternalCompilerError("llvm emitter bug: match union lacks its arms");
-      const symbol = e.method === "exec" ? "scr_regex_exec" : "scr_regex_match";
-      host.declare(`declare ptr @${symbol}(ptr, ptr)`);
       const raw = B.tmp();
-      B.line(`${raw} = call ptr @${symbol}(ptr ${r.name}, ptr ${args[0]!.name})`);
+      if (e.method === "execGroups") {
+        // args[1] is the constant mask of the captures the result's
+        // readers use (see the IR method's contract).
+        host.declare(`declare ptr @scr_regex_exec_groups(ptr, ptr, double)`);
+        B.line(
+          `${raw} = call ptr @scr_regex_exec_groups(ptr ${r.name}, ptr ${args[0]!.name}, double ${args[1]!.name})`,
+        );
+      } else if (e.method === "execSpans" || e.method === "matchGroups") {
+        // args[1] selects the read captures, args[2] the lazily read ones.
+        const symbol = e.method === "execSpans" ? "scr_regex_exec_spans" : "scr_regex_match_groups";
+        host.declare(`declare ptr @${symbol}(ptr, ptr, double, double)`);
+        B.line(
+          `${raw} = call ptr @${symbol}(ptr ${r.name}, ptr ${args[0]!.name}, double ${args[1]!.name}, double ${args[2]!.name})`,
+        );
+      } else {
+        const symbol = e.method === "exec" ? "scr_regex_exec" : "scr_regex_match";
+        host.declare(`declare ptr @${symbol}(ptr, ptr)`);
+        B.line(`${raw} = call ptr @${symbol}(ptr ${r.name}, ptr ${args[0]!.name})`);
+      }
       return host.wrapNullable(raw, raw, def.arms[arrTag]!, arrTag, e.type, nullTag);
     }
     case "search": {
@@ -297,12 +364,10 @@ export function keyedRecordReadInto(
     // convert through the per-type toDyn walker (borrowed read → fresh
     // +1 tree), a dyn-valued overflow hit passes through (+1 from the
     // map get), and a miss is JS's undefined — the dyn singleton.
-    host.declare(`declare zeroext i1 @scr_str_eq(ptr, ptr)`);
     for (const f of overflowOnly ? [] : shape.fields) {
-      const lit = host.internLiteral(f.name);
       const hit = B.tmp();
       B.line(
-        `${hit} = call zeroext i1 @sc_str_eq(ptr ${keyName}, ptr ${lit}) ; ${llvmCommentText(f.name)}`,
+        `${hit} = call zeroext i1 ${host.literalEquals(f.name)}(ptr ${keyName}) ; ${llvmCommentText(f.name)}`,
       );
       const lh = B.newLabel("rkg.h");
       const ln = B.newLabel("rkg.n");
@@ -418,12 +483,10 @@ export function keyedRecordReadInto(
     const payload = owned ? expr : host.retainValue(expr, vt);
     return host.unionNewOwned(def.id, tag, { name: payload, type: vt });
   };
-  host.declare(`declare zeroext i1 @scr_str_eq(ptr, ptr)`);
   for (const f of overflowOnly ? [] : shape.fields) {
-    const lit = host.internLiteral(f.name);
     const hit = B.tmp();
     B.line(
-      `${hit} = call zeroext i1 @sc_str_eq(ptr ${keyName}, ptr ${lit}) ; ${llvmCommentText(f.name)}`,
+      `${hit} = call zeroext i1 ${host.literalEquals(f.name)}(ptr ${keyName}) ; ${llvmCommentText(f.name)}`,
     );
     const lh = B.newLabel("rkg.h");
     const ln = B.newLabel("rkg.n");

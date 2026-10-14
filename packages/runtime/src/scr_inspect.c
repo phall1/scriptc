@@ -241,6 +241,7 @@ static SCR_TL InspFrame *g_frames;
 static SCR_TL size_t g_nframes;
 static SCR_TL size_t g_frames_cap;
 static SCR_TL size_t g_indent;       /* ctx.indentationLvl */
+static SCR_TL bool g_no_break;       /* breakLength: Infinity (console.table cells) */
 static SCR_TL double g_cur_depth;    /* ctx.currentDepth (last-entered composite) */
 
 static InspFrame *insp_top(void) { return &g_frames[g_nframes - 1]; }
@@ -586,7 +587,7 @@ ScrStr *scr_insp_str(ScrStr *s) {
   if (surrogate_tail_len) ib_bytes(&val, surrogate_tail, surrogate_tail_len);
   size_t vlen = val.len;
   const char *v = val.data ? val.data : "";
-  if (units > 16 && units > 80 - g_indent - 4 && memchr(v, '\n', vlen) != NULL) {
+  if (!g_no_break && units > 16 && units > 80 - g_indent - 4 && memchr(v, '\n', vlen) != NULL) {
     /* split after each newline; quote each chunk; join with ` +\n<indent+2>` */
     size_t chunk_start = 0;
     bool first = true;
@@ -648,6 +649,60 @@ ScrStr *scr_insp_buffer(ScrBytes *b) {
   }
   ib_char(&out, '>');
   return ib_take(&out);
+}
+
+/* ArrayBuffer/SharedArrayBuffer: formatArrayBuffer's
+ * `[Uint8Contents]: <hex pairs>` (the first maxArrayLength = 100 bytes,
+ * then ` ... N more byte(s)`) followed by the byteLength key, inside the
+ * class braces. `[ArrayBuffer]` beyond depth. */
+static ScrStr *scr_insp_array_buffer(const ScrBytes *h, const char *cls, double recurse,
+                                     double depth) {
+  if (recurse > depth) {
+    InspBuf out = {0};
+    ib_char(&out, '[');
+    ib_cstr(&out, cls);
+    ib_char(&out, ']');
+    return ib_take(&out);
+  }
+  size_t len = (size_t)scr_bytes_byte_len(h);
+  size_t shown = len < 100 ? len : 100;
+  uint8_t head[100];
+  if (shown) scr_bytes_read(h, 0, head, shown);
+  static const char hex[] = "0123456789abcdef";
+  InspBuf contents = {0};
+  ib_cstr(&contents, "[Uint8Contents]: <");
+  for (size_t i = 0; i < shown; i++) {
+    if (i) ib_char(&contents, ' ');
+    ib_char(&contents, hex[head[i] >> 4]);
+    ib_char(&contents, hex[head[i] & 15]);
+  }
+  if (len > shown) {
+    char more[64];
+    size_t remaining = len - shown;
+    int n = snprintf(more, sizeof more, " ... %zu more byte%s", remaining, remaining > 1 ? "s" : "");
+    ib_bytes(&contents, more, (size_t)n);
+  }
+  ib_char(&contents, '>');
+  char byte_length[48];
+  int bn = snprintf(byte_length, sizeof byte_length, "[byteLength]: %zu", len);
+  scr_insp_begin(recurse + 1);
+  ScrStr *entry = ib_take(&contents);
+  scr_insp_entry(entry, false);
+  scr_str_release(entry);
+  entry = scr_str_new(byte_length, (size_t)bn);
+  scr_insp_entry(entry, false);
+  scr_str_release(entry);
+  InspBuf open = {0};
+  ib_cstr(&open, cls);
+  ib_cstr(&open, " {");
+  ScrStr *base = scr_str_new("", 0);
+  ScrStr *b0 = ib_take(&open);
+  ScrStr *b1 = scr_str_new("}", 1);
+  ScrStr *out = scr_insp_end(base, b0, b1, recurse + 1, false, false);
+  scr_str_release(base);
+  scr_str_release(b0);
+  scr_str_release(b1);
+  return out;
 }
 
 /* Errors: the STACKLESS rendering — compiled binaries carry no stack, so
@@ -908,6 +963,25 @@ ScrStr *scr_insp_dyn(ScrDyn *d, double recurse, double depth) {
       return ib_take(&out);
     }
     case SCR_DYN_HANDLE: {
+      if (d->v.handle.tag == SCR_DYNH_ARRAY_BUFFER ||
+          d->v.handle.tag == SCR_DYNH_SHARED_ARRAY_BUFFER) {
+        return scr_insp_array_buffer(d->v.handle.ptr, scr_dyn_handle_cls(d), recurse, depth);
+      }
+      const ScrDynHandleOps *ops = scr_dyn_handle_ops_of(d);
+      if (ops->inspect_view) {
+        /* Node's custom inspectors answer the bare class name beyond the
+         * depth limit (`depth < 0`). */
+        if (recurse > depth) return scr_str_new(ops->cls, strlen(ops->cls));
+        ScrDyn *view = ops->inspect_view(d->v.handle.ptr);
+        ScrStr *body = scr_insp_dyn(view, recurse, depth);
+        scr_dyn_release(view);
+        InspBuf out = {0};
+        ib_cstr(&out, ops->cls);
+        ib_char(&out, ' ');
+        ib_bytes(&out, body->data, body->len);
+        scr_str_release(body);
+        return ib_take(&out);
+      }
       /* Node prints the class's full property dump (ServerResponse {
        * ... }) — internals we do not model. Fence loudly instead of a
        * silent-wrong shape (SEMANTICS.md). */
@@ -985,4 +1059,119 @@ ScrStr *scr_insp_dyn(ScrDyn *d, double recurse, double depth) {
 ScrStr *scr_insp_dyn_s(ScrDyn *d, double depth) {
   if (d->kind == SCR_DYN_STR) return scr_str_retain(d->v.str);
   return scr_insp_dyn(d, 0, depth);
+}
+
+/* ── console.table cells ─────────────────────────────────────────────── */
+
+size_t scr_insp_display_width(const char *data, size_t len) { return insp_width(data, len); }
+
+static void insp_cell_join(InspBuf *b, ScrStr **items, size_t n) {
+  for (size_t i = 0; i < n; i++) {
+    if (i) ib_cstr(b, ", ");
+    ib_str(b, items[i]);
+    scr_str_release(items[i]);
+  }
+}
+
+static ScrStr *insp_table_cell(ScrDyn *v) {
+  switch (v->kind) {
+    case SCR_DYN_PROXY:
+      return insp_table_cell(v->v.proxy.target);
+    case SCR_DYN_TYPED_REF: {
+      ScrDyn *materialized = scr_dyn_typed_ref_materialize(v);
+      ScrStr *out = insp_table_cell(materialized);
+      scr_dyn_release(materialized);
+      return out;
+    }
+    case SCR_DYN_OBJ: {
+      if (scr_dyn_obj_get(v, "%error", 6) != NULL) {
+        static const char message[] = "console.table cells holding Error values have no lowering";
+        scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+        return scr_str_new("", 0);
+      }
+      const char *base = v->null_proto ? "[Object: null prototype]" : "Object";
+      size_t n = 0;
+      for (size_t i = 0; i < v->v.obj.len; i++) {
+        ScrDynEntry *ent = &v->v.obj.entries[i];
+        if (!ent->enumerable) continue;
+        if (ent->accessor) {
+          static const char message[] = "console.table cells holding accessor properties have no lowering";
+          scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "SC2020");
+          return scr_str_new("", 0);
+        }
+        n++;
+      }
+      InspBuf out = {0};
+      if (n > 2) {
+        /* depth -1: the object itself is past the depth limit. */
+        if (v->null_proto) ib_cstr(&out, base);
+        else ib_cstr(&out, "[Object]");
+        return ib_take(&out);
+      }
+      if (v->null_proto) {
+        ib_cstr(&out, base);
+        ib_char(&out, ' ');
+      }
+      if (n == 0) {
+        ib_cstr(&out, "{}");
+        return ib_take(&out);
+      }
+      ScrStr *items[2];
+      size_t count = 0;
+      for (size_t i = 0; i < v->v.obj.len; i++) {
+        ScrDynEntry *ent = &v->v.obj.entries[i];
+        if (!ent->enumerable) continue;
+        ScrStr *val = scr_insp_dyn(ent->value, 1, 0);
+        InspBuf eb = {0};
+        insp_key_into(&eb, ent->key, ent->key_len);
+        ib_cstr(&eb, ": ");
+        ib_str(&eb, val);
+        scr_str_release(val);
+        items[count++] = ib_take(&eb);
+      }
+      ib_cstr(&out, "{ ");
+      insp_cell_join(&out, items, n);
+      ib_cstr(&out, " }");
+      return ib_take(&out);
+    }
+    case SCR_DYN_ARR:
+    case SCR_DYN_BYTES: {
+      bool bytes = v->kind == SCR_DYN_BYTES;
+      if (bytes && v->buffer) return scr_insp_buffer(v->v.bytes);
+      size_t len = bytes ? v->v.bytes->len : v->v.arr.len;
+      InspBuf out = {0};
+      if (bytes) {
+        char prefix[48];
+        int pn = snprintf(prefix, sizeof prefix, "%s(%zu) ", scr_bytes_elem_name(v->v.bytes->elem), len);
+        ib_bytes(&out, prefix, (size_t)pn);
+      }
+      if (len == 0) {
+        ib_cstr(&out, "[]");
+        return ib_take(&out);
+      }
+      /* maxArrayLength 3; the elements sit past depth 0. */
+      size_t shown = len < 3 ? len : 3;
+      ScrStr *items[4];
+      for (size_t i = 0; i < shown; i++) {
+        items[i] = bytes ? scr_insp_f64(scr_bytes_get(v->v.bytes, (double)i))
+                         : scr_insp_dyn(v->v.arr.items[i], 1, 0);
+      }
+      size_t n = shown;
+      if (len > shown) items[n++] = scr_insp_more_items((double)(len - shown));
+      ib_cstr(&out, "[ ");
+      insp_cell_join(&out, items, n);
+      ib_cstr(&out, " ]");
+      return ib_take(&out);
+    }
+    default:
+      return scr_insp_dyn(v, 0, 0);
+  }
+}
+
+ScrStr *scr_insp_table_cell(ScrDyn *value) {
+  bool saved = g_no_break;
+  g_no_break = true;
+  ScrStr *out = insp_table_cell(value);
+  g_no_break = saved;
+  return out;
 }

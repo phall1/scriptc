@@ -13,6 +13,7 @@ import { analyzeCallLifetimes, type CallLifetimes } from "./call-lifetimes.js";
 import type { LlValue, LlvmEmitterContext } from "./expr-context.js";
 import { ReferenceEffects } from "./reference-effects.js";
 import { SCR_ARR_FIELD, exactIndexLines } from "./common.js";
+import { exactInteger, widenInteger } from "./integer-values.js";
 
 export interface LocalArrayRead {
   type: IrType;
@@ -465,7 +466,7 @@ function emitDenseReferenceArrayRead(
   no: string,
   slow: string,
   join: string,
-  loadType: "ptr" | "i64" = "ptr",
+  loadType: "ptr" | "i64" | "i8" = "ptr",
 ): void {
   const B = host.B;
   const range = B.newLabel("local.array.range"),
@@ -551,7 +552,11 @@ function emitDenseReferenceArrayRead(
   );
   host.markMemoryPointer(dataPtr, "array:header");
   B.line(`${data} = load ptr, ptr ${dataPtr}${host.fieldAliasAttachment(dataPtr)}`);
-  B.line(`${valuePtr} = getelementptr inbounds i64, ptr ${data}, ${host.sizeType} ${offset}`);
+  // Boolean arrays store one byte per element; every other kind an 8-byte slot.
+  const slotType = loadType === "i8" ? "i8" : "i64";
+  B.line(
+    `${valuePtr} = getelementptr inbounds ${slotType}, ptr ${data}, ${host.sizeType} ${offset}`,
+  );
   host.markMemoryPointer(valuePtr, "array:elements");
   B.line(`${raw} = load ${loadType}, ptr ${valuePtr}${host.fieldAliasAttachment(valuePtr)}`);
   present(raw);
@@ -568,8 +573,13 @@ export function emitBorrowedArrayRead(
 ): void {
   const B = host.B;
   const array = host.emitStableReceiver(read.arr, [read.index]);
-  const integerIndex = host.emitIntegerLoopIndex(read.index);
+  const loopIndex = host.emitIntegerLoopIndex(read.index);
   const index = host.emitExpr(read.index);
+  // A proven integer index (an int32 local, say) needs no double
+  // round-trip; a negative one compares above the capacity as unsigned.
+  const exact =
+    loopIndex === null && host.sizeType === "i64" ? exactInteger(host, index, read.index) : null;
+  const integerIndex = loopIndex ?? (exact ? widenInteger(host, exact) : null);
   const slow = B.newLabel("borrow.array.slow"),
     join = B.newLabel("borrow.array.join");
   emitDenseReferenceArrayRead(
@@ -657,7 +667,7 @@ export function emitLocalArrayRead(
       if (read.element.kind === "bool") {
         const nonzero = B.tmp();
         bits = B.tmp();
-        B.line(`${nonzero} = icmp ne i64 ${value}, 0`);
+        B.line(`${nonzero} = icmp ne i8 ${value}, 0`);
         B.line(`${bits} = zext i1 ${nonzero} to i64`);
       }
       B.line(`store i64 ${bits}, ptr ${payload}`);
@@ -678,7 +688,7 @@ export function emitLocalArrayRead(
       no,
       slow,
       join,
-      scalar ? "i64" : "ptr",
+      !scalar ? "ptr" : read.element.kind === "bool" ? "i8" : "i64",
     );
   else B.br(slow);
   B.startBlock(slow);

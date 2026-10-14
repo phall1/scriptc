@@ -55,6 +55,12 @@ export function mangleWrapper(fnName: string): string {
   return `sc_w_${sanitize(fnName)}`;
 }
 
+/** Env-signature wrapper of a declared function's borrowing body: the
+ * closure entry that lends every reference argument. */
+export function mangleBorrowingWrapper(fnName: string): string {
+  return `sc_wb_${sanitize(fnName)}`;
+}
+
 /** The interned (immortal) closure value of a declared function. */
 export function mangleFnClosure(fnName: string): string {
   return `sc_fc_${sanitize(fnName)}`;
@@ -165,6 +171,16 @@ export function mangleGlobal(globalId: string): string {
 /** Async function machinery: spawn wrapper, trampoline, argument pack. */
 export function mangleAsyncSpawn(fnName: string): string {
   return `sc_as_${sanitize(fnName)}`;
+}
+/** `await f(...)` of a direct async call: the call and its await as one
+ * entry that returns the awaited value. */
+export function mangleAsyncAwaitCall(fnName: string): string {
+  return `sc_aw_${sanitize(fnName)}`;
+}
+/** `return f(...)` of a direct async call in an async function: the call,
+ * the adoption turn, and the await as one entry returning the value. */
+export function mangleAsyncAdoptCall(fnName: string): string {
+  return `sc_ad_${sanitize(fnName)}`;
 }
 export function mangleTrampoline(fnName: string): string {
   return `sc_tr_${sanitize(fnName)}`;

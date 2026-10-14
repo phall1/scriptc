@@ -209,8 +209,9 @@ export function computeMayThrow(
         case "genResume":
           // A body exception (or the injected .throw payload on a
           // non-suspended generator) propagates into the resumer; the
-          // reentrancy TypeError throws here too.
-          f.throws = true;
+          // reentrancy TypeError throws here too. Taking the yielded value
+          // after a step only moves it out.
+          if (rec.mode !== "value") f.throws = true;
           break;
         case "recordKeySet": {
           // A dynamic-keyed write can collide with a DECLARED field, where
@@ -624,6 +625,7 @@ const ERROR_KIND_NAMES: readonly string[] = [
   "ReferenceError",
   "EvalError",
   "URIError",
+  "AggregateError",
 ];
 
 /** A short description of a node that seeds the may-throw fixpoint. */

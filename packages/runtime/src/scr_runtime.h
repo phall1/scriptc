@@ -74,7 +74,7 @@ void scr_init(void);
 /* Program objects emitted by the bundled LLVM helper reference this symbol.
  * Its versioned spelling makes a mismatched manual runtime link fail before
  * the program can start. */
-void scr_runtime_abi_v15(void);
+void scr_runtime_abi_v20(void);
 void scr_runtime_workers_v8(void);
 
 /* ── the trap funnel (scr_console.c; scr_library.c under -DSCR_LIB) ──────
@@ -393,10 +393,11 @@ char **scr_worker_argv(void);
  * Reference counting alone cannot free cycles, so every object that can
  * participate in one — capture boxes, heap closures, unions, promises, and
  * compiler-emitted class/record shapes with cycle-capable fields — is
- * allocated with a hidden header directly BEFORE the object: a trace
- * function (enumerates the object's cycle-capable children), a teardown
- * function (frees the object WITHOUT releasing traced children), and the
- * trial-deletion bookkeeping (color + candidate-root buffer state). Types
+ * allocated with a hidden 8-byte header directly BEFORE the object: the
+ * registry id of its type's descriptor (a trace function enumerating the
+ * object's cycle-capable children, and a teardown function freeing the
+ * object WITHOUT releasing traced children) and the trial-deletion
+ * bookkeeping (color, generation and candidate-root buffer state). Types
  * that can never be in a cycle — strings above all, plus arrays of scalar/
  * string/bytes elements, dyn trees, and shapes whose fields are all acyclic
  * — keep the lean 1-word `rc` header and pay nothing. Arrays and maps are
@@ -448,9 +449,11 @@ enum { SCR_CYC_BLACK = 0, SCR_CYC_GRAY = 1, SCR_CYC_WHITE = 2, SCR_CYC_DOOMED = 
 enum { SCR_CYC_NURSERY = 0, SCR_CYC_MATURE = 1, SCR_CYC_OLD = 2, SCR_CYC_NGENS = 3 };
 
 /* A headered type's collector entry points, shared by all its objects: the
- * header names one constant descriptor instead of carrying both function
- * pointers, which keeps the header at 16 bytes. Emitted shapes define one
- * per traced type (llvm/shapes.ts); runtime families use SCR_CYC_TYPE. */
+ * header names its descriptor by a registry id (`id`, assigned on the type's
+ * first allocation) instead of carrying a pointer, which keeps the header at
+ * 8 bytes. Emitted shapes define one per traced type (llvm/shapes.ts);
+ * runtime families define their own. Descriptors are writable (the id) and
+ * must outlive every object of the type. */
 typedef struct ScrCycType {
   ScrTraceFn trace;
   ScrCycFreeFn free_fn;
@@ -462,6 +465,9 @@ typedef struct ScrCycType {
    * share an index (separately emitted code in one process) are merely
    * judged together. */
   uint32_t kind;
+  /* Registry id (scr_cyc_types), 0 until scr_cyc_register assigns it.
+   * Emitted allocation paths read it and take the slow path while it is 0. */
+  uint32_t id;
 } ScrCycType;
 /* Runtime families' kinds. Emitted descriptors count from
  * SCR_CYC_KIND_EMITTED (llvm/alloc.ts FIRST_EMITTED_CYC_KIND). */
@@ -484,46 +490,71 @@ enum {
   SCR_CYC_KIND_WORKER_VIEW,
   SCR_CYC_KIND_EMITTED = 32
 };
-#define SCR_CYC_TYPE(name, trace_fn, free) static const ScrCycType name = { (trace_fn), (free), 0 }
-
+/* Eight bytes in front of the object: the descriptor's registry id, the
+ * collector color (SCR_CYC_*) and generation (SCR_CYC_NURSERY..SCR_CYC_OLD,
+ * the walk filter), and `buf`: SCR_CYC_BUFFERED_BIT while the object sits in
+ * its generation's candidate buffer, with its position there below it (O(1)
+ * removal when rc hits 0). */
 typedef struct ScrCycHdr {
-#if UINTPTR_MAX == UINT32_MAX
-  /* calloc aligns the block for doubles; keep the payload aligned too.
-   * Padding BEFORE the descriptor keeps every object-relative offset of the
-   * fields below identical to 64-bit targets. */
-  uint32_t payload_alignment;
-#endif
-  const ScrCycType *type; /* trace and teardown */
-  uint8_t color;          /* SCR_CYC_* */
-  uint8_t gen;            /* SCR_CYC_NURSERY..SCR_CYC_OLD (the walk filter) */
-  uint16_t buffered;      /* 1 = sitting in its generation's candidate buffer */
-  uint32_t buf_index;     /* position there (O(1) removal when rc hits 0) */
+  uint16_t id;
+  uint8_t color;
+  uint8_t gen;
+  uint32_t buf;
 } ScrCycHdr;
+#define SCR_CYC_BUFFERED_BIT 0x80000000u
 
-/* This layout is an ABI, not an implementation detail. Every emitted release
- * of a headered object (llvm/shapes.ts cycleRootLines, used by the record,
- * class and inline RC helpers) mirrors scr_cyc_on_release's early return:
- * it reads `buffered` as an i16 at obj-6 (the backend's cycleBufferedOffset)
- * and calls scr_cyc_on_release only when it is 0; the emitted inline free
- * reads the generation as an i8 at obj-7. Hence the assertions. */
-_Static_assert(sizeof(ScrCycHdr) == 16, "LLVM backend expects a 16-byte cycle header");
-_Static_assert(sizeof(ScrCycHdr) - offsetof(ScrCycHdr, buffered) == 6 &&
-                   sizeof(((ScrCycHdr *)0)->buffered) == 2,
-               "the emitted release fast path reads `buffered` as an i16 at obj-6");
-_Static_assert(sizeof(ScrCycHdr) - offsetof(ScrCycHdr, gen) == 7,
-               "LLVM backend's inline free reads the generation as an i8 at obj-7");
-_Static_assert(sizeof(ScrCycHdr) - offsetof(ScrCycHdr, type) == 16 ||
-                   UINTPTR_MAX == UINT32_MAX,
-               "LLVM backend stores the descriptor at the block start on 64-bit targets");
+/* This layout is an ABI, not an implementation detail. The emitted
+ * allocation stores the id and zeroes the rest; every emitted release of a
+ * headered object (llvm/shapes.ts cycleRootLines, used by the record, class
+ * and inline RC helpers) mirrors scr_cyc_on_release's early return by
+ * testing the sign of `buf` as an i32 at obj-4, and the emitted inline free
+ * reads the generation as an i8 at obj-5. Hence the assertions. */
+_Static_assert(sizeof(ScrCycHdr) == 8, "LLVM backend expects an 8-byte cycle header");
+_Static_assert(offsetof(ScrCycHdr, id) == 0 && sizeof(((ScrCycHdr *)0)->id) == 2,
+               "the emitted allocation stores the registry id as an i16 at the block start");
+_Static_assert(sizeof(ScrCycHdr) - offsetof(ScrCycHdr, buf) == 4,
+               "the emitted release fast path tests `buf` as an i32 at obj-4");
+_Static_assert(sizeof(ScrCycHdr) - offsetof(ScrCycHdr, gen) == 5,
+               "LLVM backend's inline free reads the generation as an i8 at obj-5");
 _Static_assert(sizeof(ScrCycHdr) % _Alignof(double) == 0,
                "cycle-headered payloads must preserve double alignment");
 
 static inline ScrCycHdr *scr_cyc_hdr(void *obj) { return (ScrCycHdr *)obj - 1; }
 
+/* Registry of descriptors by id (copies, so a header reaches its entry
+ * points in one step); ids are assigned on first allocation and shared by
+ * every thread. */
+#define SCR_CYC_MAX_TYPES ((uint32_t)1 << 15)
+extern ScrCycType scr_cyc_types[SCR_CYC_MAX_TYPES];
+uint32_t scr_cyc_register(ScrCycType *type);
+static inline uint32_t scr_cyc_type_id(ScrCycType *type) {
+  /* Acquire pairs with scr_cyc_register's publishing compare-exchange, so
+   * a thread that sees the id also sees its scr_cyc_types entry. */
+  uint32_t id = __atomic_load_n(&type->id, __ATOMIC_ACQUIRE);
+  return id ? id : scr_cyc_register(type);
+}
+
+static inline const ScrCycType *scr_cyc_type(const ScrCycHdr *h) { return &scr_cyc_types[h->id]; }
+static inline unsigned scr_cyc_color(const ScrCycHdr *h) { return h->color; }
+static inline void scr_cyc_set_color(ScrCycHdr *h, unsigned color) { h->color = (uint8_t)color; }
+static inline unsigned scr_cyc_gen(const ScrCycHdr *h) { return h->gen; }
+static inline void scr_cyc_set_gen(ScrCycHdr *h, unsigned gen) { h->gen = (uint8_t)gen; }
+static inline bool scr_cyc_is_buffered(const ScrCycHdr *h) {
+  return (h->buf & SCR_CYC_BUFFERED_BIT) != 0;
+}
+static inline uint32_t scr_cyc_buf_index(const ScrCycHdr *h) {
+  return h->buf & ~SCR_CYC_BUFFERED_BIT;
+}
+/* Buffered at position `index` of its generation's buffer, or not at all. */
+static inline void scr_cyc_set_buffered(ScrCycHdr *h, uint32_t index) {
+  h->buf = SCR_CYC_BUFFERED_BIT | index;
+}
+static inline void scr_cyc_clear_buffered(ScrCycHdr *h) { h->buf = 0; }
+
 /* Zeroed allocation with a cycle header in front; returns the OBJECT
  * pointer (header at scr_cyc_hdr). `type` must outlive the object (a
  * static descriptor). Aborts on OOM. */
-void *scr_cyc_alloc(size_t size, const ScrCycType *type);
+void *scr_cyc_alloc(size_t size, ScrCycType *type);
 void scr_cyc_free(void *obj); /* frees the block, header included */
 
 /* ── small-object allocator (scr_alloc.c) ───────────────────────────────
@@ -579,6 +610,10 @@ void scr_cyc_free(void *obj); /* frees the block, header included */
 void *scr_mem_realloc(void *p, size_t n);
 void *scr_rt_calloc(size_t n); /* emitted-code entry points */
 void scr_rt_free(void *p);
+/* Asks the allocator's pre-fault helper (scr_alloc.c) to fault the pages
+ * of [lo, hi), aligned to 256 KiB, in ahead of use; builds without the
+ * helper ignore it. */
+void scr_mem_prefault(void *lo, void *hi);
 
 #define SCR_SA_STEP 16u   /* class granularity; keeps malloc's 16-byte alignment */
 #define SCR_SA_NCLASS 32u /* classes of 16, 32, ... 512 bytes */
@@ -710,26 +745,27 @@ static inline void scr_mem_free(void *p) { free(p); }
  * sites (union boxes, arrays, boxes, closures, maps, dyn nodes). With a
  * constant size the size class and the zeroing fold at compile time. The
  * live count is exported for these and for the emitted inline paths
- * (llvm/alloc.ts), which do the same three things: header words, live
- * count, block. Every other header word starts zero (SCR_CYC_BLACK,
- * SCR_CYC_NURSERY, unbuffered). */
+ * (llvm/alloc.ts), which do the same three things: header (the registry
+ * id; the rest starts zero: SCR_CYC_BLACK, SCR_CYC_NURSERY, unbuffered),
+ * live count, block. */
 #ifndef SCR_WORKERS
 extern SCR_TL size_t scr_cyc_live;
 extern SCR_TL size_t scr_cyc_old_freed;
 extern SCR_TL void (*scr_weak_dispose_hook)(void *);
 #endif
-static inline void *scr_cyc_alloc_inline(size_t size, const ScrCycType *type) {
+static inline void *scr_cyc_alloc_inline(size_t size, ScrCycType *type) {
   if (size > SIZE_MAX - sizeof(ScrCycHdr)) scr_trap("scriptc: out of memory\n");
+  uint32_t id = scr_cyc_type_id(type);
   ScrCycHdr *h = (ScrCycHdr *)scr_mem_calloc(sizeof(ScrCycHdr) + size);
   if (!h) scr_trap("scriptc: out of memory\n");
-  h->type = type;
+  h->id = (uint16_t)id;
   scr_cyc_live++;
   return h + 1;
 }
 static inline void scr_cyc_free_inline(void *obj) {
   if (scr_weak_dispose_hook) scr_weak_dispose_hook(obj);
   scr_cyc_live--;
-  if (scr_cyc_hdr(obj)->gen == SCR_CYC_OLD) scr_cyc_old_freed++;
+  if (scr_cyc_gen(scr_cyc_hdr(obj)) == SCR_CYC_OLD) scr_cyc_old_freed++;
   scr_mem_free(scr_cyc_hdr(obj));
 }
 _Static_assert(SCR_CYC_NURSERY == 0, "zeroed cycle headers start in the nursery");
@@ -757,10 +793,10 @@ void scr_cyc_on_dead(void *obj);
  * object, and the death of an object that was never buffered, need no call.
  * Most releases of long-lived containers take the first early return. */
 static inline void scr_cyc_released(void *obj) {
-  if (!scr_cyc_hdr(obj)->buffered) scr_cyc_on_release(obj);
+  if (!scr_cyc_is_buffered(scr_cyc_hdr(obj))) scr_cyc_on_release(obj);
 }
 static inline void scr_cyc_dead(void *obj) {
-  if (scr_cyc_hdr(obj)->buffered) scr_cyc_on_dead(obj);
+  if (scr_cyc_is_buffered(scr_cyc_hdr(obj))) scr_cyc_on_dead(obj);
 }
 
 /* Full sweep: trial-deletion passes over EVERY generation, to a fixpoint.
@@ -988,6 +1024,80 @@ static inline ScrStr *scr_str_retain(ScrStr *s) {
 
 void scr_str_release(ScrStr *s); /* NULL-tolerant (uninitialized locals) */
 
+/* ── lone surrogates: canonical WTF-8 storage ─────────────────────────
+ * String storage is UTF-8 extended to lone UTF-16 surrogates: an unpaired
+ * surrogate is its generalized 3-byte encoding ED A0..BF 80..BF, while a
+ * high surrogate directly followed by a low one is always stored as the
+ * pair's 4-byte UTF-8 sequence. Canonical storage keeps byte equality,
+ * hashing and searching exact. Builders preserve it by fusing a trailing
+ * lone high surrogate with a leading lone low one (scr_wtf8_joins). A lone
+ * surrogate is exactly as long as U+FFFD, so byte sinks transcode to UTF-8
+ * (scr_str_utf8) without changing any length or offset. */
+
+/* Set once a lone surrogate may exist anywhere in the process: program
+ * startup stamps it when a literal holds one, and every runtime producer
+ * notes it (scr_wtf8_put, scr_wtf8_note). Until then no string can hold a
+ * lone surrogate, so builders and byte sinks skip all surrogate work. It is
+ * process-wide (strings cross threads) and never cleared. */
+extern bool scr_wtf8_lone;
+static inline bool scr_wtf8_any(void) { return __atomic_load_n(&scr_wtf8_lone, __ATOMIC_RELAXED); }
+void scr_wtf8_note(void);
+
+/* Whether p starts a lone surrogate (p[1] must be readable: string data
+ * is NUL-terminated). */
+static inline bool scr_wtf8_surrogate_at(const char *p) {
+  return (unsigned char)p[0] == 0xED && (unsigned char)p[1] >= 0xA0;
+}
+
+/* Whether p starts a lone low surrogate (p[1] readable, as above). */
+static inline bool scr_wtf8_low_at(const char *p) {
+  return (unsigned char)p[0] == 0xED && (unsigned char)p[1] >= 0xB0;
+}
+
+/* Whether appending b to a puts a lone high surrogate directly before a
+ * lone low surrogate. Tests the first byte of b before anything else, so
+ * ordinary text costs one compare. */
+static inline bool scr_wtf8_joins(const char *a, size_t alen, const char *b, size_t blen) {
+  return __builtin_expect(scr_wtf8_any() && (unsigned char)b[0] == 0xED && blen >= 3 &&
+                              (unsigned char)b[1] >= 0xB0 && alen >= 3 &&
+                              (unsigned char)a[alen - 3] == 0xED &&
+                              ((unsigned char)a[alen - 2] & 0xF0) == 0xA0,
+                          0);
+}
+
+/* The first lone surrogate in a span, or NULL. memchr-driven. */
+const char *scr_wtf8_find_surrogate(const char *p, size_t n);
+/* Fuse every adjacent lone high/low pair in place; returns the new length. */
+size_t scr_wtf8_fuse(char *p, size_t n);
+/* Restore canonical storage after a builder joined a lone high surrogate
+ * to a lone low one: fuses in place and drops cached content facts. The
+ * _from form starts at a byte offset before which storage is canonical. */
+void scr_str_fuse_surrogates(ScrStr *s);
+void scr_str_fuse_from(ScrStr *s, size_t from);
+/* Replace every lone surrogate with U+FFFD in place (same length). */
+void scr_wtf8_replace_surrogates(char *p, size_t n);
+static inline void scr_wtf8_to_utf8(char *p, size_t n) {
+  if (__builtin_expect(scr_wtf8_any(), 0)) scr_wtf8_replace_surrogates(p, n);
+}
+/* A string's bytes as well-formed UTF-8 for a byte sink: s->data itself,
+ * or (only when s holds a lone surrogate) a malloc'd NUL-terminated copy
+ * with each one replaced by U+FFFD, returned in *owned for the caller to
+ * release with scr_str_utf8_end. *owned is NULL on the fast path. */
+const char *scr_str_utf8_copy(const ScrStr *s, char **owned);
+static inline const char *scr_str_utf8(const ScrStr *s, char **owned) {
+  *owned = NULL;
+  if (s->ascii || !scr_wtf8_any()) return s->data;
+  return scr_str_utf8_copy(s, owned);
+}
+static inline void scr_str_utf8_end(char *owned) {
+  if (owned) free(owned);
+}
+static inline bool scr_str_has_surrogate(const ScrStr *s) {
+  return scr_wtf8_any() && !s->ascii && scr_wtf8_find_surrogate(s->data, s->len) != NULL;
+}
+/* Encode one UTF-16 code unit or code point as WTF-8 (1-4 bytes). */
+size_t scr_wtf8_put(char *dst, uint32_t cp);
+
 /* Borrow both args, return +1. */
 ScrStr *scr_str_concat(ScrStr *a, ScrStr *b);
 /* Borrow each part without mutation; return one independently owned result. */
@@ -1017,7 +1127,7 @@ int scr_str_cmp(ScrStr *a, ScrStr *b);
 double scr_str_locale_compare(ScrStr *a, ScrStr *b);
 
 /* ECMAScript string-list ordering: compare UTF-16 code units even though
- * ScrStr stores well-formed UTF-8. Returns <0, 0, >0. */
+ * ScrStr stores WTF-8. Returns <0, 0, >0. */
 int scr_str_cmp_u16(ScrStr *a, ScrStr *b);
 
 /* ── class objects (classes as first-class values) ────────────────────
@@ -1104,7 +1214,8 @@ enum {
   SCR_ERR_REFERENCE = 5,
   SCR_ERR_EVAL = 6,
   SCR_ERR_URI = 7,
-  SCR_ERR_COUNT = 8,
+  SCR_ERR_AGGREGATE = 8, /* AggregateError — ScrAggregateError, the wider layout */
+  SCR_ERR_COUNT = 9,
 };
 
 extern SCR_TL ScrVt scr_error_vts[SCR_ERR_COUNT]; /* indexed by SCR_ERR_*; main() stamps pre/post */
@@ -1164,6 +1275,27 @@ ScrError *scr_domex_clone(ScrError *e, const struct ScrDyn *options);
  * takes ownership of the message. */
 SCR_COLD void scr_throw_domex(const char *name, const char *message);
 SCR_COLD void scr_throw_domex_str(const char *name, ScrStr *message);
+
+/* AggregateError: the ScrError prefix plus the `errors` list (a dyn
+ * array; NULL until set). Like DOMException's slots it is HIDDEN from
+ * the compiler's IR field list (user `extends AggregateError` is fenced)
+ * and read through scr_aggregate_errors. The dyn half (construction from
+ * an iterable's elements, the list itself) lives in scr_json.c; the
+ * teardown drops the list through the hook it installs. */
+typedef struct ScrAggregateError {
+  ScrError base;
+  struct ScrDyn *errors;
+} ScrAggregateError;
+ScrError *scr_aggregate_alloc(void);
+void scr_aggregate_install_errors_drop(void (*fn)(void *obj));
+/* new AggregateError(errors, message?, options?) runs in spec order:
+ * scr_aggregate_new installs the message and cause (both borrowed, dyn
+ * undefined when absent; +1, NULL with an exception pending when the
+ * message conversion throws), then the caller iterates `errors` and
+ * hands the list to scr_aggregate_set_errors. */
+ScrError *scr_aggregate_new(const struct ScrDyn *message, const struct ScrDyn *options);
+void scr_aggregate_set_errors(ScrError *e, struct ScrDyn *errors); /* both borrowed */
+struct ScrDyn *scr_aggregate_errors(ScrError *e); /* +1 */
 
 /* Switch runtime-side error allocation to collector-headered (called from
  * main() when the compiler's cycle fixpoint marks the hierarchy). */
@@ -1237,16 +1369,25 @@ SCR_COLD void scr_throw_node_coded(double kind, const ScrStr *code, const ScrStr
  * toward zero, ±Infinity kept), exactly like JS. Every function borrows its
  * ScrStr arguments; functions returning ScrStr* return a +1 reference.
  *
- * One documented divergence (JS lone surrogates are unrepresentable in
- * well-formed UTF-8): where JS would produce a *lone surrogate* — charAt on
- * half of an astral pair, or a slice boundary that splits a pair — the
- * result contains U+FFFD (EF BF BD) in its place. Numeric results
- * (charCodeAt) are NOT affected: they return the exact surrogate code unit
- * value, computed from the code point.
+ * Where JS produces a *lone surrogate* — charAt on half of an astral
+ * pair, or a slice boundary that splits a pair — the result holds that
+ * surrogate (canonical WTF-8, see above).
  */
 
 /* .length — number of UTF-16 code units (astral chars count as 2). */
 double scr_str_utf16_len(ScrStr *s);
+
+/* The receiver of an indexed scan whose UTF-16 code units the index cache
+ * holds (scr_string.c), published so emitted length and charCodeAt reads of
+ * that string are a compare and a load. Cleared whenever its entry drops
+ * the units (release, append, eviction); all fields zero otherwise. Emitted
+ * code reads it only where SCR_TL is empty. */
+typedef struct ScrStrScan {
+  const ScrStr *s;
+  const uint16_t *units;
+  size_t n;
+} ScrStrScan;
+extern SCR_TL ScrStrScan scr_str_scan;
 
 /* charCodeAt(i): the i-th UTF-16 code unit as a number; for astral chars
  * returns the high (0xD800+) or low (0xDC00+) surrogate value depending on
@@ -1282,8 +1423,7 @@ bool scr_str_ends_with_from(ScrStr *s, ScrStr *needle, double end_position);
 /* slice(start, end): UTF-16 indices, negatives count from length, clamped
  * to [0, length]; empty when start >= end. The frontend passes
  * end = Infinity for the one-argument form. Boundaries that split an astral
- * pair yield U+FFFD for the half character (divergence, see above).
- * Returns +1. */
+ * pair keep the half character as a lone surrogate. Returns +1. */
 ScrStr *scr_str_slice(ScrStr *s, double start, double end);
 /* substring: clamp-and-swap (negatives clamp to 0, start > end swaps). */
 ScrStr *scr_str_substring(ScrStr *s, double start, double end);
@@ -1317,7 +1457,7 @@ ScrStr *scr_str_to_upper(const ScrStr *s);
 ScrStr *scr_str_normalize(const ScrStr *s, const ScrStr *form);
 
 /* charAt(i): 1-code-unit string; out of range → empty string. Half of an
- * astral pair → U+FFFD (divergence, see above). Returns +1. */
+ * astral pair → that lone surrogate. Returns +1. */
 ScrStr *scr_str_char_at(ScrStr *s, double i);
 
 /* The string iterator's step (for-of over strings): the full code-POINT
@@ -1333,9 +1473,25 @@ ScrStr *scr_str_trim_end(ScrStr *s);
 /* split(separator[, limit]) with a STRING separator: limit uses ToUint32;
  * the no-limit wrapper supplies 2^32-1. Empty separator
  * splits into single UTF-16 code units (each half of an astral char is
- * U+FFFD — divergence, see above); otherwise splits on every occurrence,
+ * a lone surrogate); otherwise splits on every occurrence,
  * empty pieces kept. Borrows both; returns a +1 string[] (SCR_ELEM_STR). */
 struct ScrArr;
+/* String.prototype.replace/replaceAll with a string search value and a
+ * string replacement: GetSubstitution without captures ($$, $&, $`, $';
+ * every other '$' spelling stays literal). An empty search value matches
+ * at 0, or at every UTF-16 position under replaceAll. Borrows; +1. */
+ScrStr *scr_str_replace_literal(ScrStr *s, ScrStr *search, ScrStr *rep, bool all);
+/* Every occurrence of the ASCII byte chars[k] replaced by the k-th
+ * NUL-separated text of `texts`, in one pass (at most 16 distinct
+ * characters; the compiler fuses chains of global one-character
+ * replacements into it). Borrows all three; +1. */
+ScrStr *scr_str_replace_chars(ScrStr *s, ScrStr *chars, ScrStr *texts);
+/* The same over a nonempty canonical WTF-8 needle (literal regex
+ * patterns share it). Borrows; +1. */
+ScrStr *scr_str_replace_bytes(ScrStr *s, const char *pat, size_t plen, ScrStr *rep, bool all);
+/* First occurrence of a nonempty needle in a byte span, or NULL. */
+const char *scr_str_find_bytes(const char *hay, size_t hay_len, const char *needle,
+                               size_t needle_len);
 struct ScrArr *scr_str_split(ScrStr *s, ScrStr *sep);
 struct ScrArr *scr_str_split_limit(ScrStr *s, ScrStr *sep, double limit);
 /* Internal dense split traversal. The cursor borrows input strings, returns
@@ -1344,7 +1500,8 @@ struct ScrArr *scr_str_split_limit(ScrStr *s, ScrStr *sep, double limit);
 typedef struct ScrSplitCursor {
   size_t offset;
   uint32_t remaining;
-  uint32_t pending_unit;
+  uint32_t pending_unit; /* the low surrogate still owed by a split pair */
+  char unit[4];          /* the bytes of the current surrogate piece */
 } ScrSplitCursor;
 void scr_str_split_cursor_init(ScrSplitCursor *cursor, uint32_t limit);
 /* Optional scratch is a separately owned, NULL-initialized string slot.
@@ -1360,29 +1517,29 @@ ScrStr *scr_str_split_materialize(const char *bytes, size_t length, ScrStr **scr
 
 /* padStart(maxLength, fill)/padEnd — ECMA StringPad, UTF-16 unit counts.
  * Target at or below the length (or empty fill) returns the receiver
- * (retained). A truncated fill that would split an astral char emits
- * U+FFFD for the kept half. Oversized pads abort (the repeat() policy).
+ * (retained). A truncated fill that would split an astral char keeps its
+ * high half as a lone surrogate. Oversized pads abort (the repeat() policy).
  * Borrow both; return +1. */
 ScrStr *scr_str_pad_start(ScrStr *s, double maxLength, ScrStr *fill);
 ScrStr *scr_str_pad_end(ScrStr *s, double maxLength, ScrStr *fill);
 
-/* isWellFormed()/toWellFormed(): storage is well-formed by invariant
- * (lone surrogates became U+FFFD at their producers, SEMANTICS.md 2), so
- * isWellFormed is constant true and toWellFormed the identity (per spec
- * both are no-ops on well-formed input). Borrow s; toWellFormed +1. */
+/* isWellFormed()/toWellFormed(): whether s holds no lone surrogate, and
+ * s with each lone surrogate replaced by U+FFFD (s itself, retained, when
+ * it has none). Borrow s; toWellFormed +1. */
 bool scr_str_is_well_formed(ScrStr *s);
 ScrStr *scr_str_to_well_formed(ScrStr *s);
 /* Node text utilities: borrowed input, +1 result or NULL+pending. The VT
  * helper lives in the optional regex unit; USV conversion uses native strings. */
 ScrStr *scr_util_strip_vt(const struct ScrDyn *input);
 ScrStr *scr_util_to_usv_string(const struct ScrDyn *input);
+ScrStr *scr_util_to_string(const struct ScrDyn *input); /* ToString alone */
 void scr_dyn_install_to_primitive_symbol(struct ScrDyn *key);
 
 /* RegExp.escape(s) — ES2025 EncodeForRegExpEscape per code point: leading
  * ASCII alphanumeric hex-escapes, SyntaxCharacters and '/' take a
  * backslash, other punctuators/whitespace/line terminators hex-escape
- * (\xNN / \uNNNN, lowercase), the rest passes through. Total (the spec's
- * surrogate arm is unreachable over well-formed storage). Lives in
+ * (\xNN / \uNNNN, lowercase), a lone surrogate \uNNNN-escapes, the rest
+ * passes through. Total. Lives in
  * scr_regex.c (no engine needed — the placement keeps the always-linked
  * string TU out of hello-world's size class); use sites flip the regex
  * link switch (moduleUsesRegex). Borrows; +1. */
@@ -1393,6 +1550,8 @@ ScrStr *scr_regexp_escape(ScrStr *s);
  * longest digit prefix, exact value correctly rounded (overflow →
  * ±Infinity). The frontend completes an omitted radix to 0. Borrows s. */
 double scr_parse_int(ScrStr *s, double radix);
+/* parseInt over a borrowed UTF-8 byte span. */
+double scr_parse_int_bytes(const char *p, size_t n, double radix);
 double scr_parse_float(ScrStr *s);
 
 /* ToNumber(string) — ECMA-262 7.1.4.1 StringToNumber exactly: trim
@@ -1404,14 +1563,18 @@ double scr_parse_float(ScrStr *s);
  * a sign on those is NaN, per grammar). Any trailing garbage → NaN.
  * Borrows s; never throws. */
 double scr_string_to_number(ScrStr *s);
+/* StringToNumber over a borrowed UTF-8 byte span. */
+double scr_bytes_to_number(const char *p, size_t len);
 
 /* encodeURIComponent — ECMA-262 Encode with the component unreserved set
  * (ALPHA/DIGIT/- _ . ! ~ * ' ( )): every other byte of the UTF-8 string
  * percent-encodes as uppercase %XX (the spec's per-code-point UTF-8
- * encoding IS a byte scan over UTF-8 storage). Never throws — the spec's
- * URIError is the unpaired surrogate, which well-formed UTF-8 cannot
- * hold. Borrows s; result +1. */
+ * encoding IS a byte scan over UTF-8 storage). A lone surrogate throws the
+ * spec's URIError ("URI malformed"). Borrows s; result +1. */
 ScrStr *scr_str_encode_uri_component(ScrStr *s);
+/* querystring.escape: the component encoder, throwing Node's URIError
+ * [ERR_INVALID_URI] on a lone surrogate. Borrows s; result +1. */
+ScrStr *scr_qs_escape(ScrStr *s);
 
 /* decodeURIComponent — ECMA-262 Decode with the empty reserved set: %XX
  * escapes decode bytewise (raw non-escape bytes copy through) and escaped
@@ -1431,8 +1594,8 @@ ScrStr *scr_str_decode_uri_component_try(ScrStr *s);
  * scr_url_params.c precedent: pure data transforms, no loop hooks).
  * querystring.escape needs no entry here: Node's qsEscape encodes exactly
  * the component unreserved set, so the frontend lowers it to
- * scr_str_encode_uri_component (always linked; a program using only
- * escape never pulls this unit). */
+ * scr_qs_escape beside the component encoder (always linked; a program
+ * using only escape never pulls this unit). */
 
 /* querystring.unescape — Node's qsUnescape: strict decodeURIComponent
  * first, and on failure the lenient legacy unescapeBuffer(s).toString()
@@ -1471,6 +1634,17 @@ void scr_qs_parse_into(ScrMap *out, const ScrStr *qs, const ScrStr *sep,
  * Borrows config; returns +1, or NULL with a Node-coded TypeError pending. */
 struct ScrDyn *scr_util_parse_args(const struct ScrDyn *config);
 ScrStr *scr_util_style_text(const struct ScrDyn *format, const struct ScrDyn *text, const struct ScrDyn *options);
+/* Node's terminal color decision (FORCE_COLOR, NO_COLOR, TERM, CI hosts)
+ * once the stream is a terminal (scr_util_style.c). */
+bool scr_util_terminal_colors(void);
+/* util.inherits, util.deprecate, util.callbackify and util.debuglog
+ * (scr_util_callable.c). Arguments are borrowed; function results are +1
+ * native dyn functions, or NULL with Node's TypeError pending. */
+void scr_util_inherits(struct ScrDyn *ctor, struct ScrDyn *super_ctor);
+struct ScrDyn *scr_util_deprecate(struct ScrDyn *fn, struct ScrDyn *msg, struct ScrDyn *code,
+                                  struct ScrDyn *options);
+struct ScrDyn *scr_util_callbackify(struct ScrDyn *original);
+struct ScrDyn *scr_util_debuglog(struct ScrDyn *section, struct ScrDyn *callback);
 
 /* Node/libuv system error utilities. Arguments are checked without coercion;
  * entries is a fresh array of [number, [name, message]] pairs (+1). */
@@ -1499,13 +1673,13 @@ void scr_process_load_env_file(const struct ScrDyn *path);
  * key included), and everything else (null, undefined, nested objects/
  * arrays, functions) is the empty value — key and eq still emitted.
  * sep/eq fall back to "&"/"=" when empty (Node's `sep ||= '&'`). Result
- * +1; never throws. */
+ * +1; a lone surrogate throws URIError [ERR_INVALID_URI] (NULL). */
 ScrStr *scr_qs_stringify(const struct ScrDyn *obj, const ScrStr *sep,
                          const ScrStr *eq);
 
 /* encodeURI — the same ECMA-262 Encode() with the reserved set and '#'
- * kept unescaped (scr_encode_uri_impl's keep_reserved arm). Total by the
- * well-formed-UTF-8 invariant. Borrows s; result +1. */
+ * kept unescaped (scr_encode_uri_impl's keep_reserved arm). Throws the same
+ * URIError on a lone surrogate. Borrows s; result +1. */
 ScrStr *scr_encode_uri(ScrStr *s);
 /* atob/btoa — the WHATWG base64 globals (Node globals since v16). The
  * argument is a borrowed dyn value: WebIDL ToString runs here over the
@@ -1525,8 +1699,9 @@ ScrStr *scr_b64_missing_arg(void);
 
 /* ── arrays ─────────────────────────────────────────────────────────
  * Monomorphic, growable, refcounted. Elements live in 8-byte slots
- * (doubles/bools/pointers via memcpy and casts); `elem` records what the
- * slots hold so the array can release its own reference elements — ScrStr's
+ * (doubles/pointers via memcpy and casts), except SCR_ELEM_BOOL, whose
+ * dense storage holds one byte (0 or 1) per element; `elem` records what
+ * the slots hold so the array can release its own reference elements — ScrStr's
  * layout is untouched (interned-literal statics depend on it), so the
  * element kind lives here instead of in a shared object header. A separate
  * presence bitset distinguishes a hole from a present `undefined`-carrying
@@ -1603,6 +1778,9 @@ typedef struct ScrArr {
   uint32_t filled;
   /* SCR_ELEM_REF only; NULL for every other element kind. */
   const ScrArrOps *ops;
+  /* Dense values: `cap` 8-byte slots, or `cap` bytes for SCR_ELEM_BOOL
+   * (scr_arr_slot_width). Sparse entries and properties keep 8-byte slots
+   * for every kind; a bool slot is 0 or 1 wherever it lives. */
   uint64_t *data;
   uint8_t *present; /* one state per dense slot; heap arrays share data allocation */
   /* Rarely used storage (sparse indices, noncanonical numeric properties,
@@ -1631,10 +1809,41 @@ _Static_assert(offsetof(ScrArr, filled) == 3 * sizeof(size_t) + 4,
 _Static_assert(offsetof(ScrArr, data) == 3 * sizeof(size_t) + 8 + sizeof(void *),
                "inline element reads use ScrArr.data as %ScrArr field 8");
 
+/* Bytes per dense value slot. */
+static inline size_t scr_arr_slot_width(const ScrArr *a) {
+  return a->elem == SCR_ELEM_BOOL ? 1 : sizeof(uint64_t);
+}
+
+/* The dense value at `index` (< cap) as an 8-byte slot, and its store. */
+static inline uint64_t scr_arr_dense_get(const ScrArr *a, size_t index) {
+  if (a->elem == SCR_ELEM_BOOL) return ((const uint8_t *)a->data)[index];
+  return a->data[index];
+}
+
+static inline void scr_arr_dense_put(ScrArr *a, size_t index, uint64_t slot) {
+  if (a->elem == SCR_ELEM_BOOL) ((uint8_t *)a->data)[index] = (uint8_t)slot;
+  else a->data[index] = slot;
+}
+
 /* Lower the hole-free prefix to at most `index`: call before storing a
  * non-value state at `index`, or before moving states into [index, ...). */
 static inline void scr_arr_cut(ScrArr *a, size_t index) {
   if (a->filled > index) a->filled = (uint32_t)index;
+}
+
+/* The first index in [f, end) whose state is not a present value (or end).
+ * Compares eight states per step: bulk copies (slice, concat, spread) end
+ * with this scan over the whole copied range. */
+static inline size_t scr_arr_value_run(const uint8_t *present, size_t f, size_t end) {
+  const uint64_t values = 0x0101010101010101ull * SCR_ARR_VALUE;
+  while (end - f >= 8) {
+    uint64_t word;
+    memcpy(&word, present + f, sizeof word);
+    if (word != values) break;
+    f += 8;
+  }
+  while (f < end && present[f] == SCR_ARR_VALUE) f++;
+  return f;
 }
 
 /* Extend the hole-free prefix over populated dense states. Starts at the
@@ -1642,7 +1851,7 @@ static inline void scr_arr_cut(ScrArr *a, size_t index) {
 static inline void scr_arr_refill(ScrArr *a) {
   size_t end = a->len < a->cap ? a->len : a->cap;
   size_t f = a->filled;
-  while (f < end && a->present[f] == SCR_ARR_VALUE) f++;
+  if (f < end) f = scr_arr_value_run(a->present, f, end);
   a->filled = (uint32_t)f;
 }
 
@@ -1667,6 +1876,12 @@ ScrArr *scr_arr_new(ScrElemKind elem, size_t initial_cap); /* returns +1 */
  * header (the array then allocates with the collector header — see the
  * struct comment). Returns +1. */
 ScrArr *scr_arr_new_ops(const ScrArrOps *ops, size_t initial_cap);
+/* An empty array expected to receive a few elements: its first slots live
+ * in the array's own block (one allocation; the block of a plain empty
+ * array plus five 8-byte slots). Otherwise exactly scr_arr_new(elem, 0) and
+ * scr_arr_new_ops(ops, 0). Returns +1. */
+ScrArr *scr_arr_new_small(ScrElemKind elem);
+ScrArr *scr_arr_new_ops_small(const ScrArrOps *ops);
 
 static inline ScrArr *scr_arr_retain(ScrArr *a) {
   if (a->rc != SIZE_MAX) {
@@ -1682,6 +1897,10 @@ void scr_arr_release(ScrArr *a);
 void scr_arr_copy_metadata(ScrArr *a, struct ScrDyn *target);
 /* The array's out-of-line storage, allocated (zeroed) on first use. */
 ScrArrExt *scr_arr_ext(ScrArr *a);
+/* Moves inline dense slots (kept in the header block of a small array) to
+ * their own allocation, so the storage pointers may be swapped with another
+ * array's. No-op for other arrays. */
+void scr_arr_outline(ScrArr *a);
 /* Swaps the sparse slots and numeric properties of two arrays; each keeps
  * its own match metadata (refresh of a cached typed view, llvm/dyn.ts). */
 void scr_arr_swap_indexed_ext(ScrArr *a, ScrArr *b);
@@ -1814,14 +2033,21 @@ ScrArr *scr_arr_sort_primitive(ScrArr *a, bool copy);
  * move without reference-count traffic; a pending exception from `f` stops
  * the sort and leaves the snapshot unchanged. */
 struct ScrClosure;
-void scr_arr_sort_values(ScrArr *a, double count, struct ScrClosure *f, uint32_t arity);
+/* A nonzero `order` says `f` orders number keys ascending (1) or descending
+ * (-1) without side effects: f64 elements are their own keys, and reference
+ * elements read theirs through the borrowed `key` closure (element ->
+ * number). Keys that are all numbers other than NaN and -0 then sort without
+ * calling `f`, with the same stable result. */
+void scr_arr_sort_values(ScrArr *a, double count, struct ScrClosure *f, uint32_t arity,
+                         int32_t order, struct ScrClosure *key);
 /* Comparator sort of a dense array in place: `a.sort(f)`, or with `owned`
  * the private copy of `a.toSorted(f)`. Returns false without calling `f`
  * when `a` has holes, storage-level undefined or a sparse tail, or is
  * published; the caller then sorts a compacted snapshot. Otherwise sorts
  * and returns true; a pending exception from `f` leaves a shared `a`
  * unwritten (an owned copy then holds a permutation of its values). */
-bool scr_arr_sort_dense(ScrArr *a, struct ScrClosure *f, uint32_t arity, bool owned);
+bool scr_arr_sort_dense(ScrArr *a, struct ScrClosure *f, uint32_t arity, bool owned,
+                        int32_t order, struct ScrClosure *key);
 
 /* pop traps on an empty array; _ref transfers ownership out (+1 to the
  * caller, no release). */
@@ -1879,6 +2105,9 @@ ScrStr *scr_arr_join(ScrArr *a, ScrStr *sep);
  * missing ones skip. Borrows both; +1 result; never throws. */
 ScrStr *scr_str_raw(ScrArr *raw, ScrArr *subs);
 
+typedef int32_t (*ScrRegexMatcherFn)(const uint8_t *s, int32_t len, int32_t start,
+                                     uint8_t **capture);
+
 typedef struct ScrRegex {
   size_t rc;      /* SIZE_MAX = immortal literal template */
   ScrStr *source; /* pattern text between the slashes */
@@ -1887,7 +2116,17 @@ typedef struct ScrRegex {
   double last_index;
   struct ScrRegex *literal; /* immutable bytecode owner for literal instances */
   void *native;   /* one-byte-subject matcher built with bc (NULL: lre_exec only) */
+  /* Build-time matcher of a literal template (NULL: none). Searches the
+   * ASCII bytes s[0..len) from start (one anchored attempt when sticky);
+   * on a match stores 2 * ncap pointers into s (NULL when unset) and
+   * returns 1, otherwise 0. A negative len returns ncap. */
+  ScrRegexMatcherFn matcher;
 } ScrRegex;
+
+/* Backtrack stack of build-time regex matchers: grow *stack (initially the
+ * matcher's inline buffer) to at least `need` words; traps on OOM. */
+void scr_regex_stack_grow(int32_t **stack, int32_t *cap, int32_t *inline_buf, int32_t need);
+void scr_regex_stack_free(int32_t *stack);
 
 static inline ScrRegex *scr_regex_retain(ScrRegex *re) {
   if (re->rc != SIZE_MAX) re->rc++;
@@ -1915,6 +2154,23 @@ ScrArr *scr_regex_match(ScrStr *s, ScrRegex *re);
 /* re.exec(s), string-first ABI: match slice with global/sticky lastIndex
  * transitions. Borrows both; +1 or NULL. */
 ScrArr *scr_regex_exec(ScrStr *s, ScrRegex *re);
+/* exec for a result read only through constant indices and null tests:
+ * bit k of `mask` (k < 53) selects the captures that are materialized; the
+ * rest, and the index/input properties, are left out. Same lastIndex
+ * transitions and NULL result as scr_regex_exec. Borrows both; +1 or NULL. */
+ScrArr *scr_regex_exec_groups(ScrStr *s, ScrRegex *re, double mask);
+/* scr_regex_exec_groups whose captures in `lazy` (a subset of `mask`) are
+ * read only through scr_regex_group_eq/_number/_parse_int: they may stay
+ * spans of the subject instead of strings. */
+ScrArr *scr_regex_exec_spans(ScrStr *s, ScrRegex *re, double mask, double lazy);
+/* s.match(re) read only through constant indices and null tests: a global
+ * regex answers scr_regex_match; otherwise scr_regex_exec_spans. */
+ScrArr *scr_regex_match_groups(ScrStr *s, ScrRegex *re, double mask, double lazy);
+/* Reads of a lazy capture k of such a result (borrowed): `capture === lit`,
+ * Number(capture) and parseInt(capture, radix). */
+bool scr_regex_group_eq(ScrArr *m, double k, ScrStr *lit);
+double scr_regex_group_number(ScrArr *m, double k);
+double scr_regex_group_parse_int(ScrArr *m, double k, double radix);
 /* s.search(re): the first match's UTF-16 index, or -1 — a fresh exec from
  * position 0 (Symbol.search never touches lastIndex, so no flag fence:
  * /g is irrelevant, /y anchors at 0). Borrows both; never throws. */
@@ -2333,6 +2589,11 @@ typedef struct ScrClosure {
    * SameValue, searches and own properties all observe one function.
    * Borrowed: the adapter keeps its original alive through its captures. */
   struct ScrClosure *identity;
+  /* The same function with every reference argument borrowed (the caller
+   * keeps each one alive across the call and releases nothing extra), or
+   * NULL. Same signature as `fn`; only callers that hold their arguments
+   * for the whole call may enter through it. */
+  void *fn_borrowed;
   ScrBox *caps[];
 } ScrClosure;
 
@@ -2661,6 +2922,10 @@ double scr_emitter_listener_count(ScrEmitter *em, ScrStr *name);
 double scr_emitter_listener_count_fn(ScrEmitter *em, ScrStr *name, ScrClosure *fn);
 double scr_emitter_listener_count_dyn(ScrEmitter *em, ScrStr *name, const ScrDyn *fn);
 ScrArr *scr_emitter_event_names(ScrEmitter *em);          /* +1 string[] */
+/* events.errorMonitor's event key (immortal). Every name parameter above
+ * accepts it; the registry matches it by identity, so no string name,
+ * whatever its bytes, reaches the errorMonitor listeners. */
+ScrStr *scr_emitter_error_monitor(void);
 /* Pre-create a name's eventNames() rank with no listener (Node's stream
  * classes pre-create their known _events keys; empty = absent for every
  * other read). The stream constructors call this. */
@@ -2908,13 +3173,15 @@ ScrPromise *scr_sp_pipeline(double n, ScrStream **streams);
  * and settle at the terminal point (right after 'close', the eos timing
  * Node's consumers share) — text answers the utf8 decode, json parses
  * the text (malformed input rejects with the parse's SyntaxError; the
- * result is a +1 dyn tree), buffer the concatenated bytes. Stream
- * errors reject; an early close rejects ERR_STREAM_PREMATURE_CLOSE; a
- * stream with no readable side rejects Node's async-iterable TypeError.
+ * result is a +1 dyn tree), buffer the concatenated bytes, arrayBuffer
+ * a +1 ArrayBuffer dyn over them. Stream errors reject; an early close
+ * rejects ERR_STREAM_PREMATURE_CLOSE; a stream with no readable side
+ * rejects Node's async-iterable TypeError.
  * Streams borrowed; +1 promises. */
 ScrPromise *scr_sc_text(ScrStream *s);
 ScrPromise *scr_sc_json(ScrStream *s);
 ScrPromise *scr_sc_buffer(ScrStream *s);
+ScrPromise *scr_sc_array_buffer(ScrStream *s);
 /* Readable.from(array): +1 fully-seeded object-entry stream (one WHOLE
  * chunk per element — strings or Buffers per the flag; hwm 1, already
  * EOF'd). Borrows arr. */
@@ -3225,8 +3492,11 @@ ScrStr *scr_process_platform(void); /* +1 interned ("darwin", "linux", ...) */
 ScrStr *scr_process_cwd(void);      /* +1 fresh (getcwd) */
 
 bool scr_stdio_write(int fd, const void *data, size_t len);
+bool scr_stdio_write_str(int fd, const ScrStr *s);
 int scr_stdio_write_raw(int fd, const void *data, size_t len);
-extern SCR_TL bool (*scr_stdio_write_hook)(int fd, const void *data, size_t len);
+/* `wide` marks string bytes that may hold lone surrogates, which become
+ * U+FFFD when they reach the stream itself. */
+extern SCR_TL bool (*scr_stdio_write_hook)(int fd, const void *data, size_t len, bool wide);
 /* process.stdout/.stderr .write — raw bytes (no newline or formatting; data
  * borrowed), promptly visible and ordered with console output. Constantly
  * true (the synchronous runtime never queues backpressure). */
@@ -3244,6 +3514,8 @@ ScrStr *scr_env_get(const ScrStr *name);
  * children observe the write, like Node. Both borrowed. Never throws. */
 void scr_env_set(const ScrStr *name, const ScrStr *value);
 void scr_env_unset(const ScrStr *name); /* delete process.env.NAME */
+/* NODE_DEBUG as the process started (NULL when unset), for util.debuglog. */
+const char *scr_node_debug_initial(void);
 /* The whole environment as alternating [k, v, k, v, ...] strings in
  * environ order — the compiler's process.env snapshot builds its record
  * from this. +1 fresh array. Never throws. */
@@ -3984,6 +4256,23 @@ ScrStr *scr_path_win32_extname(ScrStr *path);
 bool scr_path_win32_is_absolute(ScrStr *path);
 ScrStr *scr_path_win32_relative(ScrStr *from, ScrStr *to);
 ScrStr *scr_path_win32_to_namespaced_path(ScrStr *path);
+/* path.parse / path.format for both families: parse answers a fresh
+ * string[] [root, dir, base, ext, name]; format takes the pathObject
+ * fields with undefined spelled "" (Node reads each through `||`). */
+ScrArr *scr_path_parse(ScrStr *path);
+ScrArr *scr_path_win32_parse(ScrStr *path);
+ScrStr *scr_path_format(ScrStr *root, ScrStr *dir, ScrStr *base, ScrStr *name, ScrStr *ext);
+ScrStr *scr_path_win32_format(ScrStr *root, ScrStr *dir, ScrStr *base, ScrStr *name,
+                              ScrStr *ext);
+/* path.matchesGlob (scr_glob.c): Node 24's minimatch with matchGlobPattern's
+ * options, case-insensitive on macOS and Windows hosts like Node. Borrows
+ * both; a brace sequence over 2^32 - 1 elements throws Node's RangeError, a
+ * pattern over 65536 units its TypeError, and a segment regex invalid under
+ * the u flag its SyntaxError. scr_glob_match is the same with the family
+ * and case mode explicit (the oracle tests use it). */
+bool scr_path_matches_glob(ScrStr *path, ScrStr *pattern);
+bool scr_path_win32_matches_glob(ScrStr *path, ScrStr *pattern);
+bool scr_glob_match(ScrStr *path, ScrStr *pattern, bool windows, bool nocase);
 
 /* fs.openSync(path, flags) → the raw fd as f64 (Node's string flag
  * grammar; unknown flags throw Node's ERR_INVALID_ARG_VALUE TypeError
@@ -4198,6 +4487,19 @@ ScrStr *scr_bigint_inspect(ScrBigInt *value); /* decimal plus trailing n; +1 */
 double scr_bigint_to_f64(ScrBigInt *value);
 ScrBigInt *scr_bigint_as_uint_n(double bits, ScrBigInt *value);
 ScrBigInt *scr_bigint_as_int_n(double bits, ScrBigInt *value);
+/* Small-value bigint trees the compiler evaluates in 64-bit registers:
+ * mag64 stores the low 64 bits of the magnitude and its length in 64-bit
+ * words, and returns the sign (-1, 0, 1); from_mag64 builds +-mag (+1).
+ * wrap_eval is the exact fallback over a compiler-built postfix program
+ * (leaves, and numbers for BigInt(number) operands); +1 or NULL with an
+ * exception pending. */
+int scr_bigint_mag64(const ScrBigInt *value, uint64_t *mag, uint32_t *words);
+/* Whether a StringToBigInt text with this many significant digits in radix
+ * 2, 8, 10 or 16 can fit the maximum BigInt size (no size arithmetic that
+ * can wrap; the parser's guard before it allocates). */
+bool scr_bigint_digits_fit(size_t digits, unsigned radix);
+ScrBigInt *scr_bigint_from_mag64(uint64_t mag, bool negative);
+ScrBigInt *scr_bigint_wrap_eval(const char *program, ScrBigInt *const *leaves, const double *numbers);
 ScrBigInt *scr_bigint_buffer_read(ScrBytes *bytes, double offset, bool sign, bool le);
 double scr_bigint_buffer_write(ScrBytes *bytes, ScrBigInt *value, double offset, bool sign, bool le);
 ScrBigInt *scr_bigint_dataview_get(ScrBytes *bytes, double offset, bool sign, bool le);
@@ -4212,6 +4514,26 @@ ScrStr *scr_os_tmpdir(void);
 ScrStr *scr_os_release(void); /* uname(2) release — +1 fresh */
 ScrStr *scr_os_type(void);    /* uname(2) sysname — +1 fresh */
 double scr_os_totalmem(void); /* total physical memory, bytes */
+/* node:os host facts (scr_os.c), libuv's answers: uname machine/version,
+ * the host name, "LE"/"BE", free memory in bytes, uptime in seconds and
+ * the 1/5/15-minute load averages (+1 fresh results; never throw). */
+ScrStr *scr_os_machine(void);
+ScrStr *scr_os_version(void);
+ScrStr *scr_os_hostname(void);
+ScrStr *scr_os_endianness(void);
+double scr_os_freemem(void);
+double scr_os_uptime(void);
+ScrArr *scr_os_loadavg(void);
+/* os.getPriority(pid): validateInt32, then the scheduling priority;
+ * failures throw Node's RangeError or SystemError (ERR_SYSTEM_ERROR). */
+double scr_os_get_priority(double pid);
+/* os.cpus(): take answers the CPU count of a fresh snapshot; model and
+ * field (0 speed, 1 user, 2 nice, 3 sys, 4 idle, 5 irq) read it. */
+double scr_os_cpus_take(void);
+ScrStr *scr_os_cpus_model(double i);
+double scr_os_cpus_field(double i, double field);
+/* os.constants: the per-thread null-prototype constants object (+1). */
+ScrDyn *scr_os_constants(void);
 double scr_os_available_parallelism(void); /* uv_available_parallelism: CPUs this process may use, >= 1 */
 /* os.userInfo()'s field trio (pw_name / pw_shell / pw_dir — the passwd
  * home, not the $HOME cascade). +1 fresh; abort on lookup failure. */
@@ -4378,7 +4700,7 @@ typedef enum {
   SCR_DYNH_WEB_CONTROLLER, /* native ReadableStreamDefaultController */
   SCR_DYNH_FETCH_RESPONSE, /* native static-fetch Response */
   SCR_DYNH_FETCH_HEADERS, /* native static-fetch response Headers */
-  SCR_DYNH_EVENT,          /* native static-fetch abort Event */
+  SCR_DYNH_EVENT,          /* ScrEvent — new Event() and AbortSignal's abort events */
   SCR_DYNH_ABORT_CONTROLLER, /* native static-fetch AbortController */
   SCR_DYNH_CHILD,          /* child_process.ChildProcess */
   SCR_DYNH_FILE_HANDLE,    /* fs/promises.FileHandle */
@@ -4403,6 +4725,9 @@ typedef enum {
   SCR_DYNH_WORKER,
   SCR_DYNH_MESSAGE_PORT,
   SCR_DYNH_SHARED_ARRAY_BUFFER,
+  SCR_DYNH_CONSOLE_INSTANCE, /* node:console Console instance */
+  SCR_DYNH_EVENT_TARGET,   /* ScrEventTarget — new EventTarget() */
+  SCR_DYNH_CUSTOM_EVENT,   /* ScrEvent with detail — new CustomEvent() */
   SCR_DYNH_COUNT,
 } ScrDynHandleTag;
 
@@ -4464,6 +4789,41 @@ typedef struct ScrDynTypedArrayOps {
   ScrDyn *(*get)(void *arr, double index);
   bool (*set)(void *arr, double index, const ScrDyn *value);
 } ScrDynTypedArrayOps;
+
+/* Field access for a live typed reference to a declared-field record,
+ * emitted per record shape by the compiler. `names` lists the fields in
+ * the order the record's snapshot defines them; the compiler emits these
+ * hooks only for shapes whose names are all ordinary (no array-index
+ * spellings, no `__proto__`), so that order is also JS own-key order.
+ *   has: whether field `index` is an own property (an absent optional
+ *        field is not);
+ *   get: +1 dyn view of field `index`, built exactly as the snapshot
+ *        builds it. Callers check `has` first. */
+typedef struct ScrDynTypedRecordOps {
+  size_t count;
+  ScrStr *const *names; /* immortal field-name strings */
+  bool (*has)(void *rec, size_t index);
+  ScrDyn *(*get)(void *rec, size_t index);
+  /* Every field is required: `has` always answers true and no key of the
+   * record can be deleted. */
+  bool fixed;
+  /* The field names as an immortal string[], built on first use by
+   * for-in over a record with every field present (atomic slot). */
+  ScrArr *keys;
+} ScrDynTypedRecordOps;
+
+/* Prototype members of a compiled class seen as `unknown`, emitted per
+ * class by the compiler: the string names of methods, getters and setters
+ * declared on the class and its bases, and `constructor`. The checked
+ * view of an instance holds only its own fields; `in` answers inherited
+ * members from this table.
+ *   exact: the table of the instance's own class when it may be a
+ *          subclass of the capsule's static class; NULL otherwise. */
+typedef struct ScrDynTypedClassOps {
+  const struct ScrDynTypedClassOps *(*exact)(void *instance);
+  size_t count;
+  ScrStr *const *names; /* immortal member-name strings */
+} ScrDynTypedClassOps;
 
 struct ScrDyn {
   size_t rc; /* SIZE_MAX = immortal (unused for dyn; kept per convention) */
@@ -4529,7 +4889,11 @@ struct ScrDyn {
       ScrDyn *(*materialize)(void *);
       void (*commit)(void *, const ScrDyn *);
       /* Live native arrays: per-element access that bypasses the whole-array
-       * snapshot (scr_dyn_typed_ref_bind_array). NULL for other referents. */
+       * snapshot (scr_dyn_typed_ref_bind_array). Declared-field records
+       * keep their ScrDynTypedRecordOps here instead, flagged by `record`
+       * (scr_dyn_typed_ref_bind_record), and class instances their
+       * ScrDynTypedClassOps, flagged by `klass`
+       * (scr_dyn_typed_ref_bind_class). NULL for other referents. */
       const ScrDynTypedArrayOps *array;
       /* Both caches belong to this capsule. ReadableStream canonicalizes
        * capsules for repeated source references, so the refreshed dyn view
@@ -4538,9 +4902,11 @@ struct ScrDyn {
       ScrDyn *materialized;
       ScrDynTypedCast *casts;
       /* One word keeps this, the largest payload, at its previous size. */
-      uint32_t type_key_len : 30;
+      uint32_t type_key_len : 28;
       uint32_t traced : 1; /* native referent has a cycle header */
       uint32_t observed : 1; /* native release reports this identity's disposal */
+      uint32_t record : 1; /* `array` holds ScrDynTypedRecordOps */
+      uint32_t klass : 1; /* `array` holds ScrDynTypedClassOps */
     } typed_ref;
     /* SCR_DYN_PROMISE: the retained promise. The boundary contract: it
      * settles with a dyn payload (SCR_EXC_REF ScrDyn fulfillment or a
@@ -4569,6 +4935,12 @@ static inline ScrDyn *scr_dyn_retain(ScrDyn *d) {
 }
 
 void scr_dyn_release(ScrDyn *d); /* releases the tree recursively; NULL-tolerant */
+
+/* The element hooks of a live array capsule, or NULL (including for record
+ * and class capsules, which keep their hooks in the same slot). */
+static inline const ScrDynTypedArrayOps *scr_dyn_typed_ref_array_ops(const ScrDyn *d) {
+  return d->v.typed_ref.record || d->v.typed_ref.klass ? NULL : d->v.typed_ref.array;
+}
 
 /* RFC 8259 parse of a UTF-8 string. Borrows text; returns +1, or throws a
  * catchable Node-flavored SyntaxError string and returns NULL (callers are
@@ -4613,7 +4985,8 @@ void *scr_json_parse_schema(const ScrStr *text, const ScrJsonSchema *schema);
 
 /* Native JSON callbacks. All inputs borrowed, result owned (+1), NULL on
  * pending exception. Stringify returns a dyn string OR actual undefined
- * when the replacer omits the root. gap has already applied space rules. */
+ * when the replacer omits the root. An array replacer selects the object
+ * keys to serialize. gap has already applied space rules. */
 ScrDyn *scr_json_parse_reviver(ScrStr *text, const ScrDyn *reviver);
 ScrDyn *scr_json_stringify_replacer(const ScrDyn *value, const ScrDyn *replacer, const ScrStr *gap);
 ScrDyn *scr_json_stringify_value(const ScrDyn *value, const ScrDyn *replacer, const ScrDyn *space);
@@ -4634,6 +5007,24 @@ bool scr_dyn_field_eq_bool(const ScrDyn *d, const ScrStr *key, bool value);
  * TypeError. */
 ScrDyn *scr_dyn_obj_keys(const ScrDyn *v);
 ScrDyn *scr_dyn_for_in_keys(const ScrDyn *v);
+/* for-in keys as a native string[] (+1); NULL with an exception pending. */
+ScrArr *scr_dyn_for_in_key_strs(const ScrDyn *v);
+bool scr_dyn_for_in_stable(const ScrDyn *v);
+/* Object.keys as a native string[] (+1); NULL with an exception pending. */
+ScrArr *scr_dyn_obj_key_strs(const ScrDyn *v);
+/* Object.entries as owned (key, value) pairs: compiled code moves each
+ * pair into a native [string, any] row, then frees the snapshot with
+ * scr_dyn_entry_pairs_free. NULL with an exception pending. */
+typedef struct {
+  ScrStr *key;
+  ScrDyn *value;
+} ScrDynEntryPair;
+typedef struct {
+  size_t count;
+  ScrDynEntryPair pairs[];
+} ScrDynEntryPairs;
+ScrDynEntryPairs *scr_dyn_obj_entry_pairs(const ScrDyn *v);
+void scr_dyn_entry_pairs_free(ScrDynEntryPairs *pairs);
 /* Snapshot all own string keys of a SCR_DYN_OBJ in JS order. Returns +1. */
 ScrDyn *scr_dyn_obj_own_keys(const ScrDyn *v);
 ScrDyn *scr_dyn_own_keys(const ScrDyn *value);
@@ -4812,6 +5203,15 @@ void scr_dyn_typed_ref_commit(ScrDyn *d);
  * reads, `length`, in-range writes, `in`, own-property probes, and array
  * iteration then touch one element instead of rebuilding the snapshot. */
 void scr_dyn_typed_ref_bind_array(ScrDyn *d, const ScrDynTypedArrayOps *ops);
+/* Attach per-field access to a live record capsule (idempotent). While the
+ * capsule has no cached checked view (nothing has added properties or
+ * changed its prototype), keyed reads of declared fields, `in`/hasOwn,
+ * for-in, Object.keys/values/entries, typeof and Array.isArray answer from
+ * the native record, creating only the field values they return. */
+void scr_dyn_typed_ref_bind_record(ScrDyn *d, const ScrDynTypedRecordOps *ops);
+/* Attach the prototype member names of a class instance capsule
+ * (idempotent), so `in` sees its methods and accessors. */
+void scr_dyn_typed_ref_bind_class(ScrDyn *d, const ScrDynTypedClassOps *ops);
 /* Fast keyed read on a live array capsule: +1 value for `length` and for
  * present or explicitly-undefined elements; NULL when the answer needs the
  * snapshot (holes, out-of-range, non-index names, or no bound ops). */
@@ -4894,6 +5294,9 @@ bool scr_dyn_has_key(const ScrDyn *v, const ScrStr *key);
  * callable methods have been initialized in the optional dispatch unit. */
 bool scr_dyn_array_prototype_has_key(const ScrStr *key);
 void scr_dyn_array_prototype_mark_ready(void);
+/* The `in` operator: scr_dyn_has_key plus members inherited from builtin
+ * prototypes and compiled class prototypes. */
+bool scr_dyn_in(const ScrDyn *v, const ScrStr *key);
 /* Bare `typeof v` on a dyn value: the dyn kind's JS answer (+1 string;
  * null answers "object"). Never throws. */
 ScrStr *scr_dyn_typeof(const ScrDyn *d);
@@ -5096,8 +5499,80 @@ typedef struct ScrDynHandleOps {
   ScrDyn *(*iter_pack)(void *h);
   /* A live native iterator step; index advances only when a value is emitted. */
   ScrDyn *(*iter_step)(void *h, double *index, unsigned selection);
+  /* util.inspect renders `<cls> <view>` for the dyn object this answers
+   * (+1); NULL = the class has no inspection (the loud fence). */
+  ScrDyn *(*inspect_view)(void *h);
 } ScrDynHandleOps;
 ScrDyn *scr_dyn_native_handle_iterator(ScrDyn *source, unsigned selection);
+
+/* ── EventTarget / Event / CustomEvent (scr_event_target.c) ───────────
+ * Node's internal/event_target over checked-dynamic values. A target's
+ * listeners live in a ScrEventTargetCore: per event type, a linked list
+ * in registration order whose nodes keep their `next` link after removal,
+ * so a dispatch that cached a removed node continues where Node's does.
+ * Plain `new EventTarget()` values are SCR_DYNH_EVENT_TARGET handles;
+ * AbortSignal embeds a core of its own (MaxListeners 0, the `onabort`
+ * event-handler attribute). Events are ScrEvent handles (SCR_DYNH_EVENT,
+ * SCR_DYNH_CUSTOM_EVENT for CustomEvent). Listener exceptions, and
+ * rejections of a listener's returned promise or of a handleEvent call,
+ * are reported as uncaught exceptions from a nextTick, like Node. */
+typedef struct ScrEtRoot ScrEtRoot;
+typedef struct ScrEtHandler ScrEtHandler;
+typedef struct ScrEtHook ScrEtHook;
+typedef struct ScrEventTargetCore {
+  ScrEtRoot *roots;        /* per event type, in first-add order */
+  ScrEtHandler *handlers;  /* event-handler attributes (`onabort`) */
+  ScrEtHook *hooks;        /* options.signal removal hooks aimed here (weak) */
+  double max_listeners;    /* 0 = no leak warning (AbortSignal) */
+  bool warned;
+  const char *cls;         /* the warning's target name ("EventTarget") */
+  bool tracked;            /* in the exit teardown registry */
+  struct ScrEventTargetCore *tracked_prev, *tracked_next;
+} ScrEventTargetCore;
+
+typedef struct ScrEvent {
+  size_t rc;
+  ScrStr *type;
+  ScrDyn *target;  /* +1, NULL until dispatched */
+  ScrDyn *detail;  /* CustomEvent's detail (+1); NULL for Event */
+  double time_stamp;
+  bool custom, bubbles, cancelable, composed, trusted;
+  bool default_prevented, propagation_stopped, stop, dispatching, in_passive;
+  bool tracked;
+  struct ScrEvent *tracked_prev, *tracked_next;
+} ScrEvent;
+
+void scr_et_core_init(ScrEventTargetCore *core, double max_listeners, const char *cls);
+/* Drops every listener and handler (teardown and target destruction). */
+void scr_et_core_drop(ScrEventTargetCore *core);
+/* The EventTarget methods over a core: `self` is the target's own dyn
+ * value (borrowed — `this` for listeners and the events' target), args
+ * borrowed. +1 result, or NULL with the exception pending. */
+ScrDyn *scr_et_add_listener(ScrEventTargetCore *core, ScrDyn *const *args, size_t argc);
+ScrDyn *scr_et_remove_listener(ScrEventTargetCore *core, ScrDyn *const *args, size_t argc);
+ScrDyn *scr_et_dispatch_event(ScrEventTargetCore *core, ScrDyn *self, ScrDyn *const *args, size_t argc);
+/* Dispatches an event handle (borrowed) without the argument checks. */
+void scr_et_dispatch(ScrEventTargetCore *core, ScrDyn *self, ScrDyn *event);
+/* `on<type>` attributes (Node's defineEventHandler): get answers +1 (null
+ * when unset); set registers the wrapper listener on first assignment. */
+ScrDyn *scr_et_handler_get(ScrEventTargetCore *core, const char *type);
+void scr_et_handler_set(ScrEventTargetCore *core, const char *type, const ScrDyn *value);
+/* A trusted (isTrusted) Event handle of the given type, +1. */
+ScrDyn *scr_event_new_trusted(const char *type);
+/* new EventTarget() / new Event(type, options) / new CustomEvent(type,
+ * options): `args` is the argument vector as one dyn array (borrowed).
+ * +1 handle, or NULL with the exception pending. */
+ScrDyn *scr_event_target_new(void);
+ScrDyn *scr_event_new(ScrDyn *args);
+ScrDyn *scr_custom_event_new(ScrDyn *args);
+/* `v instanceof Event` (kind 0), `CustomEvent` (1), `EventTarget` (2). */
+bool scr_event_is(const ScrDyn *v, double kind);
+/* The AbortSignal unit's view of its handles for options.signal: the
+ * signal's core and aborted flag, or NULL for a non-signal value.
+ * Installed by the AbortSignal unit; NULL when no signal can exist. */
+extern SCR_TL ScrEventTargetCore *(*scr_et_signal_core_fn)(const ScrDyn *d, bool *aborted);
+/* events.addAbortListener(signal, listener): +1 disposable, or NULL. */
+ScrDyn *scr_events_add_abort_listener(ScrDyn *signal, ScrDyn *listener);
 
 ScrDyn *scr_intl_segmenter_new(void);
 /* en-US DateTimeFormat for Effect's named-zone bag. Locale and options are
@@ -5110,6 +5585,29 @@ ScrDyn *scr_process_builtin_unsupported(ScrStr *id, ScrStr *member);
 ScrDyn *scr_global_native(ScrArr *known);
 ScrDyn *scr_global_native_init(ScrArr *known, ScrDyn *(*console_get)(void));
 ScrDyn *scr_console_native(void);
+/* node:console Console instances: a native handle over the stdout/stderr
+ * targets — process stdio (fd 1/2) or a writable stream bound by
+ * scr_console_bind (scr_stream.c, which also installs the stream writer so
+ * console-only programs never link the stream unit) — and the
+ * ignoreErrors flag. new answers a +1 handle with both targets set to
+ * the given fds (0 = a stream is bound next); bind retains the stream.
+ * write prints `text\n` to the selected target: a stream receives ONE
+ * write, wrapped in Node's ignoreErrors handling (a noop 'error' listener
+ * around the call, a completion handler that swallows the write's own
+ * error, synchronous throws discarded); the global console handle writes
+ * the process streams like console.log/error. */
+typedef struct ScrConsoleInst {
+  size_t rc;
+  double fd[2];                /* 1/2 process stdio targets; 0 when stream[i] is bound */
+  ScrStream *stream[2];        /* owned */
+  ScrClosure *on_written[2];   /* owned: the per-stream completion handlers */
+  bool ignore_errors;
+  void (*stream_write)(struct ScrConsoleInst *, int which, ScrStr *line);
+  void (*stream_drop)(struct ScrConsoleInst *); /* releases the bound streams */
+} ScrConsoleInst;
+ScrDyn *scr_console_new(double out_fd, double err_fd, bool ignore_errors);
+void scr_console_bind(ScrDyn *console, double which, ScrStream *stream);
+void scr_console_inst_write(ScrDyn *console, ScrStr *text, bool to_stderr);
 ScrDyn *scr_process_stdio(double fd);
 bool scr_dyn_process_stdio_is(const ScrDyn *value);
 double scr_dyn_process_stdio_fd(const ScrDyn *value, const ScrDynPath *path);
@@ -5156,7 +5654,11 @@ ScrDyn *scr_dyn_new_promise_adapting(ScrPromise *src,
                                      void (*adapt)(ScrPromise *dst, ScrPromise *src));
 /* BORROWED peek at the boxed promise; NULL when d is not a promise box. */
 ScrPromise *scr_dyn_promise_of(const ScrDyn *d);
-ScrPromise *scr_dyn_promise_all(const ScrDyn *entries);
+/* Promise.all / allSettled / any over a spread dyn array (borrowed);
+ * `reader` (borrowed) reads a program class instance's `then`. +1. */
+ScrPromise *scr_dyn_promise_all(const ScrDyn *entries, const ScrDyn *reader);
+ScrPromise *scr_dyn_promise_all_settled(const ScrDyn *entries, const ScrDyn *reader);
+ScrPromise *scr_dyn_promise_any(const ScrDyn *entries, const ScrDyn *reader);
 
 /* Native predicates for typed reference capsules and boxed errors. */
 bool scr_dyn_ref_typeof_is(const ScrDyn *d, const char *name);
@@ -5181,6 +5683,24 @@ bool scr_dyn_is_nullish(const ScrDyn *d);
  * fn.apply(this, arguments)`) forwards the receiver for free. */
 void scr_dyn_this_push(void *h, ScrDynHandleTag tag); /* h BORROWED (the firing site holds it); NULL binds undefined */
 void scr_dyn_this_push_dyn(const ScrDyn *v);          /* retained for the window */
+/* A class's typed-ref construction recipe, emitted once per class as a
+ * constant (kind: 0 plain, 1 observed, 2 traced capsule). `view` names the
+ * live view bound to the new capsule, as eager boxing binds it: 0 none,
+ * 1 array ops, 2 record ops, 3 class ops (`ops`). */
+typedef struct {
+  void *(*retain)(void *);
+  void (*release)(void *);
+  const char *type_key;
+  size_t type_key_len;
+  ScrDyn *(*materialize)(void *);
+  void (*commit)(void *, const ScrDyn *);
+  int kind;
+  int view;
+  const void *ops;
+} ScrDynTypedRefRecipe;
+/* A class instance as the window's receiver, boxed with its recipe only when
+ * read. ptr is BORROWED: the caller holds the instance across the window. */
+void scr_dyn_this_push_typed(void *ptr, const ScrDynTypedRefRecipe *recipe);
 void scr_dyn_this_pop(void);
 /* The innermost binding as a dyn value (+1): a boxed handle, the pushed
  * dyn value, or the undefined singleton (empty stack, NULL handle, or a
@@ -5275,6 +5795,9 @@ typedef struct {
 void scr_jb_init(ScrJsonBuf *b);
 /* Append a borrowed byte span verbatim, including embedded NUL bytes. */
 void scr_jb_write(ScrJsonBuf *b, const char *s, size_t n);
+/* scr_jb_write for text that holds no lone surrogate (fixed text, JSON
+ * tokens), which cannot complete a surrogate pair at the seam. */
+void scr_jb_write_utf8(ScrJsonBuf *b, const char *s, size_t n);
 /* Append one borrowed runtime string verbatim (no JSON quoting). */
 void scr_jb_put_str(ScrJsonBuf *b, const ScrStr *s);
 /* Push a container onto the circular-detection stack before serializing
@@ -5308,8 +5831,8 @@ void scr_jb_put_f64(ScrJsonBuf *b, double v);
 /* Append String(number), including NaN/Infinity, without a temporary string. */
 void scr_jb_put_number(ScrJsonBuf *b, double v);
 /* Quoted + escaped JSON string: \" \\ \n \r \t \b \f, other control chars
- * as \u00XX, everything else (UTF-8 included) verbatim — exactly the JS
- * JSON.stringify escape set for well-formed strings. */
+ * as \u00XX, lone surrogates as \udXXX, everything else (UTF-8 included)
+ * verbatim — exactly the JS JSON.stringify escape set. */
 void scr_jb_put_json_str(ScrJsonBuf *b, const ScrStr *s);
 
 /* JSON-serialize a dyn value into the buffer — the sc_jw_* walker for the
@@ -5351,6 +5874,113 @@ long scr_obj_lifetime_count(void);
 #define scr_obj_alloc_note() ((void)0)
 #define scr_obj_free_note() ((void)0)
 #endif
+#ifdef SCR_RC_AUDIT
+/* A released lifetime region freed `n` program-lifetime instances. */
+void scr_obj_lifetime_forget(long n);
+#endif
+
+/* ── counted lifetime regions (scr_region.c) ───────────────────────────
+ * Programs that construct a LifetimeRegion (@scriptc/experimental) allocate
+ * every ProgramLifetime instance in the thread's CURRENT region instead of
+ * the small-object allocator. A region owns SCR_RGN_CHUNK-aligned chunks;
+ * each class packs its instances into segments of a chunk, so a region's
+ * objects are enumerable without a header. Instead of a per-object count,
+ * the class's retain and release adjust the chunk's first word (`count`);
+ * with the first reference each object starts with, it gives the number of
+ * references to the chunk's objects.
+ *
+ * release() condemns a region. A condemned region is freed only when a walk
+ * of its objects, and of the ordinary objects they own, explains every
+ * counted reference: trial deletion restricted to the region. References
+ * the walk cannot see (locals, globals, objects outside the walked graph,
+ * shapes it does not know) stay unexplained and keep the region. Freeing
+ * releases every reference field of every object, which tears the owned
+ * ordinary objects down through their normal paths, runs the cycle
+ * collector for the owned cycles, and then requires every count to be 0.
+ * Region 0 of each thread (the default) is never freed: programs that do
+ * not use regions keep ProgramLifetime's behavior.
+ *
+ * Only references to objects of regions that can be freed are counted:
+ * until the process creates its first region, scr_region_counting is 0 and
+ * retains and releases touch nothing, and chunks of the default regions
+ * have no owner, so references to their objects are never counted. Every
+ * reference to an object of a non-default region is created after that
+ * region exists, so its counts are exact.
+ *
+ * The layouts below are an ABI with the emitted code (llvm/regions.ts):
+ * the inline allocation fast path bumps the class's ScrRgnCursor, and the
+ * retain/release bodies test scr_region_counting, then the chunk's owner,
+ * then adjust its count. */
+#define SCR_RGN_CHUNK_SHIFT 21
+#define SCR_RGN_CHUNK ((size_t)1 << SCR_RGN_CHUNK_SHIFT)
+
+typedef struct ScrRgnWalk ScrRgnWalk;
+
+/* One per ProgramLifetime class, emitted as a mutable global: `slot` is
+ * assigned process-wide on the first allocation (-1 until then). */
+typedef struct ScrRgnClass {
+  size_t size;                               /* instance size (the stride rounds it to 8) */
+  void (*visit)(void *obj, ScrRgnWalk *w);   /* reports each reference field */
+  void (*release_fields)(void *obj);         /* releases each reference field */
+  const char *name;
+  int32_t slot;
+} ScrRgnClass;
+
+/* The calling thread's allocation cursor for one class in its current
+ * region: emitted per class (thread-local in worker executables). NULL
+ * fields send the next allocation to scr_region_alloc. */
+typedef struct ScrRgnCursor {
+  char *bump, *limit;
+} ScrRgnCursor;
+
+/* The emitted type table (terminated by a NULL release): the release entry
+ * point a container stores for a type (shapes.ts vAdapters), and the walker
+ * of its objects. A NULL walker marks a ProgramLifetime class. */
+typedef struct ScrRgnType {
+  void (*release)(void *);
+  void (*walk)(void *obj, ScrRgnWalk *w);
+} ScrRgnType;
+
+typedef struct ScrRgnChunk {
+  int64_t count; /* word 0: references to this chunk's objects, less one per object */
+  void *owner;   /* word 1: the owning thread; NULL in default regions */
+  struct ScrRegion *region;
+  struct ScrRgnChunk *next;
+  char *bump;    /* the next free segment byte */
+  int64_t found; /* references the last walk saw into this chunk */
+} ScrRgnChunk;
+_Static_assert(offsetof(ScrRgnChunk, count) == 0 && offsetof(ScrRgnChunk, owner) == sizeof(int64_t),
+               "llvm/regions.ts addresses the chunk count at 0 and the owner at 8");
+
+static inline ScrRgnChunk *scr_rgn_chunk_of(const void *obj) {
+  return (ScrRgnChunk *)((uintptr_t)obj & ~(uintptr_t)(SCR_RGN_CHUNK - 1));
+}
+
+/* 1 once any thread has created a region (never reset); emitted retains
+ * and releases count nothing while it is 0. */
+extern _Atomic uint8_t scr_region_counting;
+
+/* The allocation slow path: a zeroed instance of `cls` in the current
+ * region. Refills `cursor`. */
+void *scr_region_alloc(ScrRgnCursor *cursor, ScrRgnClass *cls);
+/* new LifetimeRegion(): a fresh region id (ids are never reused). `types`
+ * is the program's constant type table. Retries condemned regions. */
+double scr_region_create(const ScrRgnType *types);
+/* run(fn): makes region `id` current until the matching leave. An id this
+ * thread does not own (another thread's, or a freed region's) selects the
+ * thread's default region. Calls nest. */
+void scr_region_enter(double id);
+void scr_region_leave(void);
+/* release(): condemns region `id` and tries to free it. */
+void scr_region_release(double id);
+
+/* Walk callbacks for emitted visits and walkers. scr_region_ref reports a
+ * reference to a ProgramLifetime instance; scr_region_slot reports a
+ * reference of the type whose container release entry point is `release`
+ * (unknown entry points are not walked, which keeps their references
+ * unexplained). Both tolerate NULL. */
+void scr_region_ref(ScrRgnWalk *w, void *obj);
+void scr_region_slot(ScrRgnWalk *w, void *obj, void (*release)(void *));
 
 /* ── async: promises, fibers, event loop ────────────────────────────
  * Async function bodies run on stackful fibers; `await` parks the fiber on
@@ -5368,6 +5998,13 @@ void scr_promise_release_v(void *p);
 typedef struct ScrFiber ScrFiber;
 /* Spawn + run eagerly to the first suspension; returns the promise, +1. */
 ScrPromise *scr_async_spawn(void (*entry)(ScrFiber *, void *), void *argpack);
+/* `await f(...)` of a fiber-backed async f: spawn and await in one call,
+ * returning the awaited value (a rejection re-throws into the caller). */
+void scr_async_spawn_await_void(void (*entry)(ScrFiber *, void *), void *argpack);
+double scr_async_spawn_await_f64(void (*entry)(ScrFiber *, void *), void *argpack);
+bool scr_async_spawn_await_bool(void (*entry)(ScrFiber *, void *), void *argpack);
+ScrStr *scr_async_spawn_await_str(void (*entry)(ScrFiber *, void *), void *argpack);
+void *scr_async_spawn_await_ref(void (*entry)(ScrFiber *, void *), void *argpack);
 /* Runtime-authored C waiters cannot themselves become LLVM switched
  * coroutines on wasm32. Spawn after `dependency` settles so their first
  * (and only) await is extraction from an already-settled promise, while
@@ -5387,6 +6024,10 @@ typedef struct ScrAsyncInline {
 } ScrAsyncInline;
 void scr_async_inline_enter(ScrAsyncInline *frame);
 ScrPromise *scr_async_inline_leave(ScrAsyncInline *frame);
+/* Leaves the frame without creating the call's promise: `await f()` of a
+ * fiberless f consumes the result directly (the emitted await-call entry
+ * still takes the await's microtask turn). */
+void scr_async_inline_exit(ScrAsyncInline *frame);
 
 /* wasm32-wasi lowers async functions and generators through LLVM switched
  * coroutines instead of the native stack-switching implementations. The
@@ -5510,15 +6151,32 @@ void scr_promise_mark_handled(ScrPromise *p);
 ScrDyn *scr_promise_reason_dyn(const ScrPromise *p);
 /* process warnings (scr_lib.c — always linked so any unit can emit a
  * deprecation): dyn listeners plus Node's default stderr report
- * ("(node:pid) [CODE] Name: message" and a detail second line). Emission
- * is SYNCHRONOUS at the call (Node defers a tick — SEMANTICS.md 138's
- * precedent). scr_process_emit_warning takes the ARGUMENT VECTOR as one
- * dyn array and applies Node's full grammar/TypeErrors; scr_emit_warning
- * is the C-side deprecation entry. */
+ * ("(node:pid) [CODE] Name: message" and a detail second line).
+ * scr_process_emit_warning takes the ARGUMENT VECTOR as one dyn array,
+ * applies Node's full grammar/TypeErrors at the call and emits on the
+ * next tick, as Node does; scr_emit_warning is the C-side entry and
+ * reports synchronously. */
 void scr_process_on_warning(ScrDyn *fn);
 void scr_process_off_warning(ScrDyn *fn);
 void scr_process_emit_warning(ScrDyn *args);
 void scr_emit_warning(const char *name, const char *code, ScrStr *message);
+/* scr_emit_warning once a 'warning' listener exists (scr_lib.c; set by the
+ * listener registration): units that cannot link the dyn-async unit route
+ * their warnings through it, and print the default report otherwise. */
+extern SCR_TL void (*scr_warning_emit_hook)(const char *name, const char *code, ScrStr *message);
+/* process.noDeprecation (which 0) and process.throwDeprecation (which 1):
+ * the stored value (+1; undefined until assigned), the assignment
+ * (borrowed), and the truthiness the warning paths test. */
+ScrDyn *scr_process_deprecation_flag(double which);
+void scr_process_set_deprecation_flag(double which, ScrDyn *value);
+bool scr_process_deprecation_flag_on(int which);
+/* Node's emitWarning tail on the next tick (util.deprecate): a
+ * DeprecationWarning is dropped under noDeprecation and thrown from its
+ * own tick under throwDeprecation; otherwise the report and the 'warning'
+ * listeners run. scr_warning_new builds the string form's warning value
+ * (borrows; +1). */
+void scr_warning_emit_deferred(ScrDyn *warning);
+ScrDyn *scr_warning_new(ScrStr *message, const char *type, const ScrStr *code);
 /* The promise-or-absent await's unit arm: one microtask hop, like JS's
  * await of any non-thenable (and like awaiting a settled promise). */
 void scr_await_hop(void);
@@ -5543,13 +6201,18 @@ ScrPromise *scr_promise_settled_void(void);
 ScrPromise *scr_promise_settled_ref(void *v, void *(*retain)(void *), void (*release)(void *), ScrTraceFn trace);
 
 /* ── Promise.race (compiler-emitted combinator plumbing) ──────────────
- * race_add: settle the result from an already-settled entry, or park a
- * callback waiter that fires inside the entry's settle — fulfillments run
- * `adapt` (an emitted per-type adapter building the result's inner type
- * from the entry's payload; scr_promise_adapt_copy is the same-type
- * one), rejections copy raw and count as HANDLED on the entry. The
+ * race_join: subscribe the result to an entry with a reaction job that
+ * runs one microtask turn after the entry settles (or after the join, for
+ * an entry already settled) — fulfillments run `adapt` (an emitted
+ * per-type adapter building the result's inner type from the entry's
+ * payload; scr_promise_adapt_copy is the same-type one), rejections copy
+ * raw; the entry counts as HANDLED from the join. race_add is the same
+ * callback run inside the entry's own settlement (or now, if settled),
+ * for destinations that view the entry at another inner type. The
  * payload accessors return retained/by-value fulfillment payloads for
  * the emitted adapters (losing entries keep their settlements). */
+void scr_promise_race_join(ScrPromise *race, ScrPromise *in,
+                            void (*adapt)(ScrPromise *dst, ScrPromise *src));
 void scr_promise_race_add(ScrPromise *race, ScrPromise *in,
                            void (*adapt)(ScrPromise *dst, ScrPromise *src));
 
@@ -5557,13 +6220,51 @@ void scr_promise_race_add(ScrPromise *race, ScrPromise *in,
  * BORROWS the Promise<T>[] entries array and the pre-capacity (empty,
  * cap >= ps->len) values array — NULL values/store for Promise<void>
  * entries, whose result fulfills void — retains what it keeps, and
- * returns the result promise +1. Node-exact: values land at their INPUT
- * index regardless of settlement order, the first rejection in
- * SETTLEMENT order wins (later ones count as handled on their entries),
- * and the empty array fulfills immediately. The store helpers are the
+ * returns the result promise +1. Node-exact: each entry settles the
+ * result through a reaction job one microtask turn after it settles,
+ * values land at their INPUT index regardless of settlement order, the
+ * first rejection's job wins (every entry counts as handled), and the
+ * empty array fulfills immediately. The store helpers are the
  * per-element-kind payload writers the compiler picks from. */
 ScrPromise *scr_promise_all(ScrArr *ps, ScrArr *values,
                              void (*store)(ScrArr *a, double i, ScrPromise *src));
+
+/* ── Promise.allSettled / Promise.any ─────────────────────────────────
+ * The same countdown and per-entry reaction jobs as Promise.all, with
+ * the mode deciding what an entry's job does. allSettled stores EVERY
+ * settlement through `store` (the emitted or dyn settled-record builder)
+ * and fulfills with the array once every entry has settled. any settles
+ * the result from the first fulfillment (same inner type — a copy),
+ * stores each rejection reason into `errors` at its input index, and
+ * once every entry has rejected calls `fail(result, errors)`, which
+ * rejects the result (the AggregateError). The empty array fulfills /
+ * fails immediately. Both BORROW their arrays and return +1.
+ *
+ * The builder underneath (ScrCombine) takes entries one at a time, so a
+ * caller that runs other work between entries — the dyn path's
+ * thenable jobs — keeps Node's queue order: settled entries batch into
+ * one job until scr_promise_combine_flush closes the batch. */
+typedef void (*ScrAllStore)(ScrArr *a, double i, ScrPromise *src);
+typedef void (*ScrAnyFail)(ScrPromise *result, ScrArr *errors);
+enum { SCR_COMBINE_ALL = 0, SCR_COMBINE_ALL_SETTLED = 1, SCR_COMBINE_ANY = 2 };
+typedef struct ScrCombine {
+  struct ScrAllState *st;
+  ScrPromise *result;
+  size_t next;          /* input index of the next entry */
+  size_t batched;       /* settled entries counted in the open batch */
+  ScrPromise *decided;  /* the open batch's first deciding entry (+1) */
+  bool open;            /* the open batch holds at least one entry */
+} ScrCombine;
+void scr_promise_combine_begin(ScrCombine *c, int mode, size_t n, ScrArr *values,
+                               ScrAllStore store, ScrAnyFail fail);
+void scr_promise_combine_add(ScrCombine *c, ScrPromise *in); /* borrowed */
+void scr_promise_combine_flush(ScrCombine *c);
+ScrPromise *scr_promise_combine_end(ScrCombine *c); /* +1 */
+ScrPromise *scr_promise_all_settled(ScrArr *ps, ScrArr *values, ScrAllStore store);
+ScrPromise *scr_promise_any(ScrArr *ps, ScrArr *errors, ScrAllStore store, ScrAnyFail fail);
+/* The typed Promise.any entry (scr_async_dyn.c): reasons collect as dyn
+ * values and exhaustion rejects with an AggregateError. */
+ScrPromise *scr_promise_any_typed(ScrArr *ps);
 void scr_promise_all_store_f64(ScrArr *a, double i, ScrPromise *src);
 void scr_promise_all_store_bool(ScrArr *a, double i, ScrPromise *src);
 void scr_promise_all_store_str(ScrArr *a, double i, ScrPromise *src);
@@ -5575,6 +6276,7 @@ ScrStr *scr_promise_payload_str(ScrPromise *p); /* +1 */
 void *scr_promise_payload_ref(ScrPromise *p);   /* +1 via the stored retain */
 /* Thin payload views for the gated dyn-async TU (scr_async_dyn.c). */
 int scr_promise_payload_kind(const ScrPromise *p);   /* ScrExcKind */
+bool scr_promise_is_rejected(const ScrPromise *p);
 bool scr_promise_payload_is_dyn(const ScrPromise *p);
 double scr_promise_payload_num(const ScrPromise *p);
 bool scr_promise_payload_flag(const ScrPromise *p);
@@ -5804,6 +6506,19 @@ typedef struct ScrGen ScrGen;
 
 ScrGen *scr_gen_new(void (*entry)(ScrFiber *, void *), void *argpack,
                     void (*drop_args)(void *));
+/* A synchronous generator whose body the compiler emitted as an LLVM
+ * switched coroutine: no fiber stack; resumes call into the coroutine frame
+ * on the resumer's stack. The body registers its frame with
+ * scr_coro_started and ends in scr_gen_coro_finish (the trampoline
+ * epilogue of the fiber form). Native targets only. */
+ScrGen *scr_gen_new_stackless(void (*entry)(ScrFiber *, void *), void *argpack,
+                              void (*drop_args)(void *));
+void scr_coro_started(void *handle);
+/* The OUT stores of a coroutine body's yield (its suspension follows). */
+void scr_coro_yield_f64(ScrFiber *self, double v);
+void scr_coro_yield_bool(ScrFiber *self, bool v);
+void scr_coro_yield_ref(ScrFiber *self, void *v, void (*release)(void *)); /* moves */
+void scr_gen_coro_finish(ScrFiber *self);
 ScrGen *scr_async_gen_new(void (*entry)(ScrFiber *, void *), void *argpack,
                           void (*drop_args)(void *),
                           void (*settle)(ScrGen *, ScrPromise *));
@@ -5814,6 +6529,10 @@ void scr_gen_release_v(void *g);
 
 void scr_gen_resume(ScrGen *g);
 void scr_gen_resume_return(ScrGen *g);
+/* A valueless next() that answers done (the compiler's own drives). */
+bool scr_gen_step(ScrGen *g);
+/* IteratorClose: a valueless return() whose result is dropped. */
+void scr_gen_close(ScrGen *g);
 void scr_gen_resume_throw(ScrGen *g);
 bool scr_gen_done(ScrGen *g);
 
@@ -5839,11 +6558,27 @@ void scr_gen_in_none(ScrGen *g);
 double scr_gen_take_in_f64(void); /* body side: the running fiber's gen */
 bool scr_gen_take_in_bool(void);
 void *scr_gen_take_in_ref(void); /* +1 moved out; NONE → NULL */
+ScrDyn *scr_gen_take_in_dyn(void); /* dyn channel: +1; NONE → undefined */
 /* yield* captures next/return/throw before ordinary yield unwinding. Ref
  * converters borrow their typed payload and return an owned dyn value. */
 ScrDyn *scr_gen_delegate_resume(ScrDyn *(*next_ref)(void *),
                                 ScrDyn *(*return_ref)(void *),
                                 ScrDyn *(*caught_ref)(const ScrCaught *));
+
+/* yield* over a typed generator delegate. start runs the first valueless
+ * next(); flag 1 marks a typed next channel, which a suspended delegate
+ * cannot take undefined into (the SC1071 fence), and flag 2 a completion
+ * read as a return type that cannot hold undefined. forward runs right
+ * after the delegating body's yield resumes and passes the consumer's
+ * next(v), return(v), or throw(e) to the delegate; next is its form for a
+ * resume with nothing pending. `modes` packs the next, return, and
+ * completion channel transfers (two bits each) and the typed-completion
+ * flag (64; 4 for next); the converters box a borrowed ref payload into
+ * an owned dyn. All answer whether the delegate is done. */
+bool scr_gen_delegate_start(ScrGen *d, unsigned flags);
+bool scr_gen_delegate_next(ScrGen *d, unsigned flags, ScrDyn *(*to_dyn)(void *));
+bool scr_gen_delegate_forward(ScrGen *d, unsigned modes, ScrDyn *(*next_dyn)(void *),
+                              ScrDyn *(*ret_dyn)(void *), ScrDyn *(*done_dyn)(void *));
 
 /* RET slot (consumer parks the `.return(v)` value before resume_return). */
 void scr_gen_ret_f64(ScrGen *g, double v);
@@ -5949,9 +6684,8 @@ ScrStr *scr_bool_to_scrstr(bool b); /* interned "true"/"false" */
 
 /* ── String surface (scr_lib.c) ───────────────────────────────────────
  * fromCharCode: ONE packed f64[] of UTF-16 code units — ToUint16 each,
- * adjacent surrogate pairs combine, lone surrogates become U+FFFD
- * (divergence 1's policy). Borrowed args; the string result is +1; neither
- * throws. */
+ * adjacent surrogate pairs combine, other surrogates stay lone. Borrowed
+ * args; the string result is +1; neither throws. */
 ScrStr *scr_str_from_char_code(ScrArr *codes);
 /* Single numeric argument; avoids argument packing. Defined in scr_string.c
  * to share its character cache. Same ToUint16 and lone-surrogate behavior. */
@@ -6343,8 +7077,7 @@ void scr_bytes_set_from_dyn(ScrBytes *dst, const ScrDyn *src, double offset);
  * lowercase pairs, "base64"/"base64url" the standard/url alphabets (url
  * unpadded), "latin1" maps bytes to U+00XX, "ascii" masks to & 0x7f, and
  * "utf16le" decodes LE code units (surrogate pairs combine; a LONE
- * surrogate surfaces as U+FFFD — the documented divergence; an odd tail
- * byte drops). Aliases arrive NORMALIZED (the compiler folds "binary",
+ * surrogate stays lone; an odd tail byte drops). Aliases arrive NORMALIZED (the compiler folds "binary",
  * "ucs2", "utf-8", ...); NULL selects the default UTF-8 encoding for
  * implicit native coercions. Borrows both; +1 result. Never throws (the
  * compiler fences other encodings). */
@@ -7925,6 +8658,36 @@ void scr_console_error(size_t n, const ScrLogArg *args);
  * runtime that does not understand them. */
 void scr_console_log_parts(size_t n, const ScrLogArg *args);
 void scr_console_error_parts(size_t n, const ScrLogArg *args);
+/* A Console instance's line on fd 1 or 2, without the global console's
+ * group indentation. */
+void scr_console_write_fd(int fd, size_t n, const ScrLogArg *args);
+/* The global console's line rewrite while a group is open (scr_console.c;
+ * installed by scr_console_group): the indented heap copy of a rendered
+ * line, its length in *used. */
+extern SCR_TL char *(*scr_console_indenter)(const char *line, size_t *used);
+
+/* The global console's remaining members (scr_console_native.c). Arguments
+ * are borrowed; string results are +1. */
+ScrStr *scr_console_label(ScrDyn *label);
+void scr_console_count(ScrStr *label);
+ScrStr *scr_console_count_reset(ScrDyn *label);
+ScrStr *scr_console_time(ScrStr *label);
+ScrStr *scr_console_time_end(ScrStr *label);
+ScrStr *scr_console_time_log(ScrStr *label);
+void scr_console_group(double delta);
+void scr_console_clear(void);
+void scr_console_table(ScrDyn *data, ScrDyn *properties);
+ScrStr *scr_console_dir_dyn(ScrDyn *value, double depth);
+/* console.table's cell rendering (scr_inspect.c): Node's _inspect — depth
+ * 0 (-1 for objects with more than two keys), maxArrayLength 3, breakLength
+ * Infinity. +1. */
+ScrStr *scr_insp_table_cell(ScrDyn *value);
+/* Node's getStringWidth over UTF-8 text (the non-ICU tables). */
+size_t scr_insp_display_width(const char *data, size_t len);
+/* process.emitWarning(message) with the default Warning type, emitted on
+ * the next tick like Node's; an empty message emits nothing
+ * (scr_async_dyn.c). Borrows. */
+void scr_process_emit_warning_text(ScrStr *message);
 
 bool scr_fetch_web_is(const ScrDyn *value, const ScrStr *name);
 bool scr_fetch_stream_is(const ScrDyn *value);

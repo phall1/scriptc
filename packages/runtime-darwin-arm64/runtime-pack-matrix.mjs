@@ -31,6 +31,7 @@ const BASE_RUNTIME_SOURCES = [
   "scr_console.c",
   "scr_lib.c",
   "scr_path.c",
+  "scr_os.c",
   "scr_url.c",
   "scr_url_params.c",
   "scr_json.c",
@@ -40,6 +41,7 @@ const BASE_RUNTIME_SOURCES = [
   "scr_child.c",
   "scr_cycle.c",
   "scr_publish.c",
+  "scr_region.c",
   "scr_alloc.c",
 ];
 
@@ -55,11 +57,13 @@ const optional = [
   ["scr_copying.c", "copying"],
   ["scr_file_handle.c", "fileHandle"],
   ["scr_regex.c", "regex"],
+  ["scr_glob.c", "regex"],
   ["scr_assert.c", any("assert", "regex", "symbol")],
   ["scr_inspect.c", "inspect"],
   ["scr_console_native.c", "inspect"],
   ["scr_dyn_invoke.c", any("dynInvoke", "nativeFetch")],
   ["scr_dc.c", "dc"],
+  ["scr_event_target.c", any("eventTarget", "nativeFetch")],
   ["scr_async_dyn.c", any("dynAsync", "dynInvoke", "dc", "fileHandle", "nativeFetch")],
   ["scr_zlib.c", "zlib"],
   ["scr_events.c", "events"],
@@ -73,6 +77,7 @@ const optional = [
   // Utility objects must only reference runtime families selected with them.
   ["scr_util_compare.c", all("parseArgs", "symbol")],
   ["scr_util_style.c", all("parseArgs", "inspect", "dynAsync")],
+  ["scr_util_callable.c", all("parseArgs", "inspect", "dynAsync", "dynInvoke", "regex")],
   ["scr_stream.c", "stream"],
   ["scr_loop_kqueue.c", any("netEffective", "dgram")],
   ["scr_loop_epoll.c", any("netEffective", "dgram")],

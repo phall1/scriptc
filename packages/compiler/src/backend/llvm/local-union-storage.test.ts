@@ -91,15 +91,18 @@ function fixture(): IrModule {
 }
 function facts(mod: IrModule) {
   const lifetimes = analyzeCallLifetimes(new Map(mod.functions.map((fn) => [fn.name, fn])));
-  return findLocalUnionStorage(
-    mod.functions[1]!,
-    lifetimes,
-    new Map(mod.unions!.map((u) => [u.id, u])),
-  );
+  const unions = new Map(mod.unions!.map((u) => [u.id, u]));
+  return findLocalUnionStorage(mod.functions[1]!, lifetimes, {
+    unions,
+    receiverUnions: unions,
+    nullableField: () => false,
+    arrayRead: () => false,
+    scalarCall: () => false,
+  });
 }
 function body(mod: IrModule, pointerBits: 32 | 64): string {
   expect(validateModule(mod)).toEqual([]);
-  return /^define internal [^\n]*@sc_(?:b)?f_work\([^]*?^}/m.exec(
+  return /^define internal [^\n]*@sc_(?:b)?f_work(?:\.i32)?\([^]*?^}/m.exec(
     emitLlvmModule(keepUnionsBoxed(mod), { pointerBits }),
   )![0];
 }
@@ -291,7 +294,7 @@ test("strict equality against a wrapped literal borrows the local and stack-boxe
   expect(facts(mod).has("item")).toBe(true);
   for (const bits of [32, 64] as const) {
     const ir = body(mod, bits);
-    expect(ir).toContain("@sc_str_eq");
+    expect(ir).toMatch(/call zeroext i1 @sc_streq_\d+\(ptr /);
     expect(ir).not.toMatch(/@scr_union_(?:new|retain|release)/);
   }
 });
@@ -319,4 +322,103 @@ test("equality whose other operand captures the whole local keeps the heap path"
     }),
   };
   expect(facts(mod).has("item")).toBe(false);
+});
+
+test("number bindings of optional reads and `??` chains stay in stack storage", () => {
+  const maybe: IrType = { kind: "union", unionId: "maybe" };
+  const numbers: IrType = { kind: "array", elem: F64 };
+  const read = (index: IrExpr): IrExpr => ({
+    kind: "ternary",
+    cond: {
+      kind: "bin",
+      op: "===",
+      left: { kind: "arrayState", arr: ref("values", numbers), index, type: F64, loc },
+      right: { kind: "numLit", value: 1, type: F64, loc },
+      type: BOOL,
+      loc,
+    },
+    then: {
+      kind: "unionWrap",
+      value: { kind: "arrayGet", arr: ref("values", numbers), index, type: F64, loc },
+      tag: 0,
+      unionId: "maybe",
+      type: maybe,
+      loc,
+    },
+    else_: {
+      kind: "unionWrap",
+      value: { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
+      tag: 1,
+      unionId: "maybe",
+      type: maybe,
+      loc,
+    },
+    type: maybe,
+    loc,
+  });
+  const zero: IrExpr = { kind: "numLit", value: 0, type: F64, loc };
+  const mod: IrModule = {
+    irVersion: 16,
+    sourceFile: loc.file,
+    entry: "main",
+    unions: [{ id: "maybe", arms: [F64, UNDEFINED_T] }],
+    functions: [
+      { name: "main", params: [], locals: [], body: [], returnType: VOID, loc },
+      {
+        name: "work",
+        loc,
+        returnType: F64,
+        params: [
+          { localId: "values", name: "values", type: numbers },
+          { localId: "i", name: "i", type: F64 },
+          { localId: "choose", name: "choose", type: BOOL },
+        ],
+        locals: [
+          { id: "values", name: "values", type: numbers, mutable: true },
+          { id: "i", name: "i", type: F64, mutable: true },
+          { id: "choose", name: "choose", type: BOOL, mutable: true },
+          { id: "value", name: "value", type: maybe, mutable: true },
+        ],
+        body: [
+          {
+            kind: "varDecl",
+            localId: "value",
+            loc,
+            init: {
+              kind: "nullish",
+              left: read(ref("i", F64)),
+              right: read(zero),
+              type: maybe,
+              loc,
+            },
+          },
+          {
+            kind: "assign",
+            localId: "value",
+            loc,
+            value: {
+              kind: "ternary",
+              cond: ref("choose", BOOL),
+              then: read(zero),
+              else_: read(ref("i", F64)),
+              type: maybe,
+              loc,
+            },
+          },
+          {
+            kind: "return",
+            loc,
+            value: {
+              kind: "nullish",
+              left: ref("value", maybe),
+              right: { kind: "numLit", value: -1, type: F64, loc },
+              type: F64,
+              loc,
+            },
+          },
+        ],
+      },
+    ],
+  };
+  expect(body(mod, 64)).not.toMatch(/@scr_union_(?:new|retain|release)/);
 });

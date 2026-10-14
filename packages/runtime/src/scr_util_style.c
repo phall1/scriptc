@@ -127,7 +127,7 @@ static void util_style_invalid(const ScrDyn *key) {
  * share 22, so preserve that reset before restoring either attribute.
  * A close at the very end is kept intact, matching Node's replacement. */
 static void util_style_putn(ScrJsonBuf *buffer, const char *data, size_t length) {
-  for (size_t i = 0; i < length; i++) scr_jb_putc(buffer, data[i]);
+  scr_jb_write(buffer, data, length);
 }
 
 static ScrStr *util_style_replace(const ScrStr *text, const char *close,
@@ -173,7 +173,7 @@ done:
 
 /* styleText only needs the color/no-color distinction, rather than the
  * full 4/8/24-bit depth. Follow the ordering of Node 24 internal/tty. */
-static bool util_style_terminal_colors(void) {
+bool scr_util_terminal_colors(void) {
   const char *force = scr_getenv("FORCE_COLOR");
   if (force) {
     bool enabled = !strcmp(force, "") || !strcmp(force, "true") ||
@@ -294,8 +294,8 @@ ScrStr *scr_util_style_text(const ScrDyn *format, const ScrDyn *text, const ScrD
           scr_dyn_arg_type_fail("stream", "an instance of ReadableStream, WritableStream, or Stream", stream); goto done;
         }
       }
-      colorize = scr_getenv("FORCE_COLOR") ? util_style_terminal_colors() :
-        scr_process_is_tty(fd) && util_style_terminal_colors();
+      colorize = scr_getenv("FORCE_COLOR") ? scr_util_terminal_colors() :
+        scr_process_is_tty(fd) && scr_util_terminal_colors();
     }
   }
   scr_dyn_release(view); view = util_style_view(format);

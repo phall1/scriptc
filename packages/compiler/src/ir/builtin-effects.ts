@@ -8,6 +8,11 @@ import type { IrLibFn } from "./builtin-signatures.js";
  * seed on `dynCheck` and `awaitExpr` nodes, which throw on validation
  * failure / promise rejection). */
 export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
+  "console.write",
+  "console.label",
+  "console.countReset",
+  "console.table",
+  "console.dirDyn",
   "worker.new",
   "worker.data",
   "worker.parentPort",
@@ -88,6 +93,9 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "fetch.abortAny",
   "abort.timeout",
   "abort.any",
+  "event.new",
+  "event.customNew",
+  "events.addAbortListener",
   "fetch.streamNew",
   "fetch.streamFrom",
   "num.toFixed",
@@ -234,6 +242,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "sc.text",
   "sc.json",
   "sc.buffer",
+  "sc.arrayBuffer",
   "readable.newDyn",
   "writable.newDyn",
   "duplex.newDyn",
@@ -279,6 +288,8 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "process.kill",
   "process.killNum",
   "process.setExitCode",
+  // Node's argument grammar throws ERR_INVALID_ARG_TYPE at the call.
+  "process.emitWarning",
   // cpuUsage(prev)'s field validation: negative/non-finite prev fields
   // throw Node's ERR_INVALID_ARG_VALUE RangeError, catchably.
   "process.cpuPrevValidate",
@@ -302,6 +313,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   // Error messages use the same coercion protocol before installing cause.
   "error.newOptions",
   "error.ctorOptions",
+  "error.newAggregate",
   "error.toString",
   "error.stack",
   "error.cause",
@@ -321,6 +333,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.classInherit",
   "dyn.classSuper",
   "dyn.hasKey",
+  "dyn.in",
   "child.kill",
   // The caller's lookup runs synchronously inside the connect call — a
   // throw there propagates like Node's.
@@ -366,10 +379,18 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "util.isDeepStrictEqual",
   "util.styleText",
   "util.toUSVString",
-  // decodeURIComponent throws the spec's URIError on bad hex/invalid
-  // UTF-8 octets (encodeURIComponent never throws — see the IrLibFn doc).
+  "util.inherits",
+  "util.deprecate",
+  "util.callbackify",
+  "util.debuglog",
+  // The URI codecs throw the spec's URIError: decoding on bad hex/invalid
+  // UTF-8 octets, encoding (and querystring.escape) on a lone surrogate.
   "str.decodeUriComponent",
   "str.decodeUri",
+  "str.encodeUriComponent",
+  "str.encodeUri",
+  "qs.escape",
+  "qs.stringify",
   // The base64 globals: atob/btoa throw the catchable DOMException
   // InvalidCharacterError on malformed input; the zero-argument form
   // always throws Node's TypeError [ERR_MISSING_ARGS].
@@ -390,6 +411,9 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   // the dyn Object walks throw on null/undefined receivers
   "dyn.objKeys",
   "dyn.forInKeys",
+  "dyn.forInKeyStrings",
+  "dyn.objKeyStrings",
+  "dyn.objEntryPairs",
   "dyn.hasOwn",
   "dyn.propertyIsEnumerable",
   "dyn.assign",
@@ -454,6 +478,11 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dyn.getOwnPropertyDescriptor",
   "dyn.arrayProtoCall",
   "process.chdir",
+  "os.getPriority",
+  // Pattern length TypeError, brace-sequence RangeError, and the
+  // SyntaxError of a segment regex invalid under the u flag.
+  "path.matchesGlob",
+  "path.win32MatchesGlob",
   "process.umask",
   "process.loadEnvFile",
   "fs.realpathSync",

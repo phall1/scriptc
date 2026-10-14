@@ -456,8 +456,8 @@ export function emitStrIntrinsic(
       host.emitPendingCheck();
       return result;
     }
-    // The well-formedness pair: no-ops over well-formed storage
-    // (constant true / retained identity; scr_string.c).
+    // The well-formedness pair: whether the receiver holds a lone
+    // surrogate, and its U+FFFD replacement (scr_string.c).
     case "isWellFormed":
       return call("scr_str_is_well_formed", "zeroext i1 (ptr)", `ptr ${r.name}`, "i1", false);
     case "toWellFormed":
@@ -478,6 +478,18 @@ export function emitStrIntrinsic(
       throw new InternalCompilerError("unreachable");
     }
   }
+}
+
+/** The `i32 order, ptr key` arguments of the runtime comparator sorts:
+ * 0 and null unless the comparator orders by a number key. */
+function emitSortKeyArgs(
+  host: LlvmEmitterContext,
+  order: IrExpr | undefined,
+  key: IrExpr | undefined,
+): string {
+  const direction = order?.kind === "numLit" ? order.value : 0;
+  const reader = key ? emitBorrowedInput(host, key).name : "null";
+  return `i32 ${direction}, ptr ${reader}`;
 }
 
 export function emitStableReceiver(
@@ -513,6 +525,9 @@ export function emitStableReceiver(
 export function emitArrIntrinsic(
   host: LlvmEmitterContext,
   e: IrExpr & { kind: "arrIntrinsic" },
+  /** A `pop`/`shift` of number or boolean elements stores its scalar
+   * union result's tag and payload bits here instead of boxing it. */
+  into?: { box: string; tag: string; payload: string },
 ): LlValue {
   const B = host.B;
   // Every array intrinsic borrows its receiver, including mutation and
@@ -656,6 +671,25 @@ export function emitArrIntrinsic(
       const raw = B.tmp();
       const value = B.tmp();
       B.line(`${raw} = load i64, ptr ${rawSlot}`);
+      if (into) {
+        // Slot bits for f64; a canonical 0/1 for bool, like scr_union_new_bool.
+        let bits = raw;
+        if (elem.kind === "bool") {
+          const nonzero = B.tmp();
+          bits = B.tmp();
+          B.line(`${nonzero} = icmp ne i64 ${raw}, 0`);
+          B.line(`${bits} = zext i1 ${nonzero} to i64`);
+        }
+        B.line(`store i32 ${tag}, ptr ${into.tag}`);
+        B.line(`store i64 ${bits}, ptr ${into.payload}`);
+        B.br(lj);
+        B.startBlock(la);
+        B.line(`store i32 ${undefTag}, ptr ${into.tag}`);
+        B.line(`store i64 0, ptr ${into.payload}`);
+        B.br(lj);
+        B.startBlock(lj);
+        return { name: into.box, type: e.type };
+      }
       if (elem.kind === "f64") B.line(`${value} = bitcast i64 ${raw} to double`);
       else if (elem.kind === "bool") B.line(`${value} = icmp ne i64 ${raw}, 0`);
       else B.line(`${value} = inttoptr i64 ${raw} to ptr`);
@@ -745,9 +779,10 @@ export function emitArrIntrinsic(
       const comparator = emitBorrowedInput(host, e.args[1]!);
       const cmp = e.args[1]!.type;
       const arity = cmp.kind === "func" ? cmp.params.length : 0;
-      host.declare(`declare void @scr_arr_sort_values(ptr, double, ptr, i32)`);
+      const keyed = emitSortKeyArgs(host, e.args[2], e.args[3]);
+      host.declare(`declare void @scr_arr_sort_values(ptr, double, ptr, i32, i32, ptr)`);
       B.line(
-        `call void @scr_arr_sort_values(ptr ${r.name}, double ${count.name}, ptr ${comparator.name}, i32 ${arity})`,
+        `call void @scr_arr_sort_values(ptr ${r.name}, double ${count.name}, ptr ${comparator.name}, i32 ${arity}, ${keyed})`,
       );
       host.emitPendingCheck();
       return { name: "", type: e.type };
@@ -759,10 +794,11 @@ export function emitArrIntrinsic(
       const owned = e.args[1]!.kind === "boolLit" && e.args[1]!.value;
       const cmp = e.args[0]!.type;
       const arity = cmp.kind === "func" ? cmp.params.length : 0;
-      host.declare(`declare zeroext i1 @scr_arr_sort_dense(ptr, ptr, i32, i1 zeroext)`);
+      const keyed = emitSortKeyArgs(host, e.args[2], e.args[3]);
+      host.declare(`declare zeroext i1 @scr_arr_sort_dense(ptr, ptr, i32, i1 zeroext, i32, ptr)`);
       const handled = B.tmp();
       B.line(
-        `${handled} = call zeroext i1 @scr_arr_sort_dense(ptr ${r.name}, ptr ${comparator.name}, i32 ${arity}, i1 ${owned ? 1 : 0})`,
+        `${handled} = call zeroext i1 @scr_arr_sort_dense(ptr ${r.name}, ptr ${comparator.name}, i32 ${arity}, i1 ${owned ? 1 : 0}, ${keyed})`,
       );
       host.emitPendingCheck();
       return { name: handled, type: e.type };

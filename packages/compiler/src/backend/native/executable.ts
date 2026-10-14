@@ -479,13 +479,25 @@ export async function compileCInternal(
     // musl deliberately has no libc-identification predefine; resolveCc's
     // SCR_MUSL flag and this target-selected TU travel together.
     ...(isMuslTarget(driver) ? [rt(join(rtDir, "scr_musl.c"))] : []),
-    ...(regex ? ["-I", vendorEngineDir(), rt(join(rtDir, "scr_regex.c")), ...lreObjects] : []),
+    // scr_glob.c (path.matchesGlob) compiles its segments through the
+    // regex unit, so it rides the same switch; section GC drops it from
+    // binaries that never match a glob.
+    ...(regex
+      ? [
+          "-I",
+          vendorEngineDir(),
+          rt(join(rtDir, "scr_regex.c")),
+          rt(join(rtDir, "scr_glob.c")),
+          ...lreObjects,
+        ]
+      : []),
     ...(opts.assert || regex || opts.symbol ? [rt(join(rtDir, "scr_assert.c"))] : []),
     ...(opts.inspect
       ? [rt(join(rtDir, "scr_inspect.c")), rt(join(rtDir, "scr_console_native.c"))]
       : []),
     ...(opts.dynInvoke || opts.workers || nativeFetch ? [rt(join(rtDir, "scr_dyn_invoke.c"))] : []),
     ...(opts.dc ? [rt(join(rtDir, "scr_dc.c"))] : []),
+    ...(opts.eventTarget || nativeFetch ? [rt(join(rtDir, "scr_event_target.c"))] : []),
     ...(opts.dynAsync || opts.dynInvoke || opts.workers || opts.dc || opts.fileHandle || nativeFetch
       ? [rt(join(rtDir, "scr_async_dyn.c"))]
       : []),
@@ -518,6 +530,9 @@ export async function compileCInternal(
     ...(opts.parseArgs && opts.symbol ? [rt(join(rtDir, "scr_util_compare.c"))] : []),
     ...(opts.parseArgs && opts.inspect && opts.dynAsync
       ? [rt(join(rtDir, "scr_util_style.c"))]
+      : []),
+    ...(opts.parseArgs && opts.inspect && opts.dynAsync && opts.dynInvoke && regex
+      ? [rt(join(rtDir, "scr_util_callable.c"))]
       : []),
     ...(opts.stream ? [rt(join(rtDir, "scr_stream.c"))] : []),
     // The readiness-poller backends (scr_platform.h): kqueue on macOS/BSD,

@@ -2,7 +2,7 @@
  * Containers store erased adapters; shape helpers retain, release and trace
  * their fields. Every allocation has a size_t reference count at offset zero
  * and participates in the runtime allocation audit. */
-import type { IrModule, IrRecordShape, IrType } from "../../ir/ir.js";
+import type { IrClassDef, IrModule, IrRecordShape, IrType } from "../../ir/ir.js";
 import {
   isIdentityCollectionKey,
   isRefCounted,
@@ -39,8 +39,8 @@ export interface ShapeHost {
   needOom(): void;
   /** The target C ABI's `size_t` / refcount integer type. */
   readonly sizeType: "i32" | "i64";
-  /** Byte offset from an object pointer back to ScrCycHdr.buffered. */
-  readonly cycleBufferedOffset: number;
+  /** Byte offset from an object pointer back to ScrCycHdr.buf. */
+  readonly cycleBufOffset: number;
   readonly tracedShapes: Set<string>;
   readonly tracedUnions: Set<string>;
   /** Unions represented as a nullable arm pointer (nullable-unions.ts):
@@ -48,6 +48,14 @@ export interface ShapeHost {
   readonly nullableUnions: NullableUnions;
   readonly recordsById: Map<string, IrRecordShape>;
   readonly recordCloneShapes: ReadonlySet<string>;
+  /** The program constructs lifetime regions: the ProgramLifetime classes
+   * allocate in regions and count references in their region chunk instead
+   * of being empty (llvm/regions.ts). */
+  regions?: RegionHooks | null;
+  /** The alias tag of a runtime word that lifetime-region code reads and
+   * writes outside every field: the chunk count, the chunk owner, the class
+   * cursors and scr_region_counting (", !tbaa !N", or "" in debug builds). */
+  regionAliasTag?(word: "count" | "owner" | "cursor" | "counting"): string;
   /** Emit the live-object audit notes (`scr_obj_alloc_note` /
    * `scr_obj_free_note`) in emitted new/free helpers. Only runtimes built
    * with SCR_RC_AUDIT (the sanitized lane) count them; release and dev
@@ -68,6 +76,15 @@ export interface ShapeHost {
    * in emission order.
    * Absent: every descriptor gets 0, which keeps no statistics. */
   nextCycKind?(): number;
+}
+
+/** What class emission asks of lifetime regions (LifetimeRegions in
+ * llvm/regions.ts): the retain and release bodies, the allocation lines of
+ * `new` (the instance in `%o`), and a class's region definitions. */
+export interface RegionHooks {
+  rcBody(fnName: string, ret: "ptr" | "void", comment: string): string[];
+  newAlloc(className: string, sizeOf: string): string[];
+  classDefinitions(cls: IrClassDef, sizeOf: string): string[];
 }
 
 /** Every emitted function/helper carries #0 = { sanitize_address } — see
@@ -568,7 +585,14 @@ function elemKindNum(elem: IrType): number {
  * SCR_ELEM_ARR spelling would hide them from the outer array's trace)
  * construct through scr_arr_new_ops with the element type's `_v` RC entry
  * points; every other element kind keeps the plain scr_arr_new call. */
-export function arrNewCall(host: ShapeHost, elem: IrType, capText: string): string {
+export function arrNewCall(
+  host: ShapeHost,
+  elem: IrType,
+  capText: string,
+  /** An empty array expected to receive a few elements (its first slots
+   * live in its own block): capText must be "0". */
+  small = false,
+): string {
   const useRef =
     elem.kind === "record" ||
     elem.kind === "object" ||
@@ -586,8 +610,16 @@ export function arrNewCall(host: ShapeHost, elem: IrType, capText: string): stri
     elem.kind === "regex" || // RegExp values: scr_regex_* adapters, no trace (no refs inside)
     (elem.kind === "array" && traceAdapter(host, elem) !== null);
   if (!useRef) {
+    if (small) {
+      host.declare(`declare ptr @scr_arr_new_small(i32)`);
+      return `call ptr @scr_arr_new_small(i32 ${elemKindNum(elem)})`;
+    }
     host.declare(`declare ptr @scr_arr_new(i32, ${host.sizeType})`);
     return `call ptr @scr_arr_new(i32 ${elemKindNum(elem)}, ${host.sizeType} ${capText})`;
+  }
+  if (small) {
+    host.declare(`declare ptr @scr_arr_new_ops_small(ptr)`);
+    return `call ptr @scr_arr_new_ops_small(ptr ${arrOps(host, elem)})`;
   }
   host.declare(`declare ptr @scr_arr_new_ops(ptr, ${host.sizeType})`);
   return `call ptr @scr_arr_new_ops(ptr ${arrOps(host, elem)}, ${host.sizeType} ${capText})`;
@@ -712,7 +744,7 @@ export function mapValKindNum(value: IrType): number {
 /** The RC-relevant members of a shape: every field, plus the overflow map
  * on index-signature shapes (one more map-typed member). `index` is the
  * member's field position in the emitted struct type (rc header at 0). */
-function rcMembers(shape: IrRecordShape): { index: number; type: IrType; name: string }[] {
+export function rcMembers(shape: IrRecordShape): { index: number; type: IrType; name: string }[] {
   return [
     ...shape.fields.map((f, i) => ({ index: i + 1, type: f.type, name: f.name })),
     ...(shape.indexValue
@@ -737,7 +769,7 @@ export function retainBody(
   immortal = false,
 ): string[] {
   const S = host.sizeType;
-  if (immortal) return immortalRcBody(fnName, "ptr", comment);
+  if (immortal) return immortalRcBody(host, fnName, "ptr", comment);
   return [
     `define internal ptr @${fnName}(ptr %o) ${FN_ATTRS} {${comment ? ` ; ${comment}` : ""}`,
     `entry:`,
@@ -760,8 +792,16 @@ export function retainBody(
 /** The retain or release entry point of a class whose every instance lives
  * until the process exits (no collector header; see classes.ts
  * programLifetimeClass and programLifetimeRc): nothing to count, so every
- * inlined call site folds away. */
-function immortalRcBody(fnName: string, ret: "ptr" | "void", comment: string): string[] {
+ * inlined call site folds away. Programs with lifetime regions count the
+ * references in the instance's region chunk instead (llvm/regions.ts). */
+function immortalRcBody(
+  host: ShapeHost,
+  fnName: string,
+  ret: "ptr" | "void",
+  comment: string,
+): string[] {
+  const regions: RegionHooks | null = host.regions ?? null;
+  if (regions !== null) return regions.rcBody(fnName, ret, comment);
   return [
     `define internal ${ret} @${fnName}(ptr %o) ${FN_ATTRS} {${comment ? ` ; ${comment} (immortal)` : ""}`,
     `entry:`,
@@ -774,6 +814,146 @@ function immortalRcBody(fnName: string, ret: "ptr" | "void", comment: string): s
  * Other reference kinds conservatively share the runtime destruction budget. */
 export function needsBoundedRelease(type: IrType): boolean {
   return isRefCounted(type) && type.kind !== "string";
+}
+
+/** Typed teardown. A teardown that drops the last reference to a child of a
+ * statically known emitted type calls that type's teardown directly instead
+ * of going through its out-of-line release and the runtime's generic
+ * scr_rc_destroy, so tearing down a tree of one type is one direct call per
+ * node. Such teardowns take the length of the direct chain they are in
+ * (`_destroy_d(ptr, i32)`; `_destroy(ptr)` starts one at 0 for the runtime),
+ * and a chain DIRECT_DESTROY_CHAIN deep hands the next child to
+ * scr_rc_destroy, whose depth budget then bounds the stack exactly as
+ * before: each of its levels holds at most one direct chain. */
+export const DIRECT_DESTROY_CHAIN = 16;
+
+/** A child type whose teardown a parent teardown can call directly. */
+export interface DirectDestroy {
+  /** The child's inlinable release (every reference but the last). */
+  readonly release: string;
+  /** The child's teardown symbol; `${destroy}_d` takes the chain length. */
+  readonly destroy: string;
+  /** The child carries a collector header. */
+  readonly traced: boolean;
+}
+
+/** The release of child `value` (a loaded field, possibly NULL) inside a
+ * teardown whose chain length is `%d`: the child's own release for a shared
+ * or immortal reference, its teardown for the last one. Labels use `tag`;
+ * the lines end in the open block `${tag}.next`. */
+export function directChildReleaseLines(
+  host: ShapeHost,
+  tag: string,
+  value: string,
+  target: DirectDestroy,
+  comment: string,
+): string[] {
+  const S = host.sizeType;
+  host.declare(`declare void @scr_rc_destroy(ptr, ptr)`);
+  const lines = [
+    `  %${tag}.nn = icmp ne ptr ${value}, null`,
+    `  br i1 %${tag}.nn, label %${tag}.chk, label %${tag}.next`,
+    `${tag}.chk:`,
+    `  %${tag}.rc = load ${S}, ptr ${value}`,
+    `  %${tag}.last = icmp eq ${S} %${tag}.rc, 1`,
+    `  br i1 %${tag}.last, label %${tag}.dead, label %${tag}.shared`,
+    `${tag}.shared:`,
+    `  call void ${target.release}(ptr ${value}) ; ${comment}`,
+    `  br label %${tag}.next`,
+    `${tag}.dead: ; ${comment}: the last reference`,
+    `  store ${S} 0, ptr ${value}`,
+  ];
+  if (target.traced) {
+    host.declare(`declare void @scr_cyc_on_dead(ptr)`);
+    lines.push(
+      `  %${tag}.bufp = getelementptr i8, ptr ${value}, ${S} -${host.cycleBufOffset}`,
+      `  %${tag}.buf = load i32, ptr %${tag}.bufp`,
+      `  %${tag}.queued = icmp slt i32 %${tag}.buf, 0`,
+      `  br i1 %${tag}.queued, label %${tag}.unbuffer, label %${tag}.teardown`,
+      `${tag}.unbuffer:`,
+      `  call void @scr_cyc_on_dead(ptr ${value})`,
+      `  br label %${tag}.teardown`,
+      `${tag}.teardown:`,
+    );
+  }
+  lines.push(
+    `  %${tag}.short = icmp ult i32 %d, ${DIRECT_DESTROY_CHAIN}`,
+    `  br i1 %${tag}.short, label %${tag}.direct, label %${tag}.bounded`,
+    `${tag}.direct:`,
+    `  %${tag}.d = add i32 %d, 1`,
+    `  call void @${target.destroy}_d(ptr ${value}, i32 %${tag}.d)`,
+    `  br label %${tag}.next`,
+    `${tag}.bounded:`,
+    `  call void @scr_rc_destroy(ptr ${value}, ptr @${target.destroy})`,
+    `  br label %${tag}.next`,
+    `${tag}.next:`,
+  );
+  return lines;
+}
+
+/** The direct-teardown target of a reference of `type`, if `targets` (keyed
+ * `record:<id>` / `object:<class>`) has one. Nullable unions hold the arm's
+ * pointer, NULL or an immortal sentinel, which the child release handles. */
+export function directDestroyTarget(
+  host: ShapeHost,
+  type: IrType,
+  targets: ReadonlyMap<string, DirectDestroy>,
+): DirectDestroy | null {
+  const key = directDestroyKey(host, type);
+  return key === null ? null : (targets.get(key) ?? null);
+}
+
+function directDestroyKey(host: ShapeHost, type: IrType): string | null {
+  const t = host.nullableUnions.of(type)?.arm ?? type;
+  if (t.kind === "record") return `record:${t.shapeId}`;
+  return t.kind === "object" ? `object:${t.className}` : null;
+}
+
+/** The direct targets among `candidates` that a field of one of `fieldTypes`
+ * refers to: a teardown no parent calls directly keeps its plain form. */
+export function usedDirectTargets(
+  host: ShapeHost,
+  candidates: readonly (readonly [string, DirectDestroy])[],
+  fieldTypes: readonly IrType[],
+): Map<string, DirectDestroy> {
+  const all = new Map(candidates);
+  const used = new Map<string, DirectDestroy>();
+  for (const type of fieldTypes) {
+    const key = directDestroyKey(host, type);
+    const target = key === null ? undefined : all.get(key);
+    if (key !== null && target !== undefined) used.set(key, target);
+  }
+  return used;
+}
+
+/** The teardown definitions for `destroy`: with `chained`, the body takes
+ * the chain length `%d` (directChildReleaseLines) and the runtime's
+ * one-argument entry starts a chain. */
+export function destroyDefinitions(
+  destroy: string,
+  body: readonly string[],
+  chained: boolean,
+): string[] {
+  if (!chained)
+    return [
+      `define internal void @${destroy}(ptr %o) ${FN_ATTRS} {`,
+      `entry:`,
+      ...body,
+      `  ret void`,
+      `}`,
+    ];
+  return [
+    `define internal void @${destroy}_d(ptr %o, i32 %d) ${FN_ATTRS} {`,
+    `entry:`,
+    ...body,
+    `  ret void`,
+    `}`,
+    `define internal void @${destroy}(ptr %o) ${FN_ATTRS} {`,
+    `entry:`,
+    `  call void @${destroy}_d(ptr %o, i32 0)`,
+    `  ret void`,
+    `}`,
+  ];
 }
 
 /** Common NULL/immortal/decrement skeleton for ordinary object releases.
@@ -791,20 +971,13 @@ export function releaseBody(
   comment = "",
   bounded = true,
   immortal = false,
+  chained = false,
 ): string[] {
   const S = host.sizeType;
   if (bounded) host.declare(`declare void @scr_rc_destroy(ptr, ptr)`);
   const destroy = `${fnName}_destroy`;
   const lines = [
-    ...(bounded
-      ? [
-          `define internal void @${destroy}(ptr %o) ${FN_ATTRS} {`,
-          `entry:`,
-          ...freeBody,
-          `  ret void`,
-          `}`,
-        ]
-      : []),
+    ...(bounded ? destroyDefinitions(destroy, freeBody, chained) : []),
     ...releaseFastPath(host, fnName, `${fnName}_slow`, traced, comment, immortal),
     `define internal void @${fnName}_slow(ptr %o) noinline ${FN_ATTRS} {${comment ? ` ; ${comment}` : ""}`,
     `entry:`,
@@ -848,7 +1021,7 @@ export function releaseFastPath(
   immortal = false,
 ): string[] {
   const S = host.sizeType;
-  if (immortal) return immortalRcBody(fnName, "void", comment);
+  if (immortal) return immortalRcBody(host, fnName, "void", comment);
   return [
     `define internal void @${fnName}(ptr %o) ${FN_ATTRS} {${comment ? ` ; ${comment} (fast path)` : ""}`,
     `entry:`,
@@ -879,9 +1052,9 @@ export function releaseFastPath(
 }
 
 /** The possible-cycle-root step of a release that left a headered object
- * alive: scr_cyc_on_release with its early return inlined. Read `buffered`
- * (the i16 at obj-6; nonzero for a queued candidate or a
- * tenured object) and call the runtime only to enqueue a new candidate.
+ * alive: scr_cyc_on_release with its early return inlined. Test the sign
+ * of `buf` (the i32 at obj-4; negative for a queued candidate or a tenured
+ * object) and call the runtime only to enqueue a new candidate.
  * Every emitted release of a headered object shares this sequence
  * (scr_runtime.h asserts the offset); it ends by branching to `done`. */
 /** One traced field of an emitted trace function: load the slot and visit
@@ -911,9 +1084,9 @@ export function cycleRootLines(host: ShapeHost, done: string): string[] {
   const S = host.sizeType;
   host.declare(`declare void @scr_cyc_on_release(ptr)`);
   return [
-    `  %bufp = getelementptr i8, ptr %o, ${S} -${host.cycleBufferedOffset}`,
-    `  %buf = load i16, ptr %bufp`,
-    `  %queued = icmp ne i16 %buf, 0`,
+    `  %bufp = getelementptr i8, ptr %o, ${S} -${host.cycleBufOffset}`,
+    `  %buf = load i32, ptr %bufp`,
+    `  %queued = icmp slt i32 %buf, 0`,
     `  br i1 %queued, label %${done}, label %enqueue`,
     `enqueue:`,
     `  call void @scr_cyc_on_release(ptr %o) ; buffer the candidate; may collect`,
@@ -929,9 +1102,9 @@ export function cycleDeadLines(host: ShapeHost, next: string): string[] {
   const S = host.sizeType;
   host.declare(`declare void @scr_cyc_on_dead(ptr)`);
   return [
-    `  %dbufp = getelementptr i8, ptr %o, ${S} -${host.cycleBufferedOffset}`,
-    `  %dbuf = load i16, ptr %dbufp`,
-    `  %dqueued = icmp ne i16 %dbuf, 0`,
+    `  %dbufp = getelementptr i8, ptr %o, ${S} -${host.cycleBufOffset}`,
+    `  %dbuf = load i32, ptr %dbufp`,
+    `  %dqueued = icmp slt i32 %dbuf, 0`,
     `  br i1 %dqueued, label %unbuffer, label %${next}`,
     `unbuffer:`,
     `  call void @scr_cyc_on_dead(ptr %o)`,
@@ -970,6 +1143,27 @@ export function emitRecordShapes(
     );
   }
 
+  // Record shapes whose teardown is out of line (a bounded release) can be
+  // torn down directly by a parent record's teardown; only shapes that some
+  // record holds are.
+  const candidates: [string, DirectDestroy][] = [];
+  const memberTypes: IrType[] = [];
+  for (const shape of records) {
+    const members = rcMembers(shape);
+    for (const m of members) memberTypes.push(m.type);
+    if (!members.some((m) => isRefCounted(m.type) && needsBoundedRelease(m.type))) continue;
+    const release = mangleRecordRelease(shape.id);
+    candidates.push([
+      `record:${shape.id}`,
+      {
+        release: `@${release}`,
+        destroy: `${release}_destroy`,
+        traced: host.tracedShapes.has(`record:${shape.id}`),
+      },
+    ]);
+  }
+  const directTargets = usedDirectTargets(host, candidates, memberTypes);
+
   for (const shape of records) {
     const struct = mangleRecordStruct(shape.id);
     const traced = host.tracedShapes.has(`record:${shape.id}`);
@@ -985,12 +1179,26 @@ export function emitRecordShapes(
     // scr_cyc_free) exactly like shapes.ts.
     const freeBody: string[] = [];
     let t = 0;
+    // A teardown takes the chain length when it is a direct target or has
+    // direct children.
+    const chained =
+      directTargets.has(`record:${shape.id}`) ||
+      refMembers.some((m) => directDestroyTarget(host, m.type, directTargets) !== null);
     for (const m of refMembers) {
       freeBody.push(
         `  %f${t} = getelementptr inbounds %${struct}, ptr %o, i64 0, i32 ${m.index}`,
         `  %v${t} = load ptr, ptr %f${t}`,
-        `  call void ${releaseSym(host, m.type)}(ptr %v${t}) ; ${llvmCommentText(m.name)}`,
       );
+      const direct = directDestroyTarget(host, m.type, directTargets);
+      if (direct) {
+        freeBody.push(
+          ...directChildReleaseLines(host, `td${t}`, `%v${t}`, direct, llvmCommentText(m.name)),
+        );
+      } else {
+        freeBody.push(
+          `  call void ${releaseSym(host, m.type)}(ptr %v${t}) ; ${llvmCommentText(m.name)}`,
+        );
+      }
       t++;
     }
     freeBody.push(...emitObjectFree(host, traced));
@@ -1002,6 +1210,8 @@ export function emitRecordShapes(
         freeBody,
         "",
         refMembers.some((member) => needsBoundedRelease(member.type)),
+        false,
+        chained,
       ),
       ``,
     );

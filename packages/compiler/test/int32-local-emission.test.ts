@@ -78,16 +78,23 @@ function contract(seed: Int32, steps: Int32): Int32 {
   for (let i: Int32 = 0; i < steps; i = (i + 1) | 0) acc = (Math.imul(acc, 3) + i) | 0;
   return acc;
 }
+function fibo(n: number): number {
+  return n < 2 ? n : fibo(n - 1) + fibo(n - 2);
+}
 const bytes = new Uint8Array([1, 2, 3, 250]);
 console.log(rsync(bytes), mix("abcd"), counters(), unsigned(new Uint32Array([4294967295, 7])));
 console.log(fraction(5), mixed(3), captured(["ab", "c"]), capturedParam(3)());
-console.log([...frames(["ab", "cd"])].join(" "), contract(7, 20));
+console.log([...frames(["ab", "cd"])].join(" "), contract(7, 20), fibo(10));
 suspended(["ab"]).then((t) => console.log(t));
 `;
 
+/** A function's body: its i32 entry when it has one (int32-abi.ts), not
+ * the double-ABI wrapper around it. */
 const body = (ll: string, name: string): string =>
   ll.match(
-    new RegExp(`define internal [^\\n]+ @sc_(?:b)?f_${name}\\([^\\n]*\\) #0 \\{([\\s\\S]*?)\\n\\}`),
+    new RegExp(
+      `define internal [^\\n]+ @sc_(?:b)?f_${name}(?:\\.i32)?\\([^\\n]*\\) #0 \\{ ;([\\s\\S]*?)\\n\\}`,
+    ),
   )![1]!;
 
 /** Every function definition whose header or body matches. */
@@ -165,8 +172,10 @@ test("int32-closed locals are stored as i32 and keep doubles only for floating c
       expect(mix).toMatch(/alloca i32 ; h\n/);
       expect(mix).toMatch(/alloca i32 ; i\n/);
       expect(carriers(mix)).toEqual([]);
-      // The result is the one double the function needs.
-      expect(mix).toMatch(/ = sitofp i32 %\w+ to double\n\s+ret double/);
+      // The int32 result leaves through the i32 entry as the loaded i32.
+      expect(mix).toMatch(
+        / = load i32, ptr %sc_l_h_\w+\n(?:\s+%\w+ = sitofp [^\n]+\n)?\s+ret i32 %\w+/,
+      );
 
       // ++ and -- write proven int32s in place.
       const counters = body(ll, "counters");
@@ -202,12 +211,24 @@ test("int32-closed locals are stored as i32 and keep doubles only for floating c
       }
 
       // Int32 contract locals and parameters use the same storage; the
-      // parameter converts once on entry.
+      // parameter arrives as an i32 and is stored without a conversion.
       const contract = body(ll, "contract");
       expect(contract).toMatch(/alloca i32 ; acc\n/);
       expect(contract).toMatch(/alloca i32 ; seed\n/);
-      expect(contract).toMatch(/ = fptosi double %p_\w+ to i32\n/);
+      expect(contract).toMatch(/store i32 %p_sc_l_seed_\w+\.i32, ptr /);
+      expect(contract).not.toMatch(/ = fptosi double %p_/);
       expect(carriers(contract)).toEqual([]);
+
+      // A parameter the body never writes reads as its incoming double:
+      // the base case returns it without converting the i32 back.
+      const fibo = live(body(ll, "fibo"));
+      expect(fibo).toMatch(/alloca i32 ; n\n/);
+      const nReads = new Set(
+        [...fibo.matchAll(/^\s*(%[\w.]+) = load i32, ptr %sc_l_n_\w+$/gm)].map((m) => m[1]),
+      );
+      const widened = [...fibo.matchAll(/^\s*%[\w.]+ = sitofp i32 (%[\w.]+) to double$/gm)];
+      expect(widened.filter((m) => nReads.has(m[1]))).toEqual([]);
+      expect(fibo).toMatch(/store double %p_sc_l_n_\w+, ptr /);
     }
 
     // Debug builds keep every number local a double for the variable view.

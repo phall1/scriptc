@@ -1,4 +1,5 @@
 import { generatorDrain } from "./iterator-adapters.js";
+import { lowerEventStaticProperty } from "./builtins/numbers.js";
 import { lowerUnionEquality, tagEqualityMayMissAlias } from "./strict-equality.js";
 import { isOptionalProcessStreamProperty } from "./builtins/process.js";
 import { lowerWorkerMetadata } from "./builtins/workers.js";
@@ -7,6 +8,7 @@ import {
   lowerBuiltinConstructorInstanceOf,
   lowerBuiltinConstructorValue,
 } from "./builtin-constructor-identity.js";
+import { experimentalImportOf, lifetimeRegionMemberOf } from "../experimental-import.js";
 import { dynUndefinedExpr, nodeThrowExpr, numLit, strLit, varRef } from "../../ir/build.js";
 import { InternalCompilerError } from "../../errors.js";
 import { SYMBOL_T } from "../../ir/ir.js";
@@ -144,6 +146,7 @@ import {
 import { expandoMemberRead, expandoWritableTarget } from "./lower-expando.js";
 import { lowerSocketInstanceOf, lowerTlsRootCertificates } from "./lower-server.js";
 import {
+  type ClassInfo,
   findGenericMethodOn,
   lowerStaticFieldRead,
   staticFieldWriteTarget,
@@ -163,12 +166,13 @@ import { mixinFnOfCallee } from "./lower-mixins.js";
 import {
   isConstAssertionTypeNode,
   isGenericCallableMemberType,
+  isOsConstantsType,
   isParseArgsDynTypeName,
   underConstAssertion,
   unitOnlyUnion,
   withUnitArm,
 } from "../type-mapper.js";
-import { lowerYield } from "./lower-generators.js";
+import { iteratorResultValueRead, lowerYield } from "./lower-generators.js";
 import { errorPropertyRead, errorPropertyWrite, errorToStringCall } from "./error-methods.js";
 import { lowerStreamProperty, lowerStreamStateProperty, streamSidesOf } from "./lower-stream.js";
 import { unionWideningTags } from "../../ir/analysis.js";
@@ -1125,8 +1129,10 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           lowerer.unions.get(g.type.unionId)?.arms.length === 2 &&
           lowerer.unions.get(g.type.unionId)!.arms.some((a) => a.kind === "f64") &&
           lowerer.unions.get(g.type.unionId)!.arms.some((a) => a.kind === "string");
+        const symbol = lowerer.resolveValueSymbol(expr);
         if (
           !arithmeticUnion &&
+          !(symbol !== null && lowerer.earlyReadVars.has(symbol)) &&
           g.type.kind === "union" &&
           narrowed &&
           narrowed.kind !== "union" &&
@@ -1255,6 +1261,12 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           expr,
           "call publish(value) directly",
         );
+      if (experimentalImportOf(lowerer.program, expr) === "LifetimeRegion")
+        lowerer.noLowering(
+          "LifetimeRegion (@scriptc/experimental) as a value",
+          expr,
+          "construct regions with new LifetimeRegion()",
+        );
     }
     {
       const bi = lowerer.builtinImportOf(expr);
@@ -1275,6 +1287,9 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
         }
         if (bi.module === "http" && bi.member === "STATUS_CODES") {
           return { kind: "libCall", fn: "http.statusCodes", args: [], type: DYN, loc };
+        }
+        if (bi.module === "os" && bi.member === "constants") {
+          return { kind: "libCall", fn: "os.constants", args: [], type: DYN, loc };
         }
         // tls.rootCertificates: a runtime-valued module constant (the
         // cached bundled-CA array) — the one member read that lowers
@@ -1879,6 +1894,15 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
   if (ts.isConditionalExpression(expr)) return lowerTernary(lowerer, expr);
 
   if (ts.isPropertyAccessExpression(expr)) {
+    {
+      const member = lifetimeRegionMemberOf(lowerer.program, expr, lowerer.experimentalFiles);
+      if (member !== null)
+        lowerer.noLowering(
+          `LifetimeRegion.${member} (@scriptc/experimental) as a value`,
+          expr,
+          `call region.${member}(${member === "run" ? "fn" : ""}) directly`,
+        );
+    }
     // Expando statics may still be absent even when JS inference sees
     // the eventual assignment's scalar type. Preserve the checked value.
     const staticField = lowerStaticFieldRead(lowerer, expr);
@@ -2317,6 +2341,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       lowerer.lowerJsonProperty(expr) ??
       lowerer.lowerErrorCodeProperty(expr) ??
       lowerer.lowerNumberStaticProperty(expr) ??
+      lowerEventStaticProperty(lowerer, expr) ??
       lowerer.lowerMathProperty(expr) ??
       lowerer.lowerIntrinsicProperty(expr) ??
       // The _readableState/_writableState scalar READS (the suite's
@@ -2340,7 +2365,7 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       // read to the assigned value's bare type, but the stored undefined
       // arm is real (`obj.n = bytes[i]; obj.n` is undefined in Node).
       if (runtimeOptionalClassField(lowerer, handled, expr)) return handled;
-      return lowerer.maybeNarrow(handled, expr);
+      return iteratorResultValueRead(lowerer, handled, expr) ?? lowerer.maybeNarrow(handled, expr);
     }
     // `globalThis.<name>` that no lowering above claimed
     // (globalThis.crypto, globalThis.SubtleCrypto, globalThis.localStorage
@@ -2564,17 +2589,15 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           const shape = lowerer.shapes.get(recv.type.shapeId);
           const field = shape?.fields.find((f) => f.name === expr.name.text);
           if (field) {
-            return lowerer.maybeNarrow(
-              {
-                kind: "recordGet",
-                obj: recv,
-                shapeId: recv.type.shapeId,
-                field: field.name,
-                type: field.type,
-                loc,
-              },
-              expr,
-            );
+            const read: IrExpr = {
+              kind: "recordGet",
+              obj: recv,
+              shapeId: recv.type.shapeId,
+              field: field.name,
+              type: field.type,
+              loc,
+            };
+            return iteratorResultValueRead(lowerer, read, expr) ?? lowerer.maybeNarrow(read, expr);
           }
         }
       }
@@ -2601,10 +2624,15 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       segmentDataSymbol?.name === "SegmentData" &&
       lowerer.isStdlibSymbol(segmentDataSymbol) &&
       ["segment", "index", "input", "isWordLike"].includes(expr.name.text);
+    // os.constants members vary by platform (the declared groups list
+    // every platform's names): a number member reads as `number |
+    // undefined`, like an array element, and a group stays checked.
+    const osConstants = isOsConstantsType(lowerer.typeOf(expr.expression), lowerer);
     if (
       isParseArgsDynProperty(lowerer, expr) ||
       isStatFsDynProperty(lowerer, expr) ||
-      segmentDataProperty
+      segmentDataProperty ||
+      osConstants
     ) {
       const recv = lowerer.lowerExpr(expr.expression);
       if (recv.type.kind === "dyn") {
@@ -2615,17 +2643,20 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
           loc: locOf(expr.name),
         };
         const opt = hasOptionalChainGuard(expr.expression);
-        return lowerer.maybeNarrow(
-          {
-            kind: "dynKeyGet",
-            key,
-            ...(opt ? { optional: true as const } : {}),
-            value: recv,
-            type: DYN,
-            loc,
-          },
-          expr,
-        );
+        const read: IrExpr = {
+          kind: "dynKeyGet",
+          key,
+          ...(opt ? { optional: true as const } : {}),
+          value: recv,
+          type: DYN,
+          loc,
+        };
+        if (osConstants) {
+          return lowerer.mapTypeOf(lowerer.typeOf(expr))?.kind === "f64"
+            ? lowerer.coerceToExpected(read, lowerer.withUndefinedArm(F64))
+            : read;
+        }
+        return lowerer.maybeNarrow(read, expr);
       }
     }
     // A member read through a NULLISH generic binding (`const i: I<A &
@@ -9388,6 +9419,13 @@ export function lowerIncDec(
       return varRef(local.id, value.type, loc);
     };
     const finish = (read: IrExpr, write: (value: IrExpr) => IrStmt): IrExpr => {
+      if (read.type.kind === "bigint") {
+        const old = save(read, "%incrementOld");
+        const next = save(bigintStep(op, old, loc), "%incrementNext");
+        stmts.push(write(next));
+        const result = prefix ? next : old;
+        return { kind: "seqExpr", stmts, result, type: result.type, loc };
+      }
       const old = save(
         read.type.kind === "f64"
           ? read
@@ -9636,6 +9674,26 @@ export function lowerIncDecTarget(
       };
     }
   }
+  if (target.type.kind === "bigint") {
+    const old = lowerer.declareHiddenLocal("%bigintOld", BIGINT_T);
+    const next = lowerer.declareHiddenLocal("%bigintNext", BIGINT_T);
+    return {
+      kind: "seqExpr",
+      stmts: [
+        { kind: "varDecl", localId: old.id, init: varRef(target.id, BIGINT_T, loc), loc },
+        {
+          kind: "varDecl",
+          localId: next.id,
+          init: bigintStep(op, varRef(old.id, BIGINT_T, loc), loc),
+          loc,
+        },
+        { kind: "assign", localId: target.id, value: varRef(next.id, BIGINT_T, loc), loc },
+      ],
+      result: varRef(prefix ? next.id : old.id, BIGINT_T, loc),
+      type: BIGINT_T,
+      loc,
+    };
+  }
   if (target.type.kind !== "f64") lowerer.unsupported("SC1043", expr);
   return { kind: "incDec", op, prefix, localId: target.id, type: F64, loc };
 }
@@ -9665,6 +9723,50 @@ function seqExprSafeStmt(s: IrStmt): boolean {
     default:
       return false;
   }
+}
+
+const BIGINT_COMPOUND = {
+  "+": "bigint.add",
+  "-": "bigint.sub",
+  "*": "bigint.mul",
+  "/": "bigint.div",
+  "%": "bigint.mod",
+  "**": "bigint.pow",
+  "&": "bigint.and",
+  "|": "bigint.or",
+  "^": "bigint.xor",
+  "<<": "bigint.shl",
+  ">>": "bigint.shr",
+} as const;
+
+/** `old op= rhs` over two bigints: the binary operator's libCall. Null
+ * for other operand types (and `>>>`, which BigInt does not have). */
+function bigintCompoundValue(
+  op: CompoundOp,
+  left: IrExpr,
+  right: IrExpr,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (left.type.kind !== "bigint" || right.type.kind !== "bigint" || op === ">>>") return null;
+  return { kind: "libCall", fn: BIGINT_COMPOUND[op], args: [left, right], type: BIGINT_T, loc };
+}
+
+/** `++`/`--` on a bigint value: old ± 1n. */
+function bigintStep(op: "+" | "-", old: IrExpr, loc: SrcLoc): IrExpr {
+  const one: IrExpr = {
+    kind: "libCall",
+    fn: "bigint.parse",
+    args: [{ kind: "strLit", value: "1", type: STRING, loc }],
+    type: BIGINT_T,
+    loc,
+  };
+  return {
+    kind: "libCall",
+    fn: op === "+" ? "bigint.add" : "bigint.sub",
+    args: [old, one],
+    type: BIGINT_T,
+    loc,
+  };
 }
 
 export function lowerCompoundValueToTarget(
@@ -9756,6 +9858,8 @@ export function lowerCompoundValueToTarget(
     };
     return lowerer.coerceInto(expr, computed, target.type);
   }
+  const bigint = bigintCompoundValue(compound, read, rhs, loc);
+  if (bigint) return bigint;
   lowerer.unsupported("SC1043", expr);
 }
 
@@ -12310,6 +12414,16 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
     const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);
     return { kind: "libCall", fn: "dyn.dataViewIs", args: [value], type: BOOL, loc };
   }
+  {
+    const eventKind = ["Event", "CustomEvent", "EventTarget"].findIndex((name) =>
+      lowerer.isStdlibGlobal(expr.right, name),
+    );
+    if (eventKind >= 0) {
+      const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);
+      const kind: IrExpr = { kind: "numLit", value: eventKind, type: F64, loc };
+      return { kind: "libCall", fn: "event.is", args: [value, kind], type: BOOL, loc };
+    }
+  }
   if (lowerer.isStdlibGlobal(expr.right, "SharedArrayBuffer")) {
     const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);
     return { kind: "libCall", fn: "sharedArrayBuffer.is", args: [value], type: BOOL, loc };
@@ -12527,7 +12641,12 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
         left.kind === "varRef" &&
         (ts.isIdentifier(expr.right) || expr.right.kind === ts.SyntaxKind.ThisKeyword)
       ) {
-        return { kind: "boolLit", value, type: BOOL, loc };
+        return readsClassAfter(lowerer, targetInfo, expr.right, [], {
+          kind: "boolLit",
+          value,
+          type: BOOL,
+          loc,
+        });
       }
       lowerer.unsupported(
         "SC1090",
@@ -12730,13 +12849,12 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
     }
   }
   if (left.type.kind !== "object") {
-    return {
-      kind: "seqExpr",
-      stmts: [{ kind: "exprStmt", expr: left, loc }],
-      result: { kind: "boolLit", value: false, type: BOOL, loc },
+    return readsClassAfter(lowerer, target, expr.right, [{ kind: "exprStmt", expr: left, loc }], {
+      kind: "boolLit",
+      value: false,
       type: BOOL,
       loc,
-    };
+    });
   }
   const lhsInfo = lowerer.classes.get(left.type.className);
   if (!lhsInfo)
@@ -12748,13 +12866,42 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
     left.type.className === target.def.name ||
     lowerer.isSubclassOf(left.type.className, target.def.name);
   if (left.kind === "varRef") {
-    return { kind: "boolLit", value, type: BOOL, loc };
+    return readsClassAfter(lowerer, target, expr.right, [], {
+      kind: "boolLit",
+      value,
+      type: BOOL,
+      loc,
+    });
   }
   lowerer.unsupported(
     "SC1090",
     expr,
     "statically-decided 'instanceof' on computed operands (bind the value to a variable first)",
   );
+}
+
+/** A statically decided `instanceof` still reads its class after the left
+ * operand: a class with an initialization flag throws there before its
+ * declaration ran. */
+function readsClassAfter(
+  lowerer: Lowerer,
+  target: ClassInfo,
+  right: ts.Expression,
+  stmts: IrStmt[],
+  result: IrExpr,
+): IrExpr {
+  if (!lowerer.classInitFlags.has(target.def.name)) {
+    if (stmts.length === 0) return result;
+    return { kind: "seqExpr", stmts, result, type: result.type, loc: result.loc };
+  }
+  const read = lowerer.lowerExpr(right);
+  return {
+    kind: "seqExpr",
+    stmts: [...stmts, { kind: "exprStmt", expr: read, loc: locOf(right) }],
+    result,
+    type: result.type,
+    loc: result.loc,
+  };
 }
 
 /** `#name in obj` — the ergonomic brand check. In this closed world a
@@ -12937,11 +13084,28 @@ function lowerPrivateIn(
   );
 }
 
+/** The string keys every record inherits from Object.prototype. */
+const OBJECT_PROTOTYPE_KEYS: ReadonlySet<string> = new Set([
+  "constructor",
+  "__defineGetter__",
+  "__defineSetter__",
+  "hasOwnProperty",
+  "__lookupGetter__",
+  "__lookupSetter__",
+  "isPrototypeOf",
+  "propertyIsEnumerable",
+  "toString",
+  "valueOf",
+  "__proto__",
+  "toLocaleString",
+]);
+
 /** `"key" in v` — the key-presence test. Three lowered receivers:
  * process.env (getenv(3) presence — Node-exact, an empty value still
  * counts as present), and monomorphic record shapes, where the answer is
  * type-directed: a declared non-optional field is a compile-time `true`,
- * a missing field (no index signature) a compile-time `false` — both
+ * a missing field (no index signature) a compile-time `false` unless
+ * Object.prototype has it — both
  * folds limited to side-effect-free receivers, the lowerInstanceOf rule —
  * and an OPTIONAL field (undefined-armed union) is a runtime presence
  * test on the slot: an omitted or deleted property is absent, while a
@@ -13262,7 +13426,13 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
         break;
       }
       const f = shape.fields.find((x) => x.name === key);
-      if (f && f.type.kind === "union" && lowerer.armTag(f.type.unionId, UNDEFINED_T) >= 0) {
+      const inherited = OBJECT_PROTOTYPE_KEYS.has(key);
+      if (
+        f &&
+        !inherited &&
+        f.type.kind === "union" &&
+        lowerer.armTag(f.type.unionId, UNDEFINED_T) >= 0
+      ) {
         staticAnswers = false; // an optional slot: presence is per-value
         break;
       }
@@ -13270,7 +13440,7 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
       // true without invoking the getter) — either slot present makes
       // the name a member.
       const acc = shape.fields.some((x) => x.name === `%get:${key}` || x.name === `%set:${key}`);
-      answers.push({ tag, has: f !== undefined || acc });
+      answers.push({ tag, has: f !== undefined || acc || inherited });
     }
     if (staticAnswers) {
       const pureRecv =
@@ -13346,7 +13516,11 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
   if (!shape) throw new InternalCompilerError(`lowerer bug: unknown shape ${recv.type.shapeId}`);
   const field = shape.fields.find((f) => f.name === key);
   if (field) {
-    if (field.type.kind === "union" && lowerer.armTag(field.type.unionId, UNDEFINED_T) >= 0) {
+    if (
+      !OBJECT_PROTOTYPE_KEYS.has(key) &&
+      field.type.kind === "union" &&
+      lowerer.armTag(field.type.unionId, UNDEFINED_T) >= 0
+    ) {
       // Optional slot: the key is present unless the field is absent
       // (omitted or deleted); an explicit undefined is present.
       return lowerer.recordFieldPresent(recv, recv.type.shapeId, key, loc);
@@ -13386,7 +13560,9 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
       "statically-decided 'in' on computed receivers (bind the value to a variable first)",
     );
   }
-  if (shape.indexValue) {
+  // Records are ordinary objects: Object.prototype's members are in them.
+  const inherited = OBJECT_PROTOTYPE_KEYS.has(key);
+  if (shape.indexValue && !inherited) {
     lowerer.unsupported(
       "SC1090",
       expr,
@@ -13399,7 +13575,7 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
     recv.kind === "fieldGet" ||
     pureRecvNode
   ) {
-    return { kind: "boolLit", value: false, type: BOOL, loc };
+    return { kind: "boolLit", value: inherited, type: BOOL, loc };
   }
   lowerer.unsupported(
     "SC1090",
@@ -13458,9 +13634,35 @@ function lowerRuntimeKeyIn(
     // Overflow keys answer through the map's hashed presence probe (a
     // stored undefined value is still present), not a scan over a fresh
     // key snapshot, which made `k in dict` loops quadratic.
-    body.push(
-      ret({ kind: "recordOvfHas", obj: r, shapeId: recvT.shapeId, key: k, type: BOOL, loc }),
-    );
+    const ovfHas: IrExpr = {
+      kind: "recordOvfHas",
+      obj: r,
+      shapeId: recvT.shapeId,
+      key: k,
+      type: BOOL,
+      loc,
+    };
+    // A miss in the record's own keys still finds Object.prototype's.
+    let inherited: IrExpr = ovfHas;
+    for (const name of OBJECT_PROTOTYPE_KEYS) {
+      if (shape.fields.some((f) => f.name === name)) continue;
+      inherited = {
+        kind: "logical",
+        op: "||",
+        left: inherited,
+        right: {
+          kind: "strEq",
+          negated: false,
+          left: k,
+          right: { kind: "strLit", value: name, type: STRING, loc },
+          type: BOOL,
+          loc,
+        },
+        type: BOOL,
+        loc,
+      };
+    }
+    body.push(ret(inherited));
     lowerer.liftedFns.push({
       name: helper,
       params: [
@@ -15773,6 +15975,7 @@ function lowerFieldCompoundValue(
       : lowerOptionalNumber(lowerer, rhs, loc);
   let value: IrExpr;
   const numericRead = lowerOptionalNumber(lowerer, read, loc, access);
+  const bigintValue = rhsNode ? bigintCompoundValue(op, read, rhs, loc) : null;
   if (op === "+" && read.type.kind === "string") {
     value = {
       kind: "strConcat",
@@ -15783,6 +15986,8 @@ function lowerFieldCompoundValue(
     };
   } else if (numericRead.type.kind === "f64" && numericRhs.type.kind === "f64") {
     value = { kind: "bin", op, left: numericRead, right: numericRhs, type: F64, loc };
+  } else if (bigintValue) {
+    value = bigintValue;
   } else if (target.fieldType.kind === "dyn" && isJsSourceFile(access.getSourceFile())) {
     const numeric = ["-", "*", "/", "%", "**"].includes(op);
     const left = lowerer.coerceToExpected(read, DYN);

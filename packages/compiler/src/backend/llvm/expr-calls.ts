@@ -2,14 +2,25 @@
 import { InternalCompilerError } from "../../errors.js";
 import { newValueMayThrow } from "../../ir/analysis.js";
 import {
+  isDynTypedRefType,
   isFfiCallbackParam,
   isFfiContextParam,
   isFfiReleaseParam,
   isRefCounted,
+  typeKey,
+  type IrExpr,
+  type IrFunction,
 } from "../../ir/ir.js";
+import { liveRefView } from "./expr-stream-bridges.js";
+import { typedRefConstructor, vAdapters } from "./shapes.js";
+import { INT32_ABI_SUFFIX, SCALAR_UNION_RESULT } from "./int32-abi.js";
+import { canStackObject, emitStackObject } from "./stack-objects.js";
 import { collectFfiRetainedOps, parseFfiCallbackKey } from "../ffi-callbacks.js";
 import {
+  mangleAsyncAdoptCall,
+  mangleAsyncAwaitCall,
   mangleBorrowedFunction,
+  mangleBorrowingWrapper,
   mangleClassNew,
   mangleClassRetain,
   mangleClassStruct,
@@ -24,6 +35,7 @@ import type { LlvmEmitterContext, ExprOf, LlValue } from "./expr-context.js";
 import { f64Lit, ffiNativeTypeLl, ffiNativeParamLl, ffiNativeReturnLl } from "./common.js";
 import { canStackUnion, emitStackUnion } from "./stack-unions.js";
 import { emitCallArrayRead } from "./local-array-reads.js";
+import { emitScalarOptional, isScalarOptionalSource } from "./local-union-storage.js";
 import { emitStackMapRead } from "./map-read-lifetimes.js";
 import {
   borrowableInputs,
@@ -51,6 +63,13 @@ export function emitCallExpr(
     | "instanceOf"
     | "virtualCall"
   >,
+  awaitEntry: false | "await" | "adopt" = false,
+  /** A projection consumes a scalar union result (Int32Abi.union): answer
+   * a private stack box instead of a heap box. */
+  stackResult = false,
+  /** The frame storage a result-slot entry (record-results.ts) writes:
+   * passed after the call's own arguments. */
+  resultSlot?: LlValue,
 ): LlValue {
   const B = host.B;
   switch (e.kind) {
@@ -104,6 +123,17 @@ export function emitCallExpr(
               return result.value;
             }
             if (canStackUnion(a, host.boxedUnionsById)) return emitStackUnion(host, a).value;
+            if (
+              (a.kind === "optChain" ||
+                a.kind === "nullish" ||
+                a.kind === "ternary" ||
+                a.kind === "arrIntrinsic") &&
+              isScalarOptionalSource(a, host.unionSources)
+            )
+              return emitScalarOptional(host, a);
+            if (a.kind === "call" && host.scalarResultCall(a))
+              return emitCallExpr(host, a, false, true);
+            if (host.stackObjects && canStackObject(host, a)) return emitStackObject(host, a);
             if (host.nullableFieldGet(a))
               return { name: host.emitOwnedNullableStack(a).box, type: a.type };
           }
@@ -111,20 +141,46 @@ export function emitCallExpr(
         }
         return host.emitExpr(a);
       });
+      if (resultSlot) args.push(resultSlot);
       // A borrowed parameter's owned argument stays in the caller frame.
       // This also preserves snapshots when a later argument mutates its
       // source, and releases earlier arguments if evaluation throws.
       args.forEach((a, index) => {
         if (!borrowed?.has(index)) host.moveTemp(a);
       });
+      const abi = awaitEntry ? undefined : host.int32Abis.get(e.callee);
       const argList = args
-        .map((a, i) => `${host.llType(callee.params[i]!.type)} ${a.name}`)
+        .map((a, i) =>
+          abi?.params[i]
+            ? `i32 ${host.int32Argument(a, e.args[i]!)}`
+            : `${host.llType(callee.params[i]!.type)} ${a.name}`,
+        )
         .join(", ");
+      if (awaitEntry) {
+        // The enclosing await routes this call through the callee's
+        // await-call entry: the result is the awaited value, and the
+        // await's rejection re-throw is the pending check. An adopting
+        // entry (`return f(...)`) also takes the adoption's then-job turn.
+        const adopt = awaitEntry === "adopt";
+        (adopt ? host.adoptCallees : host.awaitCallees).add(e.callee);
+        const awaited = callee.returnType;
+        const entry = `@${adopt ? mangleAsyncAdoptCall(e.callee) : mangleAsyncAwaitCall(e.callee)}`;
+        if (awaited.kind === "void") {
+          B.line(`call void ${entry}(${argList})`);
+          host.emitPendingCheck();
+          return { name: "", type: awaited };
+        }
+        const t = B.tmp();
+        B.line(`${t} = call ${host.llType(awaited)} ${entry}(${argList})`);
+        const out = host.own({ name: t, type: awaited });
+        host.emitPendingCheck();
+        return out;
+      }
       // Async callee: the spawn wrapper runs the body eagerly to its
       // first suspension and returns the promise (+1). The call itself
       // never unwinds — rejections surface at await (computeMayThrow's
       // async exclusion).
-      const target = `@${borrowed ? mangleBorrowedFunction(e.callee) : host.callTarget(e.callee)}`;
+      const target = `@${borrowed ? mangleBorrowedFunction(e.callee) : host.callTarget(e.callee)}${abi ? INT32_ABI_SUFFIX : ""}`;
       if (e.type.kind === "void") {
         B.line(`call void ${target}(${argList})`);
         if (host.mayThrow.has(e.callee)) host.emitPendingCheck();
@@ -132,6 +188,20 @@ export function emitCallExpr(
         return { name: "", type: e.type };
       }
       const t = B.tmp();
+      if (abi?.union) {
+        B.line(`${t} = call ${SCALAR_UNION_RESULT} ${target}(${argList})`);
+        if (host.mayThrow.has(e.callee)) host.emitPendingCheck();
+        if (borrowed) host.releaseFrame(host.frames.pop()!);
+        if (stackResult) return host.stackScalarUnion(t, e.type);
+        return host.own({ name: host.boxScalarUnion(t, e.type), type: e.type });
+      }
+      if (abi?.result) {
+        B.line(`${t} = call i32 ${target}(${argList})`);
+        const out = host.int32Result(t, e.type);
+        if (host.mayThrow.has(e.callee)) host.emitPendingCheck(out);
+        if (borrowed) host.releaseFrame(host.frames.pop()!);
+        return out;
+      }
       B.line(`${t} = call ${host.llType(e.type)} ${target}(${argList})`);
       let out: LlValue;
       if (borrowed && host.borrowedReturns.has(e.callee)) {
@@ -617,6 +687,13 @@ export function emitCallExpr(
         B.line(`${kindPtr} = getelementptr inbounds %ScrClosure, ptr ${c}, i64 0, i32 4`);
         B.line(`store i32 ${functionKind}, ptr ${kindPtr}`);
       }
+      if (host.lendsEveryArgument(e.fnName)) {
+        // The body that borrows its reference arguments, for callers that
+        // keep them alive across the call (the runtime's comparator sort).
+        const entry = B.tmp();
+        B.line(`${entry} = getelementptr inbounds %ScrClosure, ptr ${c}, i64 0, i32 7`);
+        B.line(`store ptr @${mangleBorrowedFunction(e.fnName)}, ptr ${entry}`);
+      }
       e.captures.forEach((localId, i) => {
         const box = host.captureBox(localId);
         const retained = host.retainBox(box);
@@ -656,9 +733,44 @@ export function emitCallExpr(
       if (e.args.length !== ft.params.length)
         throw new LlvmUnsupportedError("callValue:arity", e.loc);
       const callee = host.stackCallbacks.emit(host, e.callee) ?? emitBorrowedInput(host, e.callee);
-      const receiver = e.receiver === undefined ? null : host.emitExpr(e.receiver);
-      const args = e.args.map((a) => host.emitExpr(a));
-      for (const a of args) host.moveTemp(a);
+      // A class instance bound as the callee's `this` (`h.fn(x)`) is boxed
+      // only if the callee reads it: the receiver window records the
+      // instance (owned by this frame for the whole call) with its typed-ref
+      // recipe, and dyn.this builds the box on first read.
+      const lazyReceiver =
+        e.receiver?.kind === "dynFrom" &&
+        e.receiver.value.type.kind === "object" &&
+        isDynTypedRefType(e.receiver.value.type) &&
+        !host.shapeHost.isErrorClass(e.receiver.value.type.className)
+          ? host.emitExpr(e.receiver.value)
+          : null;
+      const receiver = e.receiver === undefined || lazyReceiver ? null : host.emitExpr(e.receiver);
+      const pushReceiver = (): void => {
+        if (lazyReceiver) {
+          const t = lazyReceiver.type;
+          const key = typeKey(t);
+          let recipe = host.typedRefRecipes.get(key);
+          if (recipe === undefined) {
+            const adapter = host.liveDynRefAdapter(t);
+            const rc = vAdapters(host.shapeHost, t);
+            const ctor = typedRefConstructor(host.shapeHost, t);
+            const kind = ctor.endsWith("_traced") ? 2 : ctor.endsWith("_observed") ? 1 : 0;
+            // The box binds the same live view eager boxing attaches, so
+            // `in`, for-in and Object.keys see the class members.
+            const view = liveRefView(adapter);
+            recipe = `@sc_trr_${host.typedRefRecipes.size}`;
+            host.typedRefRecipes.set(key, recipe);
+            host.resolveThunkDefs.push(
+              `${recipe} = internal constant { ptr, ptr, ptr, ${host.sizeType}, ptr, ptr, i32, i32, ptr } { ptr ${rc.retain}, ptr ${rc.release}, ptr ${host.cstr(key)}, ${host.sizeType} ${Buffer.byteLength(key, "utf8")}, ptr @${adapter.snapshot}, ptr ${adapter.commit}, i32 ${kind}, i32 ${view?.code ?? 0}, ptr ${view?.ops ?? "null"} }`,
+            );
+          }
+          host.declare("declare void @scr_dyn_this_push_typed(ptr, ptr)");
+          B.line(`call void @scr_dyn_this_push_typed(ptr ${lazyReceiver.name}, ptr ${recipe})`);
+          return;
+        }
+        host.declare("declare void @scr_dyn_this_push_dyn(ptr)");
+        B.line(`call void @scr_dyn_this_push_dyn(ptr ${receiver?.name ?? "null"})`);
+      };
       const knownName =
         e.callee.kind === "closure"
           ? e.callee.fnName
@@ -674,30 +786,118 @@ export function emitCallExpr(
           direct = `@${mangleWrapper(known.name)}`;
         } else direct = `@${host.callTarget(known.name)}`;
       }
-      const argList = [
-        `ptr ${callee.name}`,
-        ...args.map((a, i) => `${host.llType(ft.params[i]!)} ${a.name}`),
-      ].join(", ");
-      const invoke = (target: string, needsReceiver: boolean): string => {
+      // A known closure body that borrows reference parameters is entered
+      // directly with lent arguments, as a direct call to a borrowing body
+      // is: an argument is read without a reference when neither a later
+      // argument nor the body can write what it was read from, and any
+      // other value stays owned by this frame until the call returns. The
+      // fallback through the closure's own entry passes owned values.
+      //
+      // An unknown closure is entered through its borrowing entry
+      // (ScrClosure.fn_borrowed, which lends every reference argument) when
+      // it has one and every reference argument can be lent across any of
+      // the call's possible targets.
+      // A declared function as a value lends through its interned closure's
+      // borrowing wrapper, when it has one.
+      let lent =
+        known === undefined
+          ? undefined
+          : known.captures !== undefined
+            ? host.callLifetimes.borrowed.get(known.name)
+            : host.lendsEveryArgument(known.name)
+              ? host.callLifetimes.borrowed.get(known.name)
+              : undefined;
+      let lend = lent
+        ? borrowableInputs(host, e.args, false, host.referenceWrites?.summary(known!.name))
+        : [];
+      let dynamic = false;
+      if (!direct && e.receiver === undefined) {
+        const references = new Set<number>();
+        ft.params.forEach((param, index) => {
+          if (isRefCounted(param)) references.add(index);
+        });
+        if (references.size > 0) {
+          const inputs = borrowableInputs(host, e.args, false, host.referenceWrites?.ownWrites(e));
+          if ([...references].every((index) => inputs[index] === true)) {
+            lent = references;
+            lend = inputs;
+            dynamic = true;
+          }
+        }
+      }
+      if (lent) host.frames.push([]);
+      const args = e.args.map((a, i) =>
+        lent?.has(i) && lend[i] ? host.emitReadReceiver(a) : host.emitExpr(a),
+      );
+      args.forEach((a, i) => {
+        if (!lent?.has(i)) host.moveTemp(a);
+      });
+      const argListOf = (values: readonly LlValue[]): string =>
+        [
+          `ptr ${callee.name}`,
+          ...values.map((a, i) => `${host.llType(ft.params[i]!)} ${a.name}`),
+        ].join(", ");
+      // The owned entry consumes a reference of each lent argument.
+      const ownedArgs = (): LlValue[] =>
+        lent
+          ? args.map((a, i) =>
+              lent.has(i) ? { name: host.retainValue(a.name, a.type), type: a.type } : a,
+            )
+          : args;
+      const invoke = (target: string, needsReceiver: boolean, values = args): string => {
         if (needsReceiver) {
-          host.declare("declare void @scr_dyn_this_push_dyn(ptr)");
           host.declare("declare void @scr_dyn_this_pop()");
-          B.line(`call void @scr_dyn_this_push_dyn(ptr ${receiver?.name ?? "null"})`);
+          pushReceiver();
         }
         const result = e.type.kind === "void" ? "" : B.tmp();
-        B.line(`${result ? `${result} = ` : ""}call ${host.llType(e.type)} ${target}(${argList})`);
+        B.line(
+          `${result ? `${result} = ` : ""}call ${host.llType(e.type)} ${target}(${argListOf(values)})`,
+        );
         if (needsReceiver) B.line("call void @scr_dyn_this_pop()");
         return result;
       };
+      const lending =
+        lent && !dynamic
+          ? known!.captures !== undefined
+            ? `@${mangleBorrowedFunction(known!.name)}`
+            : `@${mangleBorrowingWrapper(known!.name)}`
+          : undefined;
       let t: string;
       if (direct && e.callee.kind === "closure") {
-        t = invoke(direct, !host.receiverReaders.ignores(known!));
+        t = invoke(lending ?? direct, !host.receiverReaders.ignores(known!));
       } else {
         const fnp = B.tmp(),
           fn = B.tmp();
         B.line(`${fnp} = getelementptr inbounds %ScrClosure, ptr ${callee.name}, i64 0, i32 1`);
         B.line(`${fn} = load ptr, ptr ${fnp}`);
-        if (!direct) t = invoke(fn, true);
+        if (dynamic) {
+          const entryp = B.tmp(),
+            entry = B.tmp(),
+            has = B.tmp(),
+            borrowing = B.newLabel("callback.lend"),
+            owning = B.newLabel("callback.own"),
+            done = B.newLabel("callback.done");
+          B.line(
+            `${entryp} = getelementptr inbounds %ScrClosure, ptr ${callee.name}, i64 0, i32 7`,
+          );
+          B.line(`${entry} = load ptr, ptr ${entryp}`);
+          B.line(`${has} = icmp ne ptr ${entry}, null`);
+          B.condBr(has, borrowing, owning);
+          B.startBlock(borrowing);
+          const lentResult = invoke(entry, true);
+          const borrowingEnd = B.currentLabel();
+          B.br(done);
+          B.startBlock(owning);
+          const ownedResult = invoke(fn, true, ownedArgs());
+          const owningEnd = B.currentLabel();
+          B.br(done);
+          B.startBlock(done);
+          t = e.type.kind === "void" ? "" : B.tmp();
+          if (t)
+            B.line(
+              `${t} = phi ${host.llType(e.type)} [ ${lentResult}, %${borrowingEnd} ], [ ${ownedResult}, %${owningEnd} ]`,
+            );
+        } else if (!direct) t = invoke(fn, true, ownedArgs());
         else {
           // A global initializer may not have run, or a callback may enter
           // through a boundary the census cannot prove. Validate the actual
@@ -710,27 +910,36 @@ export function emitCallExpr(
           B.line(`${matches} = icmp eq ptr ${fn}, ${direct}`);
           B.condBr(matches, fast, fallback);
           B.startBlock(fast);
-          const specialized = invoke(direct, !host.receiverReaders.ignores(known!));
+          const specialized = invoke(lending ?? direct, !host.receiverReaders.ignores(known!));
+          // `fast` may have split for exception checks; join from the end.
+          const fastEnd = B.currentLabel();
           B.br(done);
           B.startBlock(fallback);
-          const indirect = invoke(fn, true);
+          const indirect = invoke(fn, true, ownedArgs());
+          const fallbackEnd = B.currentLabel();
           B.br(done);
           B.startBlock(done);
           t = e.type.kind === "void" ? "" : B.tmp();
           if (t)
             B.line(
-              `${t} = phi ${host.llType(e.type)} [ ${specialized}, %${fast} ], [ ${indirect}, %${fallback} ]`,
+              `${t} = phi ${host.llType(e.type)} [ ${specialized}, %${fastEnd} ], [ ${indirect}, %${fallbackEnd} ]`,
             );
         }
       }
       if (e.type.kind === "void") {
         if (host.indirectMayThrow) host.emitPendingCheck();
+        if (lent) host.releaseFrame(host.frames.pop()!);
         return { name: "", type: e.type };
       }
       // The check runs AFTER the result temp joins the frame: an unwind
       // releases it (the dummy is NULL for refcounted returns).
       const out = host.own({ name: t, type: e.type });
       if (host.indirectMayThrow) host.emitPendingCheck();
+      if (lent) {
+        host.moveTemp(out);
+        host.releaseFrame(host.frames.pop()!);
+        return host.own(out);
+      }
       return out;
     }
     case "selfRef":
@@ -750,60 +959,7 @@ export function emitCallExpr(
       const o = B.tmp();
       B.line(`${o} = call ptr @${mangleClassNew(e.className)}()`);
       const out = host.own({ name: o, type: e.type });
-      const ctorName = `%${e.className}.constructor`;
-      const borrowed = host.callLifetimes.borrowed.get(ctorName);
-      if (borrowed) {
-        // The borrowed constructor body, like a direct call: this frame
-        // owns the new object across the call, borrowed arguments stay
-        // owned by a call frame, and projection-only parameters (stores
-        // into nullable-pointer fields, tests) receive private stack boxes.
-        const projected = host.callLifetimes.parameters.get(ctorName);
-        const inputs = borrowableInputs(
-          host,
-          e.args,
-          host.referenceEffects.functions.has(ctorName),
-          host.referenceWrites?.constructWrites(e.className),
-        );
-        host.frames.push([]);
-        const args = e.args.map((a, i) => {
-          if (borrowed.has(i + 1)) {
-            if (projected?.has(i + 1) && canStackUnion(a, host.boxedUnionsById))
-              return emitStackUnion(host, a).value;
-            if (projected?.has(i + 1) && host.nullableFieldGet(a))
-              return { name: host.emitOwnedNullableStack(a).box, type: a.type };
-            if (inputs[i]) return host.emitReadReceiver(a);
-          }
-          return host.emitExpr(a);
-        });
-        args.forEach((a, i) => {
-          if (!borrowed.has(i + 1)) host.moveTemp(a);
-        });
-        const self = borrowed.has(0)
-          ? o
-          : (() => {
-              const r = B.tmp();
-              B.line(`${r} = call ptr @${mangleClassRetain(e.className)}(ptr ${o})`);
-              return r;
-            })();
-        const argList = [
-          `ptr ${self}`,
-          ...args.map((a, i) => `${host.llType(ctor.params[i + 1]!.type)} ${a.name}`),
-        ].join(", ");
-        B.line(`call void @${mangleBorrowedFunction(ctorName)}(${argList})`);
-        if (host.mayThrow.has(ctorName)) host.emitPendingCheck();
-        host.releaseFrame(host.frames.pop()!);
-        return out;
-      }
-      const args = e.args.map((a) => host.emitExpr(a));
-      for (const a of args) host.moveTemp(a);
-      const r = B.tmp();
-      B.line(`${r} = call ptr @${mangleClassRetain(e.className)}(ptr ${o})`);
-      const argList = [
-        `ptr ${r}`,
-        ...args.map((a, i) => `${host.llType(ctor.params[i + 1]!.type)} ${a.name}`),
-      ].join(", ");
-      B.line(`call void @${mangleFunction(`%${e.className}.constructor`)}(${argList})`);
-      if (host.mayThrow.has(`%${e.className}.constructor`)) host.emitPendingCheck();
+      emitConstruction(host, e, o, ctor);
       return out;
     }
     case "classRef": {
@@ -1033,6 +1189,23 @@ export function emitCallExpr(
   }
 }
 
+/** A constructor call's arguments after the receiver, i32 where the
+ * constructor's i32 entry takes them. */
+function ctorArguments(
+  host: LlvmEmitterContext,
+  ctorName: string,
+  ctor: IrFunction,
+  args: LlValue[],
+  exprs: IrExpr[],
+): string[] {
+  const abi = host.int32Abis.get(ctorName);
+  return args.map((a, i) =>
+    abi?.params[i + 1]
+      ? `i32 ${host.int32Argument(a, exprs[i]!)}`
+      : `${host.llType(ctor.params[i + 1]!.type)} ${a.name}`,
+  );
+}
+
 /** A direct call to a borrowed-return function whose result a receiver or
  * walk consumes without owning it (LlEmitter.canBorrowReceiver proved every
  * reference argument borrowable and every argument edge-preserving). The
@@ -1044,11 +1217,84 @@ export function emitBorrowedResultCall(host: LlvmEmitterContext, e: ExprOf<"call
   const args = e.args.map((arg) =>
     isRefCounted(arg.type) ? host.emitReadReceiver(arg) : host.emitExpr(arg),
   );
-  const argList = args.map((a, i) => `${host.llType(callee.params[i]!.type)} ${a.name}`).join(", ");
+  const abi = host.int32Abis.get(e.callee);
+  const argList = args
+    .map((a, i) =>
+      abi?.params[i]
+        ? `i32 ${host.int32Argument(a, e.args[i]!)}`
+        : `${host.llType(callee.params[i]!.type)} ${a.name}`,
+    )
+    .join(", ");
   const t = host.B.tmp();
   host.B.line(
-    `${t} = call ${host.llType(e.type)} @${mangleBorrowedFunction(e.callee)}(${argList}) ; borrowed result`,
+    `${t} = call ${host.llType(e.type)} @${mangleBorrowedFunction(e.callee)}${abi ? INT32_ABI_SUFFIX : ""}(${argList}) ; borrowed result`,
   );
   if (host.mayThrow.has(e.callee)) host.emitPendingCheck();
   return { name: t, type: e.type };
+}
+
+/** Run the constructor of `new` over the allocated object `o` (fields
+ * zeroed, header stamped). The ctor owns and releases its `this` param like
+ * any callee, so it receives a +1 distinct from the caller's reference. */
+export function emitConstruction(
+  host: LlvmEmitterContext,
+  e: ExprOf<"new">,
+  o: string,
+  ctor: IrFunction,
+): void {
+  const B = host.B;
+  const ctorName = `%${e.className}.constructor`;
+  const borrowed = host.callLifetimes.borrowed.get(ctorName);
+  if (borrowed) {
+    // The borrowed constructor body, like a direct call: this frame
+    // owns the new object across the call, borrowed arguments stay
+    // owned by a call frame, and projection-only parameters (stores
+    // into nullable-pointer fields, tests) receive private stack boxes.
+    const projected = host.callLifetimes.parameters.get(ctorName);
+    const inputs = borrowableInputs(
+      host,
+      e.args,
+      host.referenceEffects.functions.has(ctorName),
+      host.referenceWrites?.constructWrites(e.className),
+    );
+    host.frames.push([]);
+    const args = e.args.map((a, i) => {
+      if (borrowed.has(i + 1)) {
+        if (projected?.has(i + 1) && canStackUnion(a, host.boxedUnionsById))
+          return emitStackUnion(host, a).value;
+        if (projected?.has(i + 1) && host.nullableFieldGet(a))
+          return { name: host.emitOwnedNullableStack(a).box, type: a.type };
+        if (inputs[i]) return host.emitReadReceiver(a);
+      }
+      return host.emitExpr(a);
+    });
+    args.forEach((a, i) => {
+      if (!borrowed.has(i + 1)) host.moveTemp(a);
+    });
+    const self = borrowed.has(0)
+      ? o
+      : (() => {
+          const r = B.tmp();
+          B.line(`${r} = call ptr @${mangleClassRetain(e.className)}(ptr ${o})`);
+          return r;
+        })();
+    const argList = [`ptr ${self}`, ...ctorArguments(host, ctorName, ctor, args, e.args)].join(
+      ", ",
+    );
+    B.line(
+      `call void @${mangleBorrowedFunction(ctorName)}${host.int32Abis.has(ctorName) ? INT32_ABI_SUFFIX : ""}(${argList})`,
+    );
+    if (host.mayThrow.has(ctorName)) host.emitPendingCheck();
+    host.releaseFrame(host.frames.pop()!);
+    return;
+  }
+  const args = e.args.map((a) => host.emitExpr(a));
+  for (const a of args) host.moveTemp(a);
+  const r = B.tmp();
+  B.line(`${r} = call ptr @${mangleClassRetain(e.className)}(ptr ${o})`);
+  const argList = [`ptr ${r}`, ...ctorArguments(host, ctorName, ctor, args, e.args)].join(", ");
+  B.line(
+    `call void @${mangleFunction(ctorName)}${host.int32Abis.has(ctorName) ? INT32_ABI_SUFFIX : ""}(${argList})`,
+  );
+  if (host.mayThrow.has(`%${e.className}.constructor`)) host.emitPendingCheck();
 }

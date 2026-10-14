@@ -9,6 +9,7 @@ export interface RuntimeFeatures {
   legacyTextDecoder: boolean;
   fileHandle: boolean;
   fetch: boolean;
+  eventTarget: boolean;
   processEvents: boolean;
   emitter: boolean;
   stream: boolean;
@@ -41,6 +42,8 @@ const DYN_ASYNC_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "timers.immediatePromise",
   "crypto.native",
   "dyn.promiseAll",
+  "dyn.promiseAllSettled",
+  "dyn.promiseAny",
   "process.onUncaughtException",
   "process.offUncaughtException",
   "process.onUnhandledRejection",
@@ -50,7 +53,14 @@ const DYN_ASYNC_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "process.onWarning",
   "process.offWarning",
   "process.emitWarning",
+  "process.emitWarningText",
+  "process.deprecationFlag",
+  "process.setDeprecationFlag",
   "util.styleText",
+  "util.inherits",
+  "util.deprecate",
+  "util.callbackify",
+  "util.debuglog",
   "als.new",
   "als.get",
   "als.run",
@@ -60,6 +70,13 @@ const DYN_ASYNC_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "dc.chanBindStore",
   "dc.chanUnbindStore",
   "dc.chanRunStores",
+]);
+
+const UTIL_CALLABLE_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
+  "util.inherits",
+  "util.deprecate",
+  "util.callbackify",
+  "util.debuglog",
 ]);
 
 /** Inspect types and expressions together in one traversal. This is a fresh
@@ -75,6 +92,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
     legacyTextDecoder: false,
     fileHandle: false,
     fetch: false,
+    eventTarget: false,
     processEvents: false,
     emitter:
       mod.workers === true || (mod.classes ?? []).some((c) => c.name === RUNTIME_EMITTER_CLASS),
@@ -111,7 +129,9 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       if (
         fn === "regexp.escape" ||
         fn === "dyn.nativeRegexIs" ||
-        fn === "util.stripVTControlCharacters"
+        fn === "util.stripVTControlCharacters" ||
+        fn === "path.matchesGlob" ||
+        fn === "path.win32MatchesGlob"
       )
         features.regex = true;
       if (
@@ -121,6 +141,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       )
         features.legacyTextDecoder = true;
       if (fn.startsWith("fetch.")) features.fetch = true;
+      if (fn.startsWith("event.") || fn === "events.addAbortListener") features.eventTarget = true;
       if (PROCESS_EVENT_LIB_FNS.has(fn)) features.processEvents = true;
       if (fn.startsWith("emitter.")) features.emitter = true;
       if (
@@ -136,7 +157,8 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
         fn === "stream.prop" ||
         fn === "stream.errored" ||
         fn === "sp.finished" ||
-        fn === "sp.pipeline"
+        fn === "sp.pipeline" ||
+        fn === "console.bind"
       )
         features.stream = true;
       if (fn.startsWith("zlib.")) features.zlib = true;
@@ -157,7 +179,7 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       if (DYN_ASYNC_LIB_FNS.has(fn)) features.dynAsync = true;
       if (
         fn.startsWith("insp.") ||
-        fn === "console.native" ||
+        fn.startsWith("console.") ||
         fn === "global.native" ||
         fn === "util.styleText"
       )
@@ -196,6 +218,14 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
       if (fn === "util.parseArgs" || fn === "util.isDeepStrictEqual" || fn === "util.styleText")
         features.parseArgs = true;
       if (fn === "util.styleText") features.processEvents = true;
+      // scr_util_callable.c: dyn wrappers over the descriptor, inspect,
+      // regex (NODE_DEBUG matching) and terminal-color units.
+      if (UTIL_CALLABLE_LIB_FNS.has(fn)) {
+        features.parseArgs = true;
+        features.inspect = true;
+        features.dynInvoke = true;
+        features.regex = true;
+      }
       if (fn.startsWith("fs.watch") || fn.startsWith("watcher.")) features.fsWatch = true;
       if (fn.startsWith("test.")) features.nodeTest = true;
       if (fn.startsWith("dgram.") || fn.startsWith("dns.")) features.dgram = true;
@@ -237,6 +267,12 @@ function scanRuntimeFeatures(mod: IrModule, stopAt?: keyof RuntimeFeatures): Run
           break;
         case "awaitExpr":
           if (node.type.kind === "dyn") features.dynAsync = true;
+          break;
+        case "intrinsic":
+          // Rejection reasons cross as dyn values (allSettled's records,
+          // any's AggregateError list).
+          if (node.name === "promise.allSettled" || node.name === "promise.any")
+            features.dynAsync = true;
           break;
         case "dynFrom": {
           const boxed = node.value.type;

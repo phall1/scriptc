@@ -1,4 +1,10 @@
 import {
+  lifetimeRegionType,
+  lowerLifetimeRegionCall,
+  lowerLifetimeRegionNew,
+} from "./lifetime-regions.js";
+import { isExperimentalDeclarationFile } from "../experimental-import.js";
+import {
   checkCycleBindingAccesses,
   refuseUncheckedCycleReads,
   type CycleInitFlag,
@@ -8,6 +14,7 @@ import { scanDivergences } from "./divergences.js";
 import { checkedClassAssertion } from "./class-assertions.js";
 import { narrowStoredClassValue, narrowGenericClassValue } from "./class-unions.js";
 import { isOptionalProcessStreamProperty } from "./builtins/process.js";
+import { isSettledIteratorValueRead } from "./lower-generators.js";
 import { concreteCollectionNarrow } from "./collection-narrowing.js";
 import { lowerWorkerMetadata } from "./builtins/workers.js";
 import { dynUndefinedExpr, nodeThrowExpr, numLit, varRef } from "../../ir/build.js";
@@ -63,6 +70,7 @@ import {
   utilTypesModuleValue,
 } from "./lower-builtin-values.js";
 import { devirtualizeVirtualCalls } from "./devirtualize.js";
+import { foldRegexSpanReads } from "./regex-span-reads.js";
 import { RuntimeOptionalProvenance } from "./runtime-optional-provenance.js";
 import { presentAtUse, reassignedBindings } from "./runtime-optional-guards.js";
 import { NarrowingStability } from "./narrowing-stability.js";
@@ -88,6 +96,8 @@ import { InternalCompilerError } from "../../errors.js";
 import { defaultAfterUndefined, lowerStaticallyUndefinedArgument } from "./optional-arguments.js";
 import { ClassDynamicDispatch, trackClassFieldCreation } from "./class-dynamic-dispatch.js";
 import { ClassProtocols } from "./class-protocols.js";
+import { earlyReadVarSymbols } from "./var-hoisting.js";
+import { recordTextCodecClass } from "../../ir/ir.js";
 import { DeferredModuleInitializers } from "./deferred-module-initializers.js";
 import { finalizeClassMethodValues } from "./class-method-values.js";
 import type { ClassSymbolKey } from "./symbol-fields.js";
@@ -201,6 +211,7 @@ import {
   describeRecordMemberBlocker,
   formatIrType,
   FETCH_AMBIENT_TYPES,
+  isOsConstantsSymbol,
   isUnitOnlyTsType,
   isWorkerHandleType,
   jsOpenObjectType,
@@ -346,6 +357,7 @@ import {
   lowerFunction,
 } from "./lower-functions.js";
 import { lowerArrayMethodCall } from "./containers/array-methods.js";
+import { type ArrayHofInfo, fuseArrayPipelines } from "./containers/array-pipelines.js";
 import {
   lowerMapMethodCall,
   lowerMapForEachCall,
@@ -403,7 +415,14 @@ import {
   lowerProcessOptionalMethodCall,
   lowerProcessStreamProperty,
 } from "./builtins/process.js";
-import { isConsoleLog, consoleCallMember } from "./builtins/console.js";
+import {
+  type ConsoleMethodMember,
+  type ConsoleOutputMember,
+  consoleCallMember,
+  consoleMethodMember,
+  isConsoleLog,
+} from "./builtins/console.js";
+import { lowerConsoleNew } from "./lower-console.js";
 import { lowerNumberStaticCall, lowerNumberStaticProperty } from "./builtins/numbers.js";
 import { lowerDateCall } from "./builtins/dates.js";
 import {
@@ -426,6 +445,7 @@ import {
   refuseUnsupportedApi,
   stdlibGlobalFnOf,
   lowerAbortControllerNew,
+  lowerEventTargetNew,
   lowerDynamicImportCall,
   lowerFetchCall,
   lowerFetchElementMethodCall,
@@ -1793,6 +1813,9 @@ export class Lowerer {
   /** All storage slots widened for runtime absence, including slots whose
    * current control-flow branch has temporarily narrowed the value. */
   readonly runtimeOptionalStorageLocals = new Set<IrLocal>();
+  /** `var` bindings code can read before their first store
+   * (var-hoisting.ts): their storage holds undefined until then. */
+  readonly earlyReadVars = new Set<ts.Symbol>();
   /** Globals whose checker-bare type was widened because an indexed read can
    * carry undefined at runtime. Identifier reads keep the union tag so
    * typeof and later boundaries observe the real value. */
@@ -1806,6 +1829,9 @@ export class Lowerer {
    * prepass. This includes explicit annotations: unchecked TS annotations do
    * not prove that an array property read produced a value. */
   readonly runtimeOptionalBindingTypes = new Map<ts.Symbol, IrType>();
+  /** Set when a match result lowers to execGroups/matchGroups, the inputs
+   * of regex span folding. */
+  regexGroupResults = false;
   /** Bindings that receive an unchecked indexed read (or a value derived
    * from one) through an initializer or assignment. The checker narrows a
    * declared optional binding to that read's bare type, so presence tests
@@ -2170,6 +2196,9 @@ export class Lowerer {
   /** Synthetic array-HOF loop functions (map/filter/forEach desugar),
    * interned per method + element/callback-result type: key → fn name. */
   readonly arrHofHelpers = new Map<string, string>();
+  /** What each array-HOF helper computes, keyed by helper name: the chain
+   * fusion pass reads it to recognize pipelines of helper calls. */
+  readonly arrHofInfo = new Map<string, ArrayHofInfo>();
   /** Per-arm calls through union-typed class receivers, interned by the
    * receiver union, member, completed argument ABI, and result type. */
   readonly unionCallHelpers = new Map<string, string>();
@@ -2385,6 +2414,12 @@ export class Lowerer {
   readonly workerTargets: readonly ts.SourceFile[];
   readonly workerTargetIdByPath = new Map<string, number>();
   usesWorkers = false;
+  /** The program constructs a LifetimeRegion (lifetime-regions.ts). */
+  usesLifetimeRegions = false;
+  /** Per-directory answers of experimental-import.ts's declaration-file test. */
+  readonly experimentalFiles = new Map<string, boolean>();
+  /** Interned LifetimeRegion.run helpers, by callback type key. */
+  readonly regionRunHelpers = new Map<string, string>();
   readonly forkTargetIdByPath = new Map<string, number>();
   /** Namespace ModuleBlocks this program lowers, filled by splitFiles:
    * "flattened" — an instantiated namespace whose body joined the file's
@@ -2502,6 +2537,9 @@ export class Lowerer {
   /** Import-cycle bindings with an initialization flag, by global id, and
    * the top-level statements declaring them (cycle-initialization.ts). */
   readonly cycleInitFlags = new Map<string, CycleInitFlag>();
+  /** Initialization flags of classes reachable before their statement ran,
+   * by class name (cycle-initialization.ts). */
+  readonly classInitFlags = new Map<string, CycleInitFlag>();
   readonly cycleInitDeclarations = new Map<ts.Statement, CycleInitFlag[]>();
 
   get ctx(): FnCtx {
@@ -2527,6 +2565,9 @@ export class Lowerer {
   /** Set while a subclass constructor's super() call notes its base
    * constructor edge: that edge does not instantiate the base exactly. */
   private superConstructorEdge = false;
+  /** Set when the async generator `return` being lowered awaited its
+   * promise operand (returnedPromiseAwait). */
+  private returnAwaitedPromise = false;
   private readonly virtualEdges = new Map<ClassInfo, Set<string>>();
 
   classCanBeConstructed(info: ClassInfo): boolean {
@@ -2727,6 +2768,10 @@ export class Lowerer {
       // fileTag is filled just below; the hook is only ever CALLED during
       // lowering, long after the constructor completes.
       isProgramFile: (sf) => this.fileTag.has(sf),
+      lifetimeRegionClass: (decl) =>
+        isExperimentalDeclarationFile(decl.getSourceFile(), this.experimentalFiles)
+          ? lifetimeRegionType(this)
+          : null,
       moduleNamespaceId: (type) => this.moduleNamespaceIdOfType(type),
     };
     // Modules reachable only through literal import() joined
@@ -3787,6 +3832,16 @@ export class Lowerer {
           familyBySymbol.set(symbol, family);
         }
       }
+      // Static methods never share a dispatch slot: each is its own family.
+      if (info.staticMethods) {
+        for (const sig of info.staticMethods.values()) {
+          const name = sig.member.name;
+          if (!(ts.isIdentifier(name) || ts.isStringLiteral(name))) continue;
+          const symbol = symbolOf(name);
+          if (symbol && !signatureBySymbol.has(symbol))
+            signatureBySymbol.set(symbol, { params: sig.params, returnType: sig.ret, method: sig });
+        }
+      }
     }
     const mappedOrNull = (node: ts.Node): IrType | null =>
       panicSafe(() => this.mapTypeOf(this.typeOf(node)), null);
@@ -4000,6 +4055,9 @@ export class Lowerer {
       const e = peel(node);
       if (isIndexedRead(e)) return true;
       if (ts.isPropertyAccessExpression(e) && isOptionalProcessStreamProperty(this, e)) return true;
+      if (ts.isPropertyAccessExpression(e) && isSettledIteratorValueRead(this, e)) return true;
+      if (ts.isPropertyAccessExpression(e) && isOsConstantsSymbol(symbolOf(e.expression), this))
+        return true;
       if (ts.isCallExpression(e) && this.runtimeOptionalReduceTypes.has(e)) return true;
       if (
         ts.isCallExpression(e) &&
@@ -4274,6 +4332,17 @@ export class Lowerer {
       let found = false;
       for (const expression of returnsOf(fn)) if (mayBeOptional(expression)) found = true;
       return found;
+    };
+    /** A return of a var that code can read before its first store. */
+    const returnsEarlyVar = (fn: ts.FunctionLikeDeclaration): boolean => {
+      const early = (e: ts.Expression): boolean => {
+        const read = peel(e);
+        if (!ts.isIdentifier(read)) return false;
+        const symbol = symbolOf(read);
+        return symbol !== null && this.earlyReadVars.has(symbol);
+      };
+      if (fn.body && !ts.isBlock(fn.body)) return early(fn.body as ts.Expression);
+      return returnsOf(fn).some(early);
     };
     const jsLambdas: ts.FunctionLikeDeclaration[] = [];
     // TypeScript lambdas keep the checker's inferred return type, which
@@ -5310,6 +5379,20 @@ export class Lowerer {
       }
       return changed;
     };
+    // A `var` that code can read before its first store holds undefined
+    // there, whatever its declared type.
+    for (const symbol of earlyReadVarSymbols(this, sourceFiles)) {
+      // Text codec bindings keep their own presence-checked storage.
+      const declaration = this.checker.valueDeclarationOf(symbol);
+      const mapped =
+        declaration && ts.isVariableDeclaration(declaration)
+          ? mappedOrNull(declaration.name)
+          : null;
+      if (mapped?.kind === "record" && recordTextCodecClass(this.shapes.get(mapped.shapeId)!))
+        continue;
+      optionalSymbols.add(symbol);
+      this.earlyReadVars.add(symbol);
+    }
     let changed = true;
     while (changed) {
       changed = false;
@@ -5324,8 +5407,10 @@ export class Lowerer {
       for (const [symbol, decl] of functionDeclBySymbol)
         if (scanReturns(symbol, decl)) changed = true;
       for (const fn of tsLambdas) {
-        // An annotated return is the author's contract, as for parameters.
-        if (fn.type) continue;
+        // An annotated return is the author's contract, as for parameters,
+        // except that a var read before its first store is undefined
+        // whatever the annotation says.
+        if (fn.type && !returnsEarlyVar(fn)) continue;
         const mapped = this.mapTypeOf(this.typeOf(fn));
         if (mapped?.kind !== "func") continue;
         const previous = this.runtimeOptionalFunctionReturnType(fn, mapped.ret);
@@ -5762,6 +5847,7 @@ export class Lowerer {
   /** Final retention, pruning, and module assembly shared by ordinary emit
    * and the retained reachability worklist. */
   finishModule(functions: IrFunction[]): LowerResult {
+    if (this.diags.length === 0) fuseArrayPipelines(this, functions);
     finalizeClassMethodValues(this, functions);
     trackClassFieldCreation(this, functions);
 
@@ -5865,6 +5951,7 @@ export class Lowerer {
             globals: this.globalsList,
             entry: ENTRY_NAME,
             ...(this.usesWorkers ? { workers: true } : {}),
+            ...(this.usesLifetimeRegions ? { lifetimeRegions: true as const } : {}),
             ...(isNodeEsmFile(this.entry, this.program) ? {} : { commonJsEntry: true }),
             ...(this.ffiImports.length > 0 ? { ffiImports: [...this.ffiImports] } : {}),
           };
@@ -6066,6 +6153,7 @@ export class Lowerer {
     }
     for (const info of this.classes.values()) {
       if (info.builtinError) continue; // runtime-provided; nothing lowers
+      if (info.lifetimeRegion) continue; // synthesized with the class
       // Generic-class INSTANTIATIONS (and mixin instantiations) are
       // demand-driven, not units: their members lower unconditionally in
       // the instance drain below — the generic-fn instance rule.
@@ -6398,6 +6486,7 @@ export class Lowerer {
       ...this.liftedFns,
       ...this.implicitFns,
     ];
+    if (this.regexGroupResults) for (const fn of functions) foldRegexSpanReads(this, fn);
     // The worklist can leave a virtual site with a single implementation.
     // Devirtualize after construction/override reachability has settled.
     devirtualizeVirtualCalls(this, functions, {
@@ -8619,10 +8708,10 @@ export class Lowerer {
 
   /** The value of a `return` statement. In an async function `return p`
    * where p is a promise flattens (JS: the returned promise's settlement
-   * becomes the async function's result), so it lowers exactly as
-   * `return await p` — the awaitExpr parks the fiber and re-throws
-   * rejections, which IS the flattening. Everything else flows into the
-   * function's return slot through the usual coercion path. */
+   * becomes the async function's result) through an adopting awaitExpr,
+   * which parks the fiber and re-throws rejections after the adoption's
+   * then-job turn. Everything else flows into the function's return slot
+   * through the usual coercion path. */
   /** The value of `return <expr>` against the context's declared return —
    * or NULL for a bare return: `return undefined`/`return null` in a
    * void-returning function (`{ bar() { return undefined } }`, inferred
@@ -8653,10 +8742,43 @@ export class Lowerer {
     const e = this.lowerExpr(node);
     if (expected.kind === "void" && e.kind === "unitLit") return null;
     if (this.ctx.isAsync && e.type.kind === "promise" && expected.kind !== "promise") {
-      const awaited: IrExpr = { kind: "awaitExpr", value: e, type: e.type.inner, loc: e.loc };
+      const awaited = this.returnedPromiseAwait(e);
       return this.coerceInto(node, awaited, expected);
     }
     return this.coerceInto(node, e, expected);
+  }
+
+  /** Whether a promise returned here resolves the function's own promise
+   * by adoption (async functions; async generators await their return
+   * operand instead). */
+  adoptsReturnedPromise(): boolean {
+    return this.ctx.isAsync === true && !this.ctx.generator;
+  }
+
+  /** `return p` of a promise into a non-promise result `R` (a void result
+   * drops the settled value; widening keeps the adopting await the return's
+   * own value). */
+  adoptingReturn(e: IrExpr, R: IrType, coerce: (awaited: IrExpr) => IrExpr): IrStmt {
+    const loc = e.loc;
+    if (R.kind !== "void")
+      return { kind: "return", value: coerce(this.returnedPromiseAwait(e)), loc };
+    const widened: IrExpr =
+      e.type.kind === "promise" && e.type.inner.kind !== "void"
+        ? { kind: "promiseVoidWiden", value: e, type: { kind: "promise", inner: VOID }, loc }
+        : e;
+    return { kind: "return", value: this.returnedPromiseAwait(widened), loc };
+  }
+
+  /** The await a returned promise `e` lowers to: adopting in async
+   * functions (one then-job turn first, outside the function's handlers). */
+  returnedPromiseAwait(e: IrExpr): IrExpr {
+    if (e.type.kind !== "promise")
+      throw new InternalCompilerError("returned-promise await of a non-promise");
+    if (!this.adoptsReturnedPromise()) {
+      this.returnAwaitedPromise = true;
+      return { kind: "awaitExpr", value: e, type: e.type.inner, loc: e.loc };
+    }
+    return { kind: "awaitExpr", value: e, type: e.type.inner, adopt: true, loc: e.loc };
   }
 
   /** `return <expr>` lowered as a STATEMENT against the declared return.
@@ -8666,11 +8788,30 @@ export class Lowerer {
    * caller never sees a value, so the return goes out bare. Async
    * void-inner returns still resolve a returned promise first. */
   lowerReturnStmt(node: ts.Expression, loc: SrcLoc): IrStmt {
+    if (!(this.ctx.isAsync === true && this.ctx.generator)) return this.lowerReturnOf(node, loc);
+    // An async generator's `return x` awaits x; for a promise that await
+    // is the returned-promise await, and the return needs no other turn.
+    const saved = this.returnAwaitedPromise;
+    this.returnAwaitedPromise = false;
+    const s = this.lowerReturnOf(node, loc);
+    const awaited = this.returnAwaitedPromise;
+    this.returnAwaitedPromise = saved;
+    if (!awaited) return s;
+    if (s.kind === "return") return { ...s, awaited: true };
+    if (s.kind === "block" && s.body.at(-1)?.kind === "return") {
+      const last = s.body.at(-1) as IrStmt & { kind: "return" };
+      return { ...s, body: [...s.body.slice(0, -1), { ...last, awaited: true }] };
+    }
+    return s;
+  }
+
+  private lowerReturnOf(node: ts.Expression, loc: SrcLoc): IrStmt {
     const expected = this.ctx.returnType;
     if (expected.kind === "void") {
       let e = this.lowerExpr(node);
       if (this.ctx.isAsync && e.type.kind === "promise") {
-        e = { kind: "awaitExpr", value: e, type: e.type.inner, loc: e.loc };
+        if (this.adoptsReturnedPromise()) return this.adoptingReturn(e, VOID, (x) => x);
+        e = this.returnedPromiseAwait(e);
       }
       if (e.kind === "unitLit") return { kind: "return", value: null, loc };
       if (e.type.kind === "void") return { kind: "return", value: e, loc };
@@ -10397,6 +10538,7 @@ export class Lowerer {
     // promise-returning ambient global, and `import` is a keyword callee no
     // identifier path matches.
     return (
+      lowerLifetimeRegionCall(this, expr) ??
       lowerFfiCall(this, expr) ??
       lowerFetchCall(this, expr) ??
       lowerStaticFetchCompanionCall(this, expr) ??
@@ -10617,12 +10759,15 @@ export class Lowerer {
 
   lowerNew(expr: ts.NewExpression): IrExpr {
     const builtin =
+      lowerLifetimeRegionNew(this, expr) ??
       lowerAbortControllerNew(this, expr) ??
+      lowerEventTargetNew(this, expr) ??
       lowerFetchWebNew(this, expr) ??
       lowerResponseNew(this, expr) ??
       lowerStaticReadableStreamNew(this, expr) ??
       lowerStaticWebSocketNew(this, expr) ??
-      lowerStaticCompressionStreamNew(this, expr);
+      lowerStaticCompressionStreamNew(this, expr) ??
+      lowerConsoleNew(this, expr);
     return (
       builtin ?? this.withRuntimeOptionalClassValue(expr.expression, () => lowerNew(this, expr))
     );
@@ -10699,8 +10844,12 @@ export class Lowerer {
     return isConsoleLog(this, call);
   }
 
-  consoleCallMember(call: ts.CallExpression): "log" | "info" | "debug" | "error" | "warn" | null {
+  consoleCallMember(call: ts.CallExpression): ConsoleOutputMember | null {
     return consoleCallMember(this, call);
+  }
+
+  consoleMethodMember(call: ts.CallExpression): ConsoleMethodMember | null {
+    return consoleMethodMember(this, call);
   }
 
   /* ── standard library (process + node:fs) ─────────────────────────── */
@@ -10930,6 +11079,10 @@ export class Lowerer {
     }
     if (bi.module === "http" && bi.member === "STATUS_CODES") {
       return { kind: "libCall", fn: "http.statusCodes", args: [], type: DYN, loc };
+    }
+    // os.constants: the runtime's null-prototype constants object.
+    if (bi.module === "os" && bi.member === "constants") {
+      return { kind: "libCall", fn: "os.constants", args: [], type: DYN, loc };
     }
     // tls.rootCertificates through the namespace: the same runtime-valued
     // constant the named-import read lowers to.

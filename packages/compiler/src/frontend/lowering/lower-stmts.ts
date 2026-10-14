@@ -963,7 +963,8 @@ function varBindingType(lowerer: Lowerer, nameNode: ts.Identifier): IrType | nul
     type = staticImportNamespaceType(lowerer, nameNode.parent.initializer) ?? type;
   }
   if (!type || type.kind === "void") return null;
-  return type;
+  // A binding readable before its first store holds undefined until then.
+  return lowerer.runtimeOptionalBindingType(nameNode, type);
 }
 
 /** `var` declarations hoist to their FUNCTION: the binding exists across
@@ -1013,6 +1014,7 @@ function hoistVarBinding(lowerer: Lowerer, symbol: ts.Symbol, nameNode: ts.Ident
   };
   lowerer.ctx.locals.push(local);
   lowerer.ctx.scopes[0]!.set(symbol, local);
+  noteEarlyReadVar(lowerer, symbol, local);
   // A checked-dynamic slot holds the dyn undefined (a NULL dyn is a
   // trap); everything else rides unassignedSlotInit (interned union arm,
 
@@ -1039,6 +1041,8 @@ function hoistVarBinding(lowerer: Lowerer, symbol: ts.Symbol, nameNode: ts.Ident
  * would yield if the capture ran early, and guessing "it won't" is the
  * silent-wrong-output sin. */
 export function predeclareForwardVar(lowerer: Lowerer, symbol: ts.Symbol): boolean {
+  // Module-scope vars already have their global storage.
+  if (lowerer.globalsBySymbol.has(symbol)) return false;
   const decl = lowerer.checker.valueDeclarationOf(symbol);
   if (!decl || !ts.isVariableDeclaration(decl) || !isVarDeclared(decl)) return false;
   const nameNode = ts.isIdentifier(decl.name) ? decl.name : null;
@@ -1082,9 +1086,19 @@ export function predeclareForwardVar(lowerer: Lowerer, symbol: ts.Symbol): boole
   };
   ctx.locals.push(local);
   ctx.scopes[0]!.set(symbol, local);
+  noteEarlyReadVar(lowerer, symbol, local);
   root.out.push({ kind: "varDecl", localId: local.id, init: wrapped, loc: locOf(decl) });
   ctx.hoistedVars.set(symbol, local);
   return true;
+}
+
+/** A var readable before its first store (the runtime-optional analysis
+ * widened it): reads keep the undefined-armed value. */
+function noteEarlyReadVar(lowerer: Lowerer, symbol: ts.Symbol, local: IrLocal): void {
+  if (!lowerer.earlyReadVars.has(symbol)) return;
+  const root = lowerer.runtimeOptionalRootOf(local);
+  lowerer.runtimeOptionalLocals.add(root);
+  lowerer.runtimeOptionalStorageLocals.add(root);
 }
 
 /** Records the symbols a poisoned DECLARATION statement would have bound
@@ -1340,6 +1354,9 @@ export function lowerStmt(lowerer: Lowerer, stmt: ts.Statement): IrStmt | IrStmt
         `bare 'return' where the declared return type is '${lowerer.fmt(lowerer.ctx.returnType)}' (JS hands the caller undefined, which this representation cannot hold — return a value, or widen the declared return type with undefined)`,
       );
     }
+    // An async generator's bare return has no operand to await.
+    if (lowerer.ctx.isAsync === true && lowerer.ctx.generator)
+      return { kind: "return", value, awaited: true, loc: locOf(stmt) };
     return { kind: "return", value, loc: locOf(stmt) };
   }
   if (ts.isBreakStatement(stmt) || ts.isContinueStatement(stmt)) {
@@ -6884,6 +6901,24 @@ export function lowerExprStatement(lowerer: Lowerer, expr: ts.Expression): IrStm
             loc,
           };
         }
+        if (!expr.left.questionDotToken) {
+          const flag = lowerer.stdlibGlobalMember(expr.left, "process");
+          if (flag === "noDeprecation" || flag === "throwDeprecation") {
+            const loc = locOf(expr);
+            const value = lowerer.lowerExprExpecting(expr.right, DYN);
+            return {
+              kind: "exprStmt",
+              expr: {
+                kind: "libCall",
+                fn: "process.setDeprecationFlag",
+                args: [numLit(flag === "noDeprecation" ? 0 : 1, loc), value],
+                type: VOID,
+                loc,
+              },
+              loc,
+            };
+          }
+        }
         // `r._read = fn` / `w._write = fn` (and the other underscore
         // methods) on a runtime-stream-rooted receiver: Node's
         // own-property shadow of the prototype method — the runtime
@@ -8556,7 +8591,7 @@ export function lowerForOf(lowerer: Lowerer, stmt: ts.ForOfStatement): IrStmt {
     if (iterable.type.kind === "string") {
       // JS's string iterator walks code POINTS, not units: each pass
       // yields the whole character (two UTF-16 units for astral chars,
-      // where charAt would truncate to U+FFFD).
+      // where charAt returns one surrogate half).
       return lowerForOfString(lowerer, stmt, iterable, labels);
     }
     if (iterable.type.kind === "map") {
@@ -9465,8 +9500,8 @@ function lowerForOfMatchAll(
 
 /** `for (const ch of s)` over a STRING: JS's string iterator, which walks
  * code POINTS — each pass binds the whole character (a two-unit string
- * for astral chars, where charAt/slice would truncate the halves to
- * U+FFFD). Desugars over the UTF-16 cursor machinery: a hidden unit
+ * for astral chars, where charAt/slice would return one surrogate half).
+ * Desugars over the UTF-16 cursor machinery: a hidden unit
  * index reads the character with the cpAt intrinsic and advances by ITS
  * length before the body runs (so `continue` never skips the advance):
  *
@@ -9474,9 +9509,8 @@ function lowerForOfMatchAll(
  *     while (%i < %s.length) { const ch = cpAt(%s, %i); %i += ch.length; <body> } }
  *
  * Strings are immutable, so the length is stable and there is no
- * iterator state to unwind on throw; lone surrogates cannot occur in
- * storage (canonicalized to U+FFFD at creation — the documented
- * divergence), so every step lands on a character start. */
+ * iterator state to unwind on throw; a lone surrogate is a one-unit
+ * character, so every step lands on a character start. */
 /** for-of over a CLASS ITERABLE (classIteratorOf's shape) — the
  * iterator protocol as ordinary method calls:
  *
@@ -10121,17 +10155,35 @@ function lowerForIn(lowerer: Lowerer, stmt: ts.ForInStatement): IrStmt {
     const recv = lowerer.declareHiddenLocal("%indyn", DYN);
     const ref: IrExpr = { kind: "varRef", localId: recv.id, type: DYN, loc };
     const keys: IrExpr = {
-      kind: "dynCheck",
-      value: { kind: "libCall", fn: "dyn.forInKeys", args: [ref], type: DYN, loc },
+      kind: "libCall",
+      fn: "dyn.forInKeyStrings",
+      args: [ref],
       type: arrayOf(STRING),
       loc,
     };
-    const loop = lowerForInOverKeys(lowerer, stmt, keys, labels, (key) =>
-      classForInHasKey(lowerer, ref, key, loc),
-    );
+    // A stable snapshot (a typed record's fields) needs no live presence
+    // test per visit.
+    const stable = lowerer.declareHiddenLocal("%instable", BOOL);
+    const loop = lowerForInOverKeys(lowerer, stmt, keys, labels, (key) => ({
+      kind: "ternary",
+      cond: { kind: "varRef", localId: stable.id, type: BOOL, loc },
+      then: { kind: "boolLit", value: true, type: BOOL, loc },
+      else_: classForInHasKey(lowerer, ref, key, loc),
+      type: BOOL,
+      loc,
+    }));
     return {
       kind: "block",
-      body: [{ kind: "varDecl", localId: recv.id, init: receiver, loc }, loop],
+      body: [
+        { kind: "varDecl", localId: recv.id, init: receiver, loc },
+        {
+          kind: "varDecl",
+          localId: stable.id,
+          init: { kind: "libCall", fn: "dyn.forInStable", args: [ref], type: BOOL, loc },
+          loc,
+        },
+        loop,
+      ],
       loc,
     };
   }

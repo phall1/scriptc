@@ -15,6 +15,7 @@ import {
   RUNTIME_ERROR_CLASSES,
   STRING,
   UNDEFINED_T,
+  VOID,
   type SrcLoc,
   canConvertToDyn,
   canDynCheckTo,
@@ -1286,11 +1287,13 @@ function parseInspectOptions(
   lowerer: Lowerer,
   node: ts.Expression | undefined,
   recursive: boolean,
+  dir = false,
 ): number {
+  const surface = dir ? "console.dir" : "util.inspect";
   if (!node || (ts.isIdentifier(node) && node.text === "undefined")) return 2;
   if (!ts.isObjectLiteralExpression(node)) {
     lowerer.noLowering(
-      "util.inspect with a non-literal options argument",
+      `${surface} with a non-literal options argument`,
       node,
       "the options must be an object literal ({ depth, colors: false, ... }) so the knobs resolve at compile time",
     );
@@ -1299,7 +1302,7 @@ function parseInspectOptions(
   for (const prop of node.properties) {
     if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) {
       lowerer.noLowering(
-        "util.inspect options in this form",
+        `${surface} options in this form`,
         prop,
         "plain `key: literal` entries are the lowered options",
       );
@@ -1331,7 +1334,7 @@ function parseInspectOptions(
         const n = numeric();
         if (n === null) {
           lowerer.noLowering(
-            "util.inspect with a non-literal depth option",
+            `${surface} with a non-literal depth option`,
             value,
             "depth must be a numeric literal (or null)",
           );
@@ -1341,7 +1344,7 @@ function parseInspectOptions(
     } else if (key === "colors") {
       if (value.kind !== ts.SyntaxKind.FalseKeyword) {
         lowerer.noLowering(
-          "util.inspect with colors: true",
+          `${surface} with colors: true`,
           value,
           "ANSI styling has no lowering — only colors: false",
         );
@@ -1349,7 +1352,7 @@ function parseInspectOptions(
     } else if (key === "compact") {
       if (numeric() !== 3) {
         lowerer.noLowering(
-          "util.inspect with a non-default compact option",
+          `${surface} with a non-default compact option`,
           value,
           "only the default compact: 3 is lowered",
         );
@@ -1357,16 +1360,25 @@ function parseInspectOptions(
     } else if (key === "breakLength") {
       if (numeric() !== 80) {
         lowerer.noLowering(
-          "util.inspect with a non-default breakLength option",
+          `${surface} with a non-default breakLength option`,
           value,
           "only the default breakLength: 80 is lowered",
         );
       }
+    } else if (dir && key === "customInspect") {
+      // console.dir's own default; only that value is lowered.
+      if (value.kind !== ts.SyntaxKind.FalseKeyword) {
+        lowerer.noLowering(
+          "console.dir with customInspect: true",
+          value,
+          "only customInspect: false (console.dir's default) is lowered",
+        );
+      }
     } else {
       lowerer.noLowering(
-        `util.inspect with the '${key}' option`,
+        `${surface} with the '${key}' option`,
         prop,
-        "the lowered options are depth (numeric literal or null), colors: false, compact: 3, and breakLength: 80",
+        `the lowered options are depth (numeric literal or null), colors: false, compact: 3, ${dir ? "breakLength: 80, and customInspect: false" : "and breakLength: 80"}`,
       );
     }
   }
@@ -1421,16 +1433,32 @@ function lowerInspectCall(lowerer: Lowerer, expr: ts.CallExpression, loc: SrcLoc
       "the supported forms are inspect(value) and inspect(value, options)",
     );
   }
-  const valueNode = expr.arguments[0]!;
+  return lowerInspectValue(lowerer, expr.arguments[0]!, expr.arguments[1], loc, false);
+}
+
+/** `inspect(value, options)` over one value node: the shared body of
+ * util.inspect and console.dir. console.dir is Node's `inspect(object,
+ * { customInspect: false, ...options })`; the only lowered value with a
+ * custom inspect hook is Buffer (its <Buffer ..> form), so that call
+ * fences Buffers and routes checked-dynamic values through the runtime
+ * walk that refuses a Buffer anywhere inside. */
+export function lowerInspectValue(
+  lowerer: Lowerer,
+  valueNode: ts.Expression,
+  optionsNode: ts.Expression | undefined,
+  loc: SrcLoc,
+  dir: boolean,
+): IrExpr {
+  const surface = dir ? "console.dir" : "util.inspect";
   // Inline function/class literals and direct declared names render as
   // their baked forms; other function-typed values fence below.
   const direct = directCallableInspect(lowerer, valueNode, loc);
   if (direct) {
-    parseInspectOptions(lowerer, expr.arguments[1], false);
+    parseInspectOptions(lowerer, optionsNode, false, dir);
     return direct;
   }
   if (ts.isArrowFunction(valueNode) || ts.isFunctionExpression(valueNode)) {
-    parseInspectOptions(lowerer, expr.arguments[1], false);
+    parseInspectOptions(lowerer, optionsNode, false, dir);
     return strLit(
       valueNode.kind === ts.SyntaxKind.FunctionExpression &&
         (valueNode as ts.FunctionExpression).name
@@ -1454,6 +1482,13 @@ function lowerInspectCall(lowerer: Lowerer, expr: ts.CallExpression, loc: SrcLoc
       tname === "NonSharedBuffer" ||
       tname.startsWith("Buffer<") ||
       tname.startsWith("NonSharedBuffer<");
+    if (dir) {
+      lowerer.noLowering(
+        `console.dir of '${tname}' values`,
+        valueNode,
+        "console.dir disables custom inspection, and the typed-array rendering it falls back to has no lowering yet — use console.log",
+      );
+    }
     if (value.type.elem !== "u8" || !isBuffer) {
       lowerer.noLowering(
         `util.inspect of '${tname}' values`,
@@ -1461,16 +1496,25 @@ function lowerInspectCall(lowerer: Lowerer, expr: ts.CallExpression, loc: SrcLoc
         "Buffer's <Buffer ..> form is the lowered typed-array rendering; other typed arrays fence",
       );
     }
-    const bufDepth = parseInspectOptions(lowerer, expr.arguments[1], false);
+    const bufDepth = parseInspectOptions(lowerer, optionsNode, false, dir);
     void bufDepth; // Buffers render fully at any depth (custom inspect)
     return inspectExpr(lowerer, value.type, value, numLit(0, loc), numLit(2, loc), loc);
   }
   const walk = { recursive: false };
   const reason = inspectSupport(lowerer, value.type, new Set(), walk);
   if (reason !== null) {
-    lowerer.noLowering(`util.inspect of '${lowerer.fmt(value.type)}' values`, valueNode, reason);
+    lowerer.noLowering(`${surface} of '${lowerer.fmt(value.type)}' values`, valueNode, reason);
   }
-  const depth = parseInspectOptions(lowerer, expr.arguments[1], walk.recursive);
+  const depth = parseInspectOptions(lowerer, optionsNode, walk.recursive, dir);
+  if (dir && value.type.kind === "dyn") {
+    return {
+      kind: "libCall",
+      fn: "console.dirDyn",
+      args: [value, numLit(depth, loc)],
+      type: STRING,
+      loc,
+    };
+  }
   return inspectExpr(lowerer, value.type, value, numLit(0, loc), numLit(depth, loc), loc);
 }
 
@@ -1584,8 +1628,10 @@ export function lowerFormatCall(
   expr: ts.CallExpression,
   loc: SrcLoc,
   withOptions: boolean,
+  argNodesOverride?: readonly ts.Expression[],
+  literalPrefix = "",
 ): IrExpr {
-  const argNodes = [...expr.arguments];
+  const argNodes = [...(argNodesOverride ?? expr.arguments)];
   if (withOptions) {
     const opts = argNodes.shift();
     if (!opts || !ts.isObjectLiteralExpression(opts) || opts.properties.length > 0) {
@@ -1622,7 +1668,9 @@ export function lowerFormatCall(
     return concatAll(parts, loc);
   }
 
-  const fmt = (first as ts.StringLiteralLike).text;
+  // A literal prefix joins the format text (console.assert's "Assertion
+  // failed: " — Node formats the joined string).
+  const fmt = literalPrefix + (first as ts.StringLiteralLike).text;
   // Node's early return: a lone string first argument passes VERBATIM —
   // no substitution runs, "%%" stays "%%".
   if (argNodes.length === 1) return strLit(fmt, loc);
@@ -1890,6 +1938,12 @@ export function lowerUtilModuleCall(
         loc,
       };
     }
+    case "inherits":
+    case "deprecate":
+    case "callbackify":
+    case "debuglog":
+    case "debug":
+      return lowerUtilCallableCall(lowerer, expr, bi.member, loc);
     case "getSystemErrorMap": {
       if (expr.arguments.some(ts.isSpreadElement))
         lowerer.noLowering("util.getSystemErrorMap with spread arguments", expr);
@@ -1978,6 +2032,86 @@ export function lowerUtilModuleCall(
     default:
       return null;
   }
+}
+
+/** util.inherits/deprecate/callbackify/debuglog: every argument crosses as
+ * a checked-dynamic value, evaluated left to right before the runtime call
+ * (surplus arguments are evaluated and dropped). The function helpers
+ * answer native dyn wrappers; a static function slot checks the wrapper
+ * when it receives it, and dyn slots keep calling it with JS arity. */
+function lowerUtilCallableCall(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
+  member: string,
+  loc: SrcLoc,
+): IrExpr {
+  if (expr.arguments.some(ts.isSpreadElement))
+    lowerer.noLowering(`util.${member} with spread arguments`, expr);
+  const fn =
+    member === "inherits"
+      ? "util.inherits"
+      : member === "deprecate"
+        ? "util.deprecate"
+        : member === "callbackify"
+          ? "util.callbackify"
+          : "util.debuglog";
+  const arity = member === "deprecate" ? 4 : member === "callbackify" ? 1 : 2;
+  // Program classes keep static prototypes: there is no function object
+  // whose prototype chain the runtime could relink or wrap.
+  const classArgs = member === "inherits" ? 2 : member === "deprecate" ? 1 : 0;
+  for (const arg of expr.arguments.slice(0, classArgs)) {
+    if (lowerer.mapTypeOf(lowerer.typeOf(arg))?.kind === "classval")
+      lowerer.noLowering(
+        `util.${member} over a class constructor`,
+        arg,
+        member === "inherits"
+          ? "declare the subclass with extends"
+          : "deprecate a factory function or the class's call sites instead",
+      );
+  }
+  if (member === "callbackify" && callbackifyErrorExcludesNull(lowerer, expr))
+    lowerer.noLowering(
+      "util.callbackify into a callback whose error parameter excludes null",
+      expr,
+      "Node calls back with a null error on success; type the binding's callback as (err: NodeJS.ErrnoException | null, ...) => void",
+    );
+  const stmts: IrStmt[] = [];
+  const args: IrExpr[] = [];
+  for (let i = 0; i < arity; i++) {
+    const input: IrExpr = expr.arguments[i]
+      ? lowerer.lowerExprExpecting(expr.arguments[i]!, DYN)
+      : dynUndefinedExpr(loc);
+    const saved = lowerer.declareHiddenLocal("%utilInput", DYN);
+    stmts.push({ kind: "varDecl", localId: saved.id, init: input, loc });
+    args.push(varRef(saved.id, DYN, loc));
+  }
+  for (const arg of expr.arguments.slice(arity))
+    stmts.push({ kind: "exprStmt", expr: lowerer.lowerExpr(arg), loc });
+  const type = fn === "util.inherits" ? VOID : DYN;
+  const result: IrExpr = { kind: "libCall", fn, args, type, loc };
+  return { kind: "seqExpr", stmts, result, type: result.type, loc };
+}
+
+/** Whether the slot receiving a callbackify wrapper declares a callback
+ * whose first parameter cannot hold null. Some @types/node overloads type
+ * that error as NodeJS.ErrnoException, but Node passes null on success, and
+ * a statically typed callback parameter cannot receive a value its type
+ * excludes. Untyped (JavaScript or unknown) slots keep the wrapper dyn. */
+function callbackifyErrorExcludesNull(lowerer: Lowerer, expr: ts.CallExpression): boolean {
+  if (isJsSourceFile(expr.getSourceFile())) return false;
+  const checker = lowerer.checker;
+  const slot = checker.getContextualType(expr) ?? lowerer.typeOf(expr);
+  const wrapper = checker.getCallSignatures(slot)[0];
+  const callbackSymbol = wrapper?.getParameters().at(-1);
+  if (!callbackSymbol) return false;
+  const callback = checker.getCallSignatures(checker.getTypeOfSymbol(callbackSymbol))[0];
+  const errorSymbol = callback?.getParameters()[0];
+  if (!errorSymbol) return false;
+  const error = checker.getTypeOfSymbol(errorSymbol);
+  const arms = error.isUnionType() ? ts.constituentTypes(error) : [error];
+  return !arms.some(
+    (arm) => (arm.flags & (ts.TypeFlags.Null | ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0,
+  );
 }
 
 /** util.parseArgs(config?): the configuration is ordinary JSON-safe data,

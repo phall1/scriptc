@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "compilerVersion": "0.3.0",
+  "compilerVersion": "0.3.2",
   "coverage": [
     "Entries are projected mechanically from the compiler's own decision tables: the diagnostics registry, the unsupported-syntax dispatch tables, the stdlib and node-builtin lowering tables, and the supported-builtin-module list. Nothing is hand-maintained; the manifest regenerates byte-identically from the source tree at this version.",
     "Absence from this manifest means 'not projected', never 'unsupported'. Surfaces lowered through dedicated code paths rather than tables are not yet projected: console, JSON, Promise/async and the timer surface, the net/http/tls/https/dgram/dns/assert/test/stream/readline module member surfaces, template literals, the regex slice, global functions (parseInt, parseFloat, isNaN, isFinite), and the process surface outside its ambient slice.",
@@ -497,14 +497,6 @@
       "name": "console",
       "status": "static",
       "note": "recognized module (bare and node:-prefixed specifiers)"
-    },
-    {
-      "id": "node-builtin.console.Console",
-      "kind": "node-builtin",
-      "name": "console.Console",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "custom Console instances are not supported yet; direct node:console log/info/debug/error/warn calls use the process output streams"
     },
     {
       "id": "node-builtin.crypto",
@@ -1327,15 +1319,77 @@
       "note": "constant value read"
     },
     {
+      "id": "node-builtin.os.arch",
+      "kind": "node-builtin",
+      "name": "os.arch",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.os.availableParallelism",
       "kind": "node-builtin",
       "name": "os.availableParallelism",
       "status": "static"
     },
     {
+      "id": "node-builtin.os.constants",
+      "kind": "node-builtin",
+      "name": "os.constants",
+      "status": "static",
+      "note": "the platform's dlopen, errno, signals and priority groups; members a platform lacks read as undefined"
+    },
+    {
+      "id": "node-builtin.os.cpus",
+      "kind": "node-builtin",
+      "name": "os.cpus",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.os.devNull",
+      "kind": "node-builtin",
+      "name": "os.devNull",
+      "status": "static",
+      "note": "constant value read"
+    },
+    {
+      "id": "node-builtin.os.endianness",
+      "kind": "node-builtin",
+      "name": "os.endianness",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.os.freemem",
+      "kind": "node-builtin",
+      "name": "os.freemem",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.os.getPriority",
+      "kind": "node-builtin",
+      "name": "os.getPriority",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.os.homedir",
       "kind": "node-builtin",
       "name": "os.homedir",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.os.hostname",
+      "kind": "node-builtin",
+      "name": "os.hostname",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.os.loadavg",
+      "kind": "node-builtin",
+      "name": "os.loadavg",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.os.machine",
+      "kind": "node-builtin",
+      "name": "os.machine",
       "status": "static"
     },
     {
@@ -1375,9 +1429,21 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.os.uptime",
+      "kind": "node-builtin",
+      "name": "os.uptime",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.os.userInfo",
       "kind": "node-builtin",
       "name": "os.userInfo",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.os.version",
+      "kind": "node-builtin",
+      "name": "os.version",
       "status": "static"
     },
     {
@@ -1413,6 +1479,12 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.path.format",
+      "kind": "node-builtin",
+      "name": "path.format",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.path.isAbsolute",
       "kind": "node-builtin",
       "name": "path.isAbsolute",
@@ -1425,9 +1497,21 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.path.matchesGlob",
+      "kind": "node-builtin",
+      "name": "path.matchesGlob",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.path.normalize",
       "kind": "node-builtin",
       "name": "path.normalize",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.path.parse",
+      "kind": "node-builtin",
+      "name": "path.parse",
       "status": "static"
     },
     {
@@ -1463,6 +1547,12 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.path.posix.format",
+      "kind": "node-builtin",
+      "name": "path/posix.format",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.path.posix.isAbsolute",
       "kind": "node-builtin",
       "name": "path/posix.isAbsolute",
@@ -1475,9 +1565,21 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.path.posix.matchesGlob",
+      "kind": "node-builtin",
+      "name": "path/posix.matchesGlob",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.path.posix.normalize",
       "kind": "node-builtin",
       "name": "path/posix.normalize",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.path.posix.parse",
+      "kind": "node-builtin",
+      "name": "path/posix.parse",
       "status": "static"
     },
     {
@@ -1563,6 +1665,12 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.path.win32.format",
+      "kind": "node-builtin",
+      "name": "path/win32.format",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.path.win32.isAbsolute",
       "kind": "node-builtin",
       "name": "path/win32.isAbsolute",
@@ -1575,9 +1683,21 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.path.win32.matchesGlob",
+      "kind": "node-builtin",
+      "name": "path/win32.matchesGlob",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.path.win32.normalize",
       "kind": "node-builtin",
       "name": "path/win32.normalize",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.path.win32.parse",
+      "kind": "node-builtin",
+      "name": "path/win32.parse",
       "status": "static"
     },
     {
@@ -1860,14 +1980,6 @@
       "note": "recognized module (bare and node:-prefixed specifiers)"
     },
     {
-      "id": "node-builtin.stream.consumers.arrayBuffer",
-      "kind": "node-builtin",
-      "name": "stream/consumers.arrayBuffer",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "collecting a stream directly into an ArrayBuffer has no native lowering yet; buffer(stream) collects the same bytes as a Buffer"
-    },
-    {
       "id": "node-builtin.stream.consumers.blob",
       "kind": "node-builtin",
       "name": "stream/consumers.blob",
@@ -2012,6 +2124,30 @@
       "note": "recognized module (bare and node:-prefixed specifiers)"
     },
     {
+      "id": "node-builtin.util.callbackify",
+      "kind": "node-builtin",
+      "name": "util.callbackify",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.debug",
+      "kind": "node-builtin",
+      "name": "util.debug",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.debuglog",
+      "kind": "node-builtin",
+      "name": "util.debuglog",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.deprecate",
+      "kind": "node-builtin",
+      "name": "util.deprecate",
+      "status": "static"
+    },
+    {
       "id": "node-builtin.util.getSystemErrorMap",
       "kind": "node-builtin",
       "name": "util.getSystemErrorMap",
@@ -2027,6 +2163,12 @@
       "id": "node-builtin.util.getSystemErrorName",
       "kind": "node-builtin",
       "name": "util.getSystemErrorName",
+      "status": "static"
+    },
+    {
+      "id": "node-builtin.util.inherits",
+      "kind": "node-builtin",
+      "name": "util.inherits",
       "status": "static"
     },
     {

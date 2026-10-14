@@ -165,7 +165,19 @@ typedef struct {
   ScrArrSparseSlot *sparse;
   size_t sparse_len;
   size_t sparse_cap;
+  uint8_t elem; /* the owning array's element kind: the dense slot width */
+  bool inline_slots; /* the slots live in the array's own block: never freed alone */
 } ScrArrStorage;
+
+static uint64_t scr_arr_storage_get(const ScrArrStorage *s, size_t index) {
+  if (s->elem == SCR_ELEM_BOOL) return ((const uint8_t *)s->data)[index];
+  return s->data[index];
+}
+
+/* The address of dense slot `index` (<= cap). */
+static uint8_t *scr_arr_dense_at(const ScrArr *a, size_t index) {
+  return (uint8_t *)a->data + index * scr_arr_slot_width(a);
+}
 
 static size_t scr_arr_sparse_lower_bound(const ScrArrSparseSlot *slots,
                                          size_t n, size_t index) {
@@ -280,10 +292,68 @@ static void scr_arr_sparse_drop_prefix(ScrArr *a, size_t count) {
   x->sparse_len -= count;
 }
 
-/* Bytes per dense slot: the 8-byte value and its state byte. */
+/* Bytes per dense slot: the value and its state byte. Boolean arrays
+ * store a one-byte value. */
 #define SCR_ARR_SLOT_BYTES (sizeof(uint64_t) + sizeof(uint8_t))
+#define SCR_ARR_BOOL_SLOT_BYTES (2 * sizeof(uint8_t))
 /* Appends to an array smaller than this grow straight to it. */
 #define SCR_ARR_MIN_GROWTH ((size_t)4)
+
+/* Inline slots: an array built by scr_arr_new_small / scr_arr_new_ops_small
+ * (empty literals the compiler sees appended to) keeps its first dense
+ * slots and states in its own block, right after the ScrArr, so it costs
+ * one allocation and its first elements share the header's cache lines.
+ * `spare` records it. Growth past the inline capacity moves the slots to an
+ * ordinary allocation; the inline room then stays unused until the array is
+ * freed. */
+#define SCR_ARR_INLINE_SLOTS 1u
+/* Where inline slots start in the array's block (8-byte aligned on every
+ * target). */
+#define SCR_ARR_INLINE_OFFSET ((sizeof(ScrArr) + 7) & ~(size_t)7)
+
+static bool scr_arr_inline(const ScrArr *a) { return (a->spare & SCR_ARR_INLINE_SLOTS) != 0; }
+
+/* Slots requested by the small constructions, rounded up to fill their
+ * block: 5 eight-byte slots (or 8 booleans) after a plain header. */
+#define SCR_ARR_SMALL_SLOTS ((size_t)4)
+
+/* Inline capacity of a small construction with `prefix` bytes of block
+ * before the slots. */
+static size_t scr_arr_small_cap(size_t prefix, bool bools) {
+  size_t unit = bools ? SCR_ARR_BOOL_SLOT_BYTES : SCR_ARR_SLOT_BYTES;
+#if SCR_SMALL_ALLOC
+  size_t block = (prefix + SCR_ARR_SMALL_SLOTS * unit + SCR_SA_STEP - 1) / SCR_SA_STEP * SCR_SA_STEP;
+  return bools ? (block - prefix) / SCR_ARR_BOOL_SLOT_BYTES : (block - prefix) / SCR_ARR_SLOT_BYTES;
+#else
+  (void)prefix;
+  (void)unit;
+  return SCR_ARR_SMALL_SLOTS;
+#endif
+}
+
+static void scr_arr_use_inline(ScrArr *a, size_t cap) {
+  a->data = (uint64_t *)((char *)a + SCR_ARR_INLINE_OFFSET);
+  a->present = (uint8_t *)a->data + cap * scr_arr_slot_width(a);
+  memset(a->present, SCR_ARR_HOLE, cap);
+  a->cap = cap;
+  a->spare |= SCR_ARR_INLINE_SLOTS;
+}
+
+/* Move inline slots to their own allocation of `cap` (>= a->cap) slots; the
+ * array's block keeps the unused room until it is freed. */
+static void scr_arr_move_inline(ScrArr *a, size_t cap, size_t unit) {
+  size_t width = scr_arr_slot_width(a);
+  uint64_t *data = scr_mem_alloc(cap * unit);
+  if (!data) scr_arr_oom();
+  uint8_t *present = (uint8_t *)data + cap * width;
+  memcpy(data, a->data, a->cap * width);
+  memcpy(present, a->present, a->cap);
+  memset(present + a->cap, SCR_ARR_HOLE, cap - a->cap);
+  a->data = data;
+  a->present = present;
+  a->cap = cap;
+  a->spare &= (uint16_t)~SCR_ARR_INLINE_SLOTS;
+}
 
 /* How a dense allocation is sized. */
 typedef enum {
@@ -297,13 +367,15 @@ typedef enum {
  * literal keeps a 16-byte block rather than reserving 4 slots in a 48-byte
  * one. Growth keeps its own sequence (4, 8, 16, ...): rounding it as well
  * moves array storage into other size classes and measured slower. */
-static size_t scr_arr_block_cap(size_t cap) {
+static size_t scr_arr_block_cap(size_t cap, bool bools) {
 #if SCR_SMALL_ALLOC
-  size_t bytes = cap * SCR_ARR_SLOT_BYTES;
+  size_t bytes = cap * (bools ? SCR_ARR_BOOL_SLOT_BYTES : SCR_ARR_SLOT_BYTES);
   if (bytes <= SCR_SA_MAX) {
     size_t block = (bytes + SCR_SA_STEP - 1) / SCR_SA_STEP * SCR_SA_STEP;
-    return block / SCR_ARR_SLOT_BYTES;
+    return bools ? block / SCR_ARR_BOOL_SLOT_BYTES : block / SCR_ARR_SLOT_BYTES;
   }
+#else
+  (void)bools;
 #endif
   return cap;
 }
@@ -317,11 +389,16 @@ static size_t scr_arr_block_cap(size_t cap) {
 static void scr_arr_grow_dense_to(ScrArr *a, size_t need, ScrArrGrow mode) {
   if (need <= a->cap) return;
   if (need > SCR_ARR_MAX_LENGTH) scr_arr_oom();
+  bool bools = a->elem == SCR_ELEM_BOOL;
+  size_t width = scr_arr_slot_width(a);
+  size_t unit = bools ? SCR_ARR_BOOL_SLOT_BYTES : SCR_ARR_SLOT_BYTES;
   size_t cap;
   if (mode == SCR_ARR_GROW_EXACT) {
-    cap = scr_arr_block_cap(need);
+    cap = scr_arr_block_cap(need, bools);
   } else {
-    cap = a->cap < SCR_ARR_MIN_GROWTH ? SCR_ARR_MIN_GROWTH : a->cap;
+    /* Inline slots overflow into the ordinary sequence (4, 8, 16, ...). */
+    size_t from = scr_arr_inline(a) ? 0 : a->cap;
+    cap = from < SCR_ARR_MIN_GROWTH ? SCR_ARR_MIN_GROWTH : from;
     while (cap < need) {
       /* Double below the cutoff; grow by half above it to bound overshoot. */
       size_t step = cap < SCR_ARR_DENSE_LIMIT ? cap : cap / 2;
@@ -332,13 +409,23 @@ static void scr_arr_grow_dense_to(ScrArr *a, size_t need, ScrArrGrow mode) {
      * appends benefit from geometric headroom. */
     if (mode == SCR_ARR_GROW_SPAN && need > SCR_ARR_DENSE_LIMIT) cap = need;
   }
-  if (cap > SIZE_MAX / SCR_ARR_SLOT_BYTES) scr_arr_oom();
+  if (cap > SIZE_MAX / SCR_ARR_SLOT_BYTES) scr_arr_oom(); /* bounds both slot sizes */
+  if (scr_arr_inline(a)) {
+    scr_arr_move_inline(a, cap, unit);
+    size_t moved = scr_arr_sparse_lower_bound(SCR_AX(a)->sparse, SCR_AX(a)->sparse_len, cap);
+    for (size_t i = 0; i < moved; i++) {
+      scr_arr_dense_put(a, SCR_AX(a)->sparse[i].index, SCR_AX(a)->sparse[i].slot);
+      a->present[SCR_AX(a)->sparse[i].index] = SCR_AX(a)->sparse[i].state;
+    }
+    scr_arr_sparse_drop_prefix(a, moved);
+    return;
+  }
   if (!a->data && SCR_AX(a)->sparse_len == 0) {
     /* First storage: nothing to copy, move or absorb. */
-    uint64_t *data = scr_mem_alloc(cap * SCR_ARR_SLOT_BYTES);
+    uint64_t *data = scr_mem_alloc(cap * unit);
     if (!data) scr_arr_oom();
     a->data = data;
-    a->present = (uint8_t *)(data + cap);
+    a->present = (uint8_t *)data + cap * width;
     memset(a->present, SCR_ARR_HOLE, cap);
     a->cap = cap;
     return;
@@ -346,17 +433,17 @@ static void scr_arr_grow_dense_to(ScrArr *a, size_t need, ScrArrGrow mode) {
   /* Values and states share one allocation. Move the old states before
    * publishing the larger capacity: their previous location is now part
    * of the value area. Existing data and state pointers keep their ABI. */
-  uint64_t *data = scr_mem_realloc(a->data, cap * SCR_ARR_SLOT_BYTES);
+  uint64_t *data = scr_mem_realloc(a->data, cap * unit);
   if (!data) scr_arr_oom();
-  uint8_t *present = (uint8_t *)(data + cap);
-  if (a->cap) memmove(present, (uint8_t *)(data + a->cap), a->cap);
+  uint8_t *present = (uint8_t *)data + cap * width;
+  if (a->cap) memmove(present, (uint8_t *)data + a->cap * width, a->cap);
   memset(present + a->cap, SCR_ARR_HOLE, cap - a->cap);
   a->data = data;
   a->present = present;
   a->cap = cap;
   size_t moved = scr_arr_sparse_lower_bound(SCR_AX(a)->sparse, SCR_AX(a)->sparse_len, cap);
   for (size_t i = 0; i < moved; i++) {
-    a->data[SCR_AX(a)->sparse[i].index] = SCR_AX(a)->sparse[i].slot;
+    scr_arr_dense_put(a, SCR_AX(a)->sparse[i].index, SCR_AX(a)->sparse[i].slot);
     a->present[SCR_AX(a)->sparse[i].index] = SCR_AX(a)->sparse[i].state;
   }
   scr_arr_sparse_drop_prefix(a, moved);
@@ -416,7 +503,7 @@ static uint8_t scr_arr_state_at_storage(const ScrArrStorage *s, size_t index,
                                          uint64_t *out) {
   if (index < s->cap) {
     if (s->present[index] == SCR_ARR_HOLE) return SCR_ARR_HOLE;
-    if (out) *out = s->data[index];
+    if (out) *out = scr_arr_storage_get(s, index);
     return s->present[index];
   }
   size_t pos = scr_arr_sparse_lower_bound(s->sparse, s->sparse_len, index);
@@ -431,14 +518,14 @@ static bool scr_arr_slot_at_storage(const ScrArrStorage *s, size_t index,
 }
 
 static bool scr_arr_slot_at(const ScrArr *a, size_t index, uint64_t *out) {
-  ScrArrStorage s = {
-      a->data, a->present, a->cap, SCR_AX(a)->sparse, SCR_AX(a)->sparse_len, SCR_AX(a)->sparse_cap};
+  ScrArrStorage s = {a->data, a->present, a->cap, SCR_AX(a)->sparse,
+                     SCR_AX(a)->sparse_len, SCR_AX(a)->sparse_cap, a->elem, false};
   return scr_arr_slot_at_storage(&s, index, out);
 }
 
 static uint8_t scr_arr_state_at(const ScrArr *a, size_t index, uint64_t *out) {
-  ScrArrStorage s = {
-      a->data, a->present, a->cap, SCR_AX(a)->sparse, SCR_AX(a)->sparse_len, SCR_AX(a)->sparse_cap};
+  ScrArrStorage s = {a->data, a->present, a->cap, SCR_AX(a)->sparse,
+                     SCR_AX(a)->sparse_len, SCR_AX(a)->sparse_cap, a->elem, false};
   return scr_arr_state_at_storage(&s, index, out);
 }
 
@@ -449,7 +536,7 @@ static void scr_arr_store_state_owned(ScrArr *a, size_t index, uint64_t slot,
   if (state != SCR_ARR_VALUE) scr_arr_cut(a, index);
   scr_arr_grow_for_index(a, index);
   if (index < a->cap) {
-    a->data[index] = slot;
+    scr_arr_dense_put(a, index, slot);
     a->present[index] = state;
     return;
   }
@@ -472,9 +559,9 @@ static bool scr_arr_take_state(ScrArr *a, size_t index, uint64_t *out,
     uint8_t state = a->present[index];
     if (state == SCR_ARR_HOLE) return false;
     scr_arr_cut(a, index);
-    *out = a->data[index];
+    *out = scr_arr_dense_get(a, index);
     a->present[index] = SCR_ARR_HOLE;
-    a->data[index] = 0;
+    scr_arr_dense_put(a, index, 0);
     if (state_out) *state_out = state;
     return true;
   }
@@ -498,8 +585,8 @@ static void scr_arr_replace_state_owned(ScrArr *a, size_t index, uint64_t slot,
   if (state != SCR_ARR_VALUE) scr_arr_cut(a, index);
   if (index < a->cap) {
     old_state = a->present[index];
-    if (old_state == SCR_ARR_VALUE) old = a->data[index];
-    a->data[index] = slot;
+    if (old_state == SCR_ARR_VALUE) old = scr_arr_dense_get(a, index);
+    scr_arr_dense_put(a, index, slot);
     a->present[index] = state;
   } else {
     size_t pos = scr_arr_sparse_lower_bound(SCR_AX(a)->sparse, SCR_AX(a)->sparse_len, index);
@@ -531,7 +618,7 @@ static void scr_arr_refill_to(ScrArr *a, size_t limit) {
   size_t end = a->len < a->cap ? a->len : a->cap;
   if (limit < end) end = limit;
   size_t f = a->filled;
-  while (f < end && a->present[f] == SCR_ARR_VALUE) f++;
+  if (f < end) f = scr_arr_value_run(a->present, f, end);
   a->filled = (uint32_t)f;
 }
 
@@ -610,9 +697,10 @@ static bool scr_arr_prop_delete(ScrArr *a, double key) {
 }
 
 static ScrArrStorage scr_arr_take_storage(ScrArr *a) {
-  ScrArrStorage old = {
-      a->data, a->present, a->cap, SCR_AX(a)->sparse, SCR_AX(a)->sparse_len,
-      SCR_AX(a)->sparse_cap};
+  ScrArrStorage old = {a->data, a->present, a->cap, SCR_AX(a)->sparse,
+                       SCR_AX(a)->sparse_len, SCR_AX(a)->sparse_cap, a->elem,
+                       scr_arr_inline(a)};
+  a->spare &= (uint16_t)~SCR_ARR_INLINE_SLOTS;
   a->data = NULL;
   a->present = NULL;
   a->cap = 0;
@@ -626,7 +714,7 @@ static ScrArrStorage scr_arr_take_storage(ScrArr *a) {
 }
 
 static void scr_arr_free_storage(ScrArrStorage *s) {
-  scr_mem_free(s->data);
+  if (!s->inline_slots) scr_mem_free(s->data);
   scr_arr_sparse_free(s->sparse);
   memset(s, 0, sizeof(*s));
 }
@@ -641,7 +729,7 @@ static bool scr_arr_is_dense(const ScrArr *a) {
 static void scr_arr_move_dense(ScrArr *a, size_t to, size_t from, size_t count) {
   if (count == 0) return;
   scr_arr_cut(a, to);
-  memmove(a->data + to, a->data + from, count * sizeof(*a->data));
+  memmove(scr_arr_dense_at(a, to), scr_arr_dense_at(a, from), count * scr_arr_slot_width(a));
   memmove(a->present + to, a->present + from, count);
 }
 
@@ -649,24 +737,26 @@ static void scr_arr_clear_dense(ScrArr *a, size_t from, size_t count) {
   if (count == 0) return;
   scr_arr_cut(a, from);
   memset(a->present + from, SCR_ARR_HOLE, count);
-  memset(a->data + from, 0, count * sizeof(*a->data));
+  memset(scr_arr_dense_at(a, from), 0, count * scr_arr_slot_width(a));
 }
 
 /* The destination owns no values in this range. Only retain adapters run
  * while copying references: no release can collect an intermediate copy.
- * Self-appends use disjoint ranges after reserving capacity. */
+ * Self-appends use disjoint ranges after reserving capacity. Both arrays
+ * hold the same element kind, so their slots have the same width. */
 static void scr_arr_copy_dense(ScrArr *dst, size_t to, const ScrArr *src,
                                 size_t from, size_t count, bool reverse,
                                 bool materialize_holes) {
   if (count == 0) return;
   scr_arr_cut(dst, to);
   if (!reverse) {
-    memcpy(dst->data + to, src->data + from, count * sizeof(*dst->data));
+    memcpy(scr_arr_dense_at(dst, to), scr_arr_dense_at(src, from),
+           count * scr_arr_slot_width(dst));
     memcpy(dst->present + to, src->present + from, count);
   } else {
     for (size_t i = 0; i < count; i++) {
       size_t source = from + count - i - 1;
-      memcpy(dst->data + to + i, src->data + source, sizeof(*dst->data));
+      scr_arr_dense_put(dst, to + i, scr_arr_dense_get(src, source));
       dst->present[to + i] = src->present[source];
     }
   }
@@ -676,14 +766,25 @@ static void scr_arr_copy_dense(ScrArr *dst, size_t to, const ScrArr *src,
     if (dst->present[i] == SCR_ARR_VALUE) {
       if (refs) dst->data[i] = scr_elem_retain_slot(src, dst->data[i]);
     } else if (materialize_holes && dst->present[i] == SCR_ARR_HOLE) {
-      dst->data[i] = 0;
+      scr_arr_dense_put(dst, i, 0);
       dst->present[i] = SCR_ARR_UNDEFINED;
     }
   }
 }
 
-ScrArr *scr_arr_new(ScrElemKind elem, size_t initial_cap) {
-  ScrArr *a = scr_mem_alloc(sizeof(ScrArr));
+/* Store `count` 8-byte value slots into dense storage starting at `to`. */
+static void scr_arr_put_slots(ScrArr *a, size_t to, size_t count, const uint64_t *slots) {
+  if (a->elem != SCR_ELEM_BOOL) {
+    memcpy(a->data + to, slots, count * sizeof(*slots));
+    return;
+  }
+  for (size_t i = 0; i < count; i++) scr_arr_dense_put(a, to + i, slots[i]);
+}
+
+static ScrArr *scr_arr_make(ScrElemKind elem, size_t initial_cap, bool small) {
+  size_t unit = elem == SCR_ELEM_BOOL ? SCR_ARR_BOOL_SLOT_BYTES : SCR_ARR_SLOT_BYTES;
+  size_t inline_cap = small ? scr_arr_small_cap(SCR_ARR_INLINE_OFFSET, elem == SCR_ELEM_BOOL) : 0;
+  ScrArr *a = scr_mem_alloc(inline_cap ? SCR_ARR_INLINE_OFFSET + inline_cap * unit : sizeof(ScrArr));
   if (!a) scr_arr_oom();
   a->rc = 1;
   a->len = 0;
@@ -696,11 +797,24 @@ ScrArr *scr_arr_new(ScrElemKind elem, size_t initial_cap) {
   a->data = NULL;
   a->present = NULL;
   a->ext = NULL;
-  if (initial_cap > 0) scr_arr_grow_dense_to(a, initial_cap, SCR_ARR_GROW_EXACT);
+  if (inline_cap) scr_arr_use_inline(a, inline_cap);
+  else if (initial_cap > 0) scr_arr_grow_dense_to(a, initial_cap, SCR_ARR_GROW_EXACT);
 #ifdef SCR_RC_AUDIT
   scr_live_arrays++;
 #endif
   return a;
+}
+
+ScrArr *scr_arr_new(ScrElemKind elem, size_t initial_cap) {
+  return scr_arr_make(elem, initial_cap, false);
+}
+
+ScrArr *scr_arr_new_small(ScrElemKind elem) { return scr_arr_make(elem, 0, true); }
+
+void scr_arr_outline(ScrArr *a) {
+  if (scr_arr_inline(a))
+    scr_arr_move_inline(a, a->cap,
+                        a->elem == SCR_ELEM_BOOL ? SCR_ARR_BOOL_SLOT_BYTES : SCR_ARR_SLOT_BYTES);
 }
 
 void scr_arr_swap_indexed_ext(ScrArr *a, ScrArr *b) {
@@ -758,7 +872,7 @@ static void scr_arr_ext_free(ScrArr *a) {
 
 static void scr_arr_gc_free(void *a0) {
   ScrArr *a = (ScrArr *)a0;
-  scr_mem_free(a->data);
+  if (!scr_arr_inline(a)) scr_mem_free(a->data);
   if (a->ext) scr_arr_ext_free(a);
 #ifdef SCR_RC_AUDIT
   scr_live_arrays--;
@@ -766,14 +880,17 @@ static void scr_arr_gc_free(void *a0) {
   scr_cyc_free_inline(a);
 }
 
-ScrArr *scr_arr_new_ops(const ScrArrOps *ops, size_t initial_cap) {
+static ScrArr *scr_arr_make_ops(const ScrArrOps *ops, size_t initial_cap, bool small) {
   ScrArr *a;
   bool cyc = ops->trace != NULL;
+  size_t inline_cap =
+      small ? scr_arr_small_cap(SCR_ARR_INLINE_OFFSET + (cyc ? sizeof(ScrCycHdr) : 0), false) : 0;
+  size_t size = inline_cap ? SCR_ARR_INLINE_OFFSET + inline_cap * SCR_ARR_SLOT_BYTES : sizeof(ScrArr);
   if (cyc) {
-    static const ScrCycType cyc_type = { &scr_arr_trace_v, &scr_arr_gc_free, SCR_CYC_KIND_ARRAY };
-    a = scr_cyc_alloc_inline(sizeof(ScrArr), &cyc_type);
+    static ScrCycType cyc_type = { &scr_arr_trace_v, &scr_arr_gc_free, SCR_CYC_KIND_ARRAY };
+    a = scr_cyc_alloc_inline(size, &cyc_type);
   } else {
-    a = scr_mem_alloc(sizeof(ScrArr));
+    a = scr_mem_alloc(size);
     if (!a) scr_arr_oom();
   }
   a->rc = 1;
@@ -787,12 +904,19 @@ ScrArr *scr_arr_new_ops(const ScrArrOps *ops, size_t initial_cap) {
   a->data = NULL;
   a->present = NULL;
   a->ext = NULL;
-  if (initial_cap > 0) scr_arr_grow_dense_to(a, initial_cap, SCR_ARR_GROW_EXACT);
+  if (inline_cap) scr_arr_use_inline(a, inline_cap);
+  else if (initial_cap > 0) scr_arr_grow_dense_to(a, initial_cap, SCR_ARR_GROW_EXACT);
 #ifdef SCR_RC_AUDIT
   scr_live_arrays++;
 #endif
   return a;
 }
+
+ScrArr *scr_arr_new_ops(const ScrArrOps *ops, size_t initial_cap) {
+  return scr_arr_make_ops(ops, initial_cap, false);
+}
+
+ScrArr *scr_arr_new_ops_small(const ScrArrOps *ops) { return scr_arr_make_ops(ops, 0, true); }
 
 static void scr_arr_destroy(void *object) {
   ScrArr *a = object;
@@ -801,13 +925,23 @@ static void scr_arr_destroy(void *object) {
     a->ext->metadata = NULL;
   }
   if (scr_elem_is_ref(a->elem)) {
-    for (size_t i = 0, end = a->len < a->cap ? a->len : a->cap; i < end; i++) {
-      if (a->present[i] != SCR_ARR_HOLE) {
-        uint64_t old = a->data[i];
-        uint8_t state = a->present[i];
-        a->present[i] = 0;
-        a->data[i] = 0;
-        if (state == SCR_ARR_VALUE) scr_elem_release(a, old);
+    size_t end = a->len < a->cap ? a->len : a->cap;
+    if (a->elem == SCR_ELEM_STR) {
+      /* Releasing a string runs no user code, so the slots need no clearing
+       * first; immortal strings (interned characters, literals) need no call. */
+      for (size_t i = 0; i < end; i++) {
+        ScrStr *s = (ScrStr *)scr_slot_to_ptr(a->data[i]);
+        if (a->present[i] == SCR_ARR_VALUE && s && s->rc != SIZE_MAX) scr_str_release(s);
+      }
+    } else {
+      for (size_t i = 0; i < end; i++) {
+        if (a->present[i] != SCR_ARR_HOLE) {
+          uint64_t old = a->data[i];
+          uint8_t state = a->present[i];
+          a->present[i] = 0;
+          a->data[i] = 0;
+          if (state == SCR_ARR_VALUE) scr_elem_release(a, old);
+        }
       }
     }
     if (a->ext) {
@@ -831,7 +965,7 @@ static void scr_arr_destroy(void *object) {
   if (a->cyc) {
     scr_arr_gc_free(a);
   } else {
-    scr_mem_free(a->data);
+    if (!scr_arr_inline(a)) scr_mem_free(a->data);
     if (a->ext) scr_arr_ext_free(a);
 #ifdef SCR_RC_AUDIT
     scr_live_arrays--;
@@ -949,9 +1083,10 @@ void scr_arr_set_len(ScrArr *a, double length) {
         }
       }
     } else {
-      for (size_t i = dense_stop; i < dense_end; i++) {
-        a->present[i] = 0;
-        a->data[i] = 0;
+      if (dense_stop < dense_end) {
+        memset(a->present + dense_stop, 0, dense_end - dense_stop);
+        memset(scr_arr_dense_at(a, dense_stop), 0,
+               (dense_end - dense_stop) * scr_arr_slot_width(a));
       }
       if (a->ext) a->ext->sparse_len = scr_arr_sparse_lower_bound(a->ext->sparse, a->ext->sparse_len, next);
     }
@@ -1076,7 +1211,8 @@ static ScrArr *scr_arr_fill_slot(ScrArr *a, uint64_t slot, uint8_t state,
   if (scr_arr_dense_ok(a, until, until - from)) scr_arr_grow_dense(a, until);
   if (!refs && until <= a->cap) {
     if (state != SCR_ARR_VALUE) scr_arr_cut(a, from);
-    for (size_t i = from; i < until; i++) a->data[i] = slot;
+    if (a->elem == SCR_ELEM_BOOL) memset(scr_arr_dense_at(a, from), (int)slot, until - from);
+    else for (size_t i = from; i < until; i++) a->data[i] = slot;
     memset(a->present + from, state, until - from);
   } else {
     for (size_t i = from; i < until; i++) {
@@ -1264,8 +1400,8 @@ bool scr_arr_index_eq(const ScrArr *a, double i, const ScrArr *b, double j) {
     bool ap = ai < a->len && a->present[ai] == SCR_ARR_VALUE;
     bool bp = bi < b->len && b->present[bi] == SCR_ARR_VALUE;
     if (!ap || !bp) return ap == bp;
-    av = a->data[ai];
-    bv = b->data[bi];
+    av = scr_arr_dense_get(a, ai);
+    bv = scr_arr_dense_get(b, bi);
   } else {
     bool ap = scr_arr_read_value(a, i, &av);
     bool bp = scr_arr_read_value(b, j, &bv);
@@ -1375,7 +1511,7 @@ double scr_arr_push_many(ScrArr *a, size_t count, const uint64_t *slots) {
   if (scr_arr_dense_ok(a, next, count)) {
     scr_arr_grow_dense(a, next);
     if (count) {
-      memcpy(a->data + from, slots, count * sizeof(*slots));
+      scr_arr_put_slots(a, from, count, slots);
       memset(a->present + from, SCR_ARR_VALUE, count);
     }
   } else {
@@ -1490,7 +1626,7 @@ static double scr_arr_unshift_slot(ScrArr *a, uint64_t slot) {
     /* The prefix moves up behind the new first value. */
     size_t f = a->filled;
     scr_arr_move_dense(a, 1, 0, old_len);
-    a->data[0] = slot;
+    scr_arr_dense_put(a, 0, slot);
     a->present[0] = SCR_ARR_VALUE;
     a->len++;
     a->filled = (uint32_t)(f + 1);
@@ -1500,7 +1636,8 @@ static double scr_arr_unshift_slot(ScrArr *a, uint64_t slot) {
   a->len = 0;
   scr_arr_store_owned(a, 0, slot);
   for (size_t i = 0; i < old.cap; i++) {
-    if (old.present[i]) scr_arr_store_state_owned(a, i + 1, old.data[i], old.present[i]);
+    if (old.present[i])
+      scr_arr_store_state_owned(a, i + 1, scr_arr_storage_get(&old, i), old.present[i]);
   }
   for (size_t i = 0; i < old.sparse_len; i++) {
     scr_arr_store_state_owned(a, old.sparse[i].index + 1, old.sparse[i].slot,
@@ -1532,7 +1669,7 @@ double scr_arr_unshift_many(ScrArr *a, size_t count, const uint64_t *slots) {
     scr_arr_grow_dense(a, old_len + count);
     size_t f = a->filled;
     scr_arr_move_dense(a, count, 0, old_len);
-    memcpy(a->data, slots, count * sizeof(*slots));
+    scr_arr_put_slots(a, 0, count, slots);
     memset(a->present, SCR_ARR_VALUE, count);
     a->len = old_len + count;
     a->filled = (uint32_t)(f + count);
@@ -1542,7 +1679,7 @@ double scr_arr_unshift_many(ScrArr *a, size_t count, const uint64_t *slots) {
     for (size_t i = 0; i < count; i++) scr_arr_store_owned(a, i, slots[i]);
     for (size_t i = 0; i < old.cap; i++) {
       if (old.present[i] != SCR_ARR_HOLE)
-        scr_arr_store_state_owned(a, i + count, old.data[i], old.present[i]);
+        scr_arr_store_state_owned(a, i + count, scr_arr_storage_get(&old, i), old.present[i]);
     }
     for (size_t i = 0; i < old.sparse_len; i++) {
       scr_arr_store_state_owned(a, old.sparse[i].index + count,
@@ -1585,7 +1722,7 @@ double scr_arr_unshift_spread(ScrArr *a, const ScrArr *src) {
   }
   for (size_t i = 0; i < old.cap; i++) {
     if (old.present[i] != SCR_ARR_HOLE) {
-      scr_arr_store_state_owned(a, i + add, old.data[i], old.present[i]);
+      scr_arr_store_state_owned(a, i + add, scr_arr_storage_get(&old, i), old.present[i]);
     }
   }
   for (size_t i = 0; i < old.sparse_len; i++) {
@@ -1605,10 +1742,9 @@ ScrArr *scr_arr_reverse(ScrArr *a) {
     if (a->filled != len) scr_arr_cut(a, 0);
     for (size_t i = 0; i < len / 2; i++) {
       size_t j = len - i - 1;
-      uint64_t slot;
-      memcpy(&slot, a->data + i, sizeof slot);
-      memcpy(a->data + i, a->data + j, sizeof slot);
-      memcpy(a->data + j, &slot, sizeof slot);
+      uint64_t slot = scr_arr_dense_get(a, i);
+      scr_arr_dense_put(a, i, scr_arr_dense_get(a, j));
+      scr_arr_dense_put(a, j, slot);
       uint8_t state = a->present[i];
       a->present[i] = a->present[j];
       a->present[j] = state;
@@ -1619,7 +1755,8 @@ ScrArr *scr_arr_reverse(ScrArr *a) {
   ScrArrStorage old = scr_arr_take_storage(a);
   a->len = len;
   for (size_t i = 0; i < old.cap; i++) {
-    if (old.present[i]) scr_arr_store_state_owned(a, len - 1 - i, old.data[i], old.present[i]);
+    if (old.present[i])
+      scr_arr_store_state_owned(a, len - 1 - i, scr_arr_storage_get(&old, i), old.present[i]);
   }
   for (size_t i = 0; i < old.sparse_len; i++) {
     scr_arr_store_state_owned(a, len - 1 - old.sparse[i].index,
@@ -1668,7 +1805,7 @@ uint8_t scr_arr_shift_state(ScrArr *a, uint64_t *slot_out) {
   size_t old_len = a->len;
   if (scr_arr_is_dense(a)) {
     uint8_t state = a->present[0];
-    if (slot_out && state == SCR_ARR_VALUE) *slot_out = a->data[0];
+    if (slot_out && state == SCR_ARR_VALUE) *slot_out = scr_arr_dense_get(a, 0);
     /* The prefix slides down with the tail. */
     size_t f = a->filled;
     scr_arr_move_dense(a, 0, 1, old_len - 1);
@@ -1682,7 +1819,8 @@ uint8_t scr_arr_shift_state(ScrArr *a, uint64_t *slot_out) {
   uint8_t state = scr_arr_state_at_storage(&old, 0, &s);
   a->len = 0;
   for (size_t i = 1; i < old.cap; i++) {
-    if (old.present[i]) scr_arr_store_state_owned(a, i - 1, old.data[i], old.present[i]);
+    if (old.present[i])
+      scr_arr_store_state_owned(a, i - 1, scr_arr_storage_get(&old, i), old.present[i]);
   }
   for (size_t i = 0; i < old.sparse_len; i++) {
     if (old.sparse[i].index > 0) {
@@ -1739,7 +1877,7 @@ ScrArr *scr_arr_splice(ScrArr *a, double start, double deleteCount) {
   size_t old_len = a->len;
   if (scr_arr_is_dense(a)) {
     if (n) {
-      memcpy(out->data, a->data + from, n * sizeof(*a->data));
+      memcpy(out->data, scr_arr_dense_at(a, from), n * scr_arr_slot_width(a));
       memcpy(out->present, a->present + from, n);
     }
     scr_arr_refill(out);
@@ -1758,16 +1896,17 @@ ScrArr *scr_arr_splice(ScrArr *a, double start, double deleteCount) {
   for (size_t i = 0; i < old.cap; i++) {
     if (old.present[i] == SCR_ARR_HOLE) continue;
     uint8_t state = old.present[i];
+    uint64_t slot = scr_arr_storage_get(&old, i);
     size_t dst;
     if (i < from) {
       dst = i;
-      scr_arr_store_state_owned(a, dst, old.data[i], state);
+      scr_arr_store_state_owned(a, dst, slot, state);
     } else if (i >= from + n) {
       dst = i - n;
-      scr_arr_store_state_owned(a, dst, old.data[i], state);
+      scr_arr_store_state_owned(a, dst, slot, state);
     } else {
       dst = i - from;
-      scr_arr_store_state_owned(out, dst, old.data[i], state);
+      scr_arr_store_state_owned(out, dst, slot, state);
     }
   }
   for (size_t j = 0; j < old.sparse_len; j++) {
@@ -1813,7 +1952,7 @@ ScrArr *scr_arr_splice_insert(ScrArr *a, double start, double deleteCount,
         ? scr_arr_new_ops(a->ops, n)
         : scr_arr_new(a->elem, n);
     if (n) {
-      memcpy(removed->data, a->data + from, n * sizeof(*a->data));
+      memcpy(removed->data, scr_arr_dense_at(a, from), n * scr_arr_slot_width(a));
       memcpy(removed->present, a->present + from, n);
     }
     removed->len = n;
@@ -1881,7 +2020,7 @@ void scr_arr_splice_drop(ScrArr *a, double start, double deleteCount, size_t cou
   bool packed = a->filled == old_len;
   scr_arr_move_dense(a, from + count, from + n, old_len - from - n);
   if (count) {
-    memcpy(a->data + from, slots, count * sizeof(*slots));
+    scr_arr_put_slots(a, from, count, slots);
     memset(a->present + from, SCR_ARR_VALUE, count);
   }
   if (next_len < old_len) scr_arr_clear_dense(a, next_len, old_len - next_len);
@@ -1950,7 +2089,7 @@ double scr_arr_index_of_f64(ScrArr *a, double v) {
 
 double scr_arr_index_of_bool(ScrArr *a, bool v) {
   for (size_t i = 0; i < a->cap && i < a->len; i++) {
-    if (a->present[i] == SCR_ARR_VALUE && ((a->data[i] != 0) == v)) return (double)i;
+    if (a->present[i] == SCR_ARR_VALUE && ((scr_arr_dense_get(a, i) != 0) == v)) return (double)i;
   }
   for (size_t i = 0; i < SCR_AX(a)->sparse_len; i++) {
     if (SCR_AX(a)->sparse[i].state == SCR_ARR_VALUE && (SCR_AX(a)->sparse[i].slot != 0) == v) return (double)SCR_AX(a)->sparse[i].index;
@@ -2055,6 +2194,9 @@ ScrArr *scr_arr_slice(ScrArr *a, double start, double end) {
   out->len = n;
   if (to <= a->cap) {
     scr_arr_copy_dense(out, 0, a, from, n, false, false);
+    /* States copied from below the source's bound are present values. */
+    if (n > 0 && from < a->filled)
+      out->filled = (uint32_t)((to < a->filled ? to : a->filled) - from);
     scr_arr_refill(out);
     return out;
   }
@@ -2062,7 +2204,7 @@ ScrArr *scr_arr_slice(ScrArr *a, double start, double end) {
     if (i < from || a->present[i] == SCR_ARR_HOLE) continue;
     uint8_t state = a->present[i];
     scr_arr_store_state_owned(out, i - from,
-                              scr_arr_retain_state_slot(a, a->data[i], state),
+                              scr_arr_retain_state_slot(a, scr_arr_dense_get(a, i), state),
                               state);
   }
   for (size_t i = 0; i < SCR_AX(a)->sparse_len; i++) {
@@ -2199,7 +2341,7 @@ ScrArr *scr_arr_sort_primitive(ScrArr *a, bool copy) {
   if (count && !values) scr_arr_oom();
   size_t used = 0;
   for (size_t i = 0; i < dense; i++)
-    if (a->present[i] == SCR_ARR_VALUE) values[used++] = a->data[i];
+    if (a->present[i] == SCR_ARR_VALUE) values[used++] = scr_arr_dense_get(a, i);
   for (size_t i = 0; i < SCR_AX(a)->sparse_len; i++)
     if (SCR_AX(a)->sparse[i].state == SCR_ARR_VALUE) values[used++] = SCR_AX(a)->sparse[i].slot;
   ScrNumberSortKey *numbers = NULL;
@@ -2223,12 +2365,13 @@ ScrArr *scr_arr_sort_primitive(ScrArr *a, bool copy) {
   ScrArr *out = copy ? scr_arr_new(a->elem, present) : a;
   if (copy) out->len = a->len;
   if (!copy && scr_arr_is_dense(a)) {
-    if (count) memcpy(a->data, values, count * sizeof(*values));
+    if (count) scr_arr_put_slots(a, 0, count, values);
     scr_arr_cut(a, count);
     memset(a->present, SCR_ARR_VALUE, count);
     memset(a->present + count, SCR_ARR_UNDEFINED, undefined_count);
     scr_arr_clear_dense(a, count + undefined_count, a->len - count - undefined_count);
-    if (undefined_count) memset(a->data + count, 0, undefined_count * sizeof(*a->data));
+    if (undefined_count)
+      memset(scr_arr_dense_at(a, count), 0, undefined_count * scr_arr_slot_width(a));
   } else {
     ScrArrStorage old = {0};
     if (!copy) old = scr_arr_take_storage(a);
@@ -2250,6 +2393,9 @@ typedef struct {
   void *(*retain)(void *); /* reference elements; NULL for numbers */
   uint32_t arity;
   bool numbers;
+  bool borrowing; /* enter through f->fn_borrowed, lending the slots */
+  int32_t order;  /* 1 or -1: f orders number keys ascending or descending */
+  ScrClosure *key; /* the key reader of reference elements under `order` */
 } ScrSortCompare;
 
 static void *scr_sort_retain_str(void *p) { return scr_str_retain((ScrStr *)p); }
@@ -2258,9 +2404,12 @@ static void *scr_sort_retain_bytes(void *p) { return scr_bytes_retain((ScrBytes 
 
 /* One comparator call with the closure ABI of the emitted callValue: the
  * callee owns its reference parameters and reports an exception through
- * the pending flag. The caller holds the undefined-`this` window open for
- * the whole sort; every emitted call restores the receiver stack it
- * pushed, so its top is undefined at each comparator entry. */
+ * the pending flag. A closure with a borrowing entry (fn_borrowed) is
+ * entered there instead, lending both slots: the sort's storage owns every
+ * slot until the sort returns, and the comparator cannot reach it. The
+ * caller holds the undefined-`this` window open for the whole sort; every
+ * emitted call restores the receiver stack it pushed, so its top is
+ * undefined at each comparator entry. */
 static bool scr_sort_greater(const ScrSortCompare *c, uint64_t left, uint64_t right,
                              bool *failed) {
   double result;
@@ -2271,16 +2420,16 @@ static bool scr_sort_greater(const ScrSortCompare *c, uint64_t left, uint64_t ri
     else result = ((double (*)(ScrClosure *))c->f->fn)(c->f);
   } else {
     void *x = scr_slot_to_ptr(left), *y = scr_slot_to_ptr(right);
-    if (c->arity == 2) {
-      if (x) x = c->retain(x);
-      if (y) y = c->retain(y);
-      result = ((double (*)(ScrClosure *, void *, void *))c->f->fn)(c->f, x, y);
-    } else if (c->arity == 1) {
-      if (x) x = c->retain(x);
-      result = ((double (*)(ScrClosure *, void *))c->f->fn)(c->f, x);
+    void *fn = c->f->fn;
+    if (c->borrowing) {
+      fn = c->f->fn_borrowed;
     } else {
-      result = ((double (*)(ScrClosure *))c->f->fn)(c->f);
+      if (x && c->arity >= 1) x = c->retain(x);
+      if (y && c->arity >= 2) y = c->retain(y);
     }
+    if (c->arity == 2) result = ((double (*)(ScrClosure *, void *, void *))fn)(c->f, x, y);
+    else if (c->arity == 1) result = ((double (*)(ScrClosure *, void *))fn)(c->f, x);
+    else result = ((double (*)(ScrClosure *))fn)(c->f);
   }
   if (scr_exc_pending()) {
     *failed = true;
@@ -2307,9 +2456,14 @@ static bool scr_sort_greater(const ScrSortCompare *c, uint64_t left, uint64_t ri
 #define SCR_SORT_PREFETCH(c, buf, index, limit) \
   SCR_SORT_PREFETCH_AT(c, buf, (index) + SCR_SORT_PREFETCH_DISTANCE, limit)
 
-static ScrSortCompare scr_sort_compare_for(const ScrArr *a, ScrClosure *f, uint32_t arity) {
-  ScrSortCompare c = {f, NULL, arity, a->elem == SCR_ELEM_F64};
+static ScrSortCompare scr_sort_compare_for(const ScrArr *a, ScrClosure *f, uint32_t arity,
+                                           int32_t order, ScrClosure *key) {
+  ScrSortCompare c = {f, NULL, arity, a->elem == SCR_ELEM_F64, false, order, key};
+  if (order != 0 && (arity != 2 || (order != 1 && order != -1) ||
+                     (c.numbers ? key != NULL : a->elem != SCR_ELEM_REF || key == NULL)))
+    scr_trap("scriptc: invalid keyed sort\n");
   if (!c.numbers) {
+    c.borrowing = f->fn_borrowed != NULL;
     if (a->elem == SCR_ELEM_STR) c.retain = scr_sort_retain_str;
     else if (a->elem == SCR_ELEM_ARR) c.retain = scr_sort_retain_arr;
     else if (a->elem == SCR_ELEM_BYTES) c.retain = scr_sort_retain_bytes;
@@ -2318,6 +2472,380 @@ static ScrSortCompare scr_sort_compare_for(const ScrArr *a, ScrClosure *f, uint3
   }
   return c;
 }
+
+/* ── keyed sort for recognized numeric comparators ───────────────────── */
+
+/* `a - b`, `b - a`, `a.k - b.k` and the three-way ternaries order numbers
+ * other than NaN consistently, call no user code and treat only equal
+ * numbers as equal, except that -0 equals 0. When no key is NaN or -0, a
+ * stable sort by key therefore produces exactly the comparator sort's
+ * permutation. Keys map to unsigned integers in the same order (descending
+ * order complements them). A first scan reads every key without storing
+ * it: ordered input stays as it is, strictly descending input reverses,
+ * a short tail after ascending reference keys is placed by binary search,
+ * and input of a few ascending runs merges them. Anything else takes an
+ * LSD radix sort, stable by construction, which skips the digit positions
+ * every key shares, so small integers take about half the passes. */
+
+typedef struct {
+  uint64_t key;
+  uint64_t slot;
+} ScrSortItem;
+
+#define SCR_SORT_SIGN (UINT64_C(1) << 63)
+/* Inputs of at most this many ascending runs merge instead. */
+#ifndef SCR_SORT_KEYED_RUNS
+#define SCR_SORT_KEYED_RUNS 16
+#endif
+/* Below this length, binary insertion beats the radix passes' setup. */
+#ifndef SCR_SORT_KEYED_INSERTION
+#define SCR_SORT_KEYED_INSERTION 48
+#endif
+
+/* The order-preserving unsigned key of a number, false for NaN and -0. */
+static bool scr_sort_key_encode(double value, uint64_t flip, uint64_t *key) {
+  uint64_t bits;
+  memcpy(&bits, &value, sizeof bits);
+  if (value != value || bits == SCR_SORT_SIGN) return false;
+  *key = ((bits & SCR_SORT_SIGN) ? ~bits : bits | SCR_SORT_SIGN) ^ flip;
+  return true;
+}
+
+static uint64_t scr_sort_key_decode(uint64_t key, uint64_t flip) {
+  key ^= flip;
+  return (key & SCR_SORT_SIGN) ? key & ~SCR_SORT_SIGN : ~key;
+}
+
+/* Longer inputs sort by 11-bit digits (six passes) rather than bytes: the
+ * larger count tables then pay for themselves. */
+#ifndef SCR_SORT_WIDE_DIGITS
+#define SCR_SORT_WIDE_DIGITS ((size_t)1 << 17)
+#endif
+
+/* What the first scan learned about the keys it read. */
+typedef struct {
+  size_t scanned; /* keys read: all n unless the input has many runs */
+  size_t head;    /* the length of the first ascending run */
+  size_t runs;    /* ascending runs among them */
+  bool descending; /* strictly */
+  bool valid;      /* no NaN or -0 among them */
+} ScrSortScan;
+
+#define SCR_SORT_SCAN(scan, n, READ)                                                \
+  do {                                                                              \
+    uint64_t previous_ = 0;                                                         \
+    (scan).runs = 1;                                                                \
+    (scan).head = (n);                                                              \
+    (scan).descending = true;                                                       \
+    (scan).valid = true;                                                            \
+    size_t i_ = 0;                                                                  \
+    for (; i_ < (n); i_++) {                                                        \
+      uint64_t key_;                                                                \
+      if (!scr_sort_key_encode(READ(i_), flip, &key_)) {                            \
+        (scan).valid = false;                                                       \
+        break;                                                                      \
+      }                                                                             \
+      if (i_) {                                                                     \
+        if (previous_ > key_ && (scan).runs == 1) (scan).head = i_;                 \
+        (scan).runs += previous_ > key_;                                            \
+        (scan).descending &= previous_ > key_;                                      \
+        if ((scan).runs > SCR_SORT_KEYED_RUNS && !(scan).descending) {              \
+          i_++;                                                                     \
+          break;                                                                    \
+        }                                                                           \
+      }                                                                             \
+      previous_ = key_;                                                             \
+    }                                                                               \
+    (scan).scanned = i_;                                                            \
+  } while (0)
+
+/* Binary insertion of buf[end..limit) into the sorted buf[start..end),
+ * after equal keys; leaves `end` at `limit`. */
+#define SCR_SORT_INSERT_UNTIL(T, KEY, buf, start, end, limit)                        \
+  do {                                                                               \
+    for (; (end) < (limit); (end)++) {                                               \
+      T pivot_ = (buf)[end];                                                         \
+      uint64_t pk_ = KEY(pivot_);                                                    \
+      size_t low_ = (start), high_ = (end);                                          \
+      while (low_ < high_) {                                                         \
+        size_t center_ = low_ + (high_ - low_) / 2;                                  \
+        if (KEY((buf)[center_]) > pk_) high_ = center_;                              \
+        else low_ = center_ + 1;                                                     \
+      }                                                                              \
+      memmove((buf) + low_ + 1, (buf) + low_, ((end) - low_) * sizeof(T));           \
+      (buf)[low_] = pivot_;                                                          \
+    }                                                                                \
+  } while (0)
+
+/* Merges runs src[i..mid) and src[j..hi) of very different lengths into
+ * dst[k..): each record of the shorter run finds its place in the longer one
+ * by binary search (after equal keys of the left run, before equal keys of
+ * the right one), and the records between move as blocks. Leaves the
+ * indices at the ends of both runs. */
+#define SCR_SORT_BLOCK_MERGE(T, KEY, src, dst, i, j, k, mid, hi)                    \
+  do {                                                                               \
+    bool short_right_ = (hi) - (j) <= (mid) - (i);                                   \
+    size_t *at_ = short_right_ ? &(i) : &(j), *by_ = short_right_ ? &(j) : &(i);    \
+    size_t at_end_ = short_right_ ? (mid) : (hi), by_end_ = short_right_ ? (hi) : (mid); \
+    for (; *by_ < by_end_; (*by_)++) {                                               \
+      uint64_t key_ = KEY((src)[*by_]);                                              \
+      size_t low_ = *at_, high_ = at_end_;                                           \
+      while (low_ < high_) {                                                         \
+        size_t center_ = low_ + (high_ - low_) / 2;                                  \
+        uint64_t probe_ = KEY((src)[center_]);                                       \
+        if (short_right_ ? probe_ > key_ : probe_ >= key_) high_ = center_;          \
+        else low_ = center_ + 1;                                                     \
+      }                                                                              \
+      memcpy((dst) + (k), (src) + *at_, (low_ - *at_) * sizeof(T));                  \
+      (k) += low_ - *at_;                                                            \
+      *at_ = low_;                                                                   \
+      (dst)[(k)++] = (src)[*by_];                                                    \
+    }                                                                                \
+  } while (0)
+
+/* LSD radix passes over BITS-bit digits from `src` into `dst`, swapping the
+ * two after each pass; positions where every key has the same digit are
+ * skipped. */
+#define SCR_SORT_RADIX_PASSES(T, KEY, src, dst, n, BITS)                             \
+  do {                                                                               \
+    enum { digits_ = (64 + (BITS) - 1) / (BITS), radix_ = 1 << (BITS) };             \
+    size_t(*counts_)[radix_] = calloc(digits_, sizeof(*counts_));                    \
+    if (!counts_) scr_arr_oom();                                                     \
+    for (size_t i_ = 0; i_ < (n); i_++) {                                            \
+      uint64_t k_ = KEY((src)[i_]);                                                  \
+      for (unsigned d_ = 0; d_ < digits_; d_++)                                      \
+        counts_[d_][(k_ >> ((BITS) * d_)) & (radix_ - 1)]++;                         \
+    }                                                                                \
+    uint64_t first_ = KEY((src)[0]);                                                 \
+    for (unsigned d_ = 0; d_ < digits_; d_++) {                                      \
+      size_t *count_ = counts_[d_];                                                  \
+      unsigned shift_ = (BITS) * d_;                                                 \
+      if (count_[(first_ >> shift_) & (radix_ - 1)] == (n)) continue;                \
+      size_t at_ = 0;                                                                \
+      for (unsigned b_ = 0; b_ < radix_; b_++) {                                     \
+        size_t c_ = count_[b_];                                                      \
+        count_[b_] = at_;                                                            \
+        at_ += c_;                                                                   \
+      }                                                                              \
+      for (size_t i_ = 0; i_ < (n); i_++)                                            \
+        (dst)[count_[(KEY((src)[i_]) >> shift_) & (radix_ - 1)]++] = (src)[i_];      \
+      T *swap_ = (src);                                                              \
+      (src) = (dst);                                                                 \
+      (dst) = swap_;                                                                 \
+    }                                                                                \
+    free(counts_);                                                                   \
+  } while (0)
+
+/* Stable sort of `n` records of type T keyed by KEY(record), between `buf`
+ * and `tmp` (which may be NULL when `n` is at most the insertion length);
+ * leaves the sorted records in *out. */
+#define SCR_SORT_KEYED_RECORDS(T, KEY, buf, tmp, n, few_runs, out)                   \
+  do {                                                                               \
+    T *src_ = (buf), *dst_ = (tmp);                                                  \
+    if (few_runs) {                                                                  \
+      /* Runs grow to 16 records by insertion, as in the comparator sort; a  \
+       * run starting inside an ascending run extends to that run's end, so  \
+       * there are at most twice as many as ascending runs. */               \
+      size_t starts_[2 * SCR_SORT_KEYED_RUNS + 1], count_ = 0;                       \
+      for (size_t start_ = 0; start_ < (n);) {                                       \
+        starts_[count_++] = start_;                                                  \
+        size_t end_ = start_ + 1;                                                    \
+        while (end_ < (n) && KEY(src_[end_ - 1]) <= KEY(src_[end_])) end_++;         \
+        size_t limit_ = start_ + 16 < (n) ? start_ + 16 : (n);                       \
+        SCR_SORT_INSERT_UNTIL(T, KEY, src_, start_, end_, limit_);                   \
+        start_ = end_;                                                               \
+      }                                                                              \
+      starts_[count_] = (n);                                                         \
+      while (count_ > 1) {                                                           \
+        size_t next_ = 0;                                                            \
+        for (size_t r_ = 0; r_ < count_; r_ += 2) {                                  \
+          size_t lo_ = starts_[r_], mid_ = starts_[r_ + 1];                          \
+          size_t hi_ = r_ + 2 <= count_ ? starts_[r_ + 2] : mid_;                    \
+          size_t i_ = lo_, j_ = mid_, k_ = lo_;                                      \
+          if ((hi_ - mid_) * 8 <= mid_ - lo_ || (mid_ - lo_) * 8 <= hi_ - mid_)      \
+            SCR_SORT_BLOCK_MERGE(T, KEY, src_, dst_, i_, j_, k_, mid_, hi_);         \
+          while (i_ < mid_ && j_ < hi_)                                              \
+            dst_[k_++] = KEY(src_[j_]) < KEY(src_[i_]) ? src_[j_++] : src_[i_++];    \
+          memcpy(dst_ + k_, src_ + i_, (mid_ - i_) * sizeof(T));                     \
+          k_ += mid_ - i_;                                                           \
+          memcpy(dst_ + k_, src_ + j_, (hi_ - j_) * sizeof(T));                      \
+          starts_[next_++] = lo_;                                                    \
+        }                                                                            \
+        starts_[next_] = (n);                                                        \
+        count_ = next_;                                                              \
+        T *swap_ = src_;                                                             \
+        src_ = dst_;                                                                 \
+        dst_ = swap_;                                                                \
+      }                                                                              \
+    } else if ((n) <= SCR_SORT_KEYED_INSERTION) {                                    \
+      size_t end_ = 1;                                                               \
+      SCR_SORT_INSERT_UNTIL(T, KEY, src_, 0, end_, (n));                             \
+    } else if ((n) > SCR_SORT_WIDE_DIGITS) {                                         \
+      SCR_SORT_RADIX_PASSES(T, KEY, src_, dst_, n, 11);                              \
+    } else {                                                                         \
+      SCR_SORT_RADIX_PASSES(T, KEY, src_, dst_, n, 8);                               \
+    }                                                                                \
+    *(out) = src_;                                                                   \
+  } while (0)
+
+#define SCR_SORT_SELF_KEY(x) (x)
+#define SCR_SORT_ITEM_KEY(x) ((x).key)
+
+static void scr_sort_reverse_slots(uint64_t *values, size_t n) {
+  for (size_t left = 0, right = n - 1; left < right; left++, right--) {
+    uint64_t v = values[left];
+    values[left] = values[right];
+    values[right] = v;
+  }
+}
+
+/* Sorts number slots in place as their keys. Equal keys are equal numbers,
+ * so the order among them needs no tracking. */
+static bool scr_sort_keyed_numbers(uint64_t *values, size_t n, uint64_t flip) {
+  ScrSortScan scan;
+#define SCR_SORT_NUMBER_AT(i) scr_slot_to_f64(values[i])
+  SCR_SORT_SCAN(scan, n, SCR_SORT_NUMBER_AT);
+  if (!scan.valid) return false;
+  bool complete = scan.scanned == n;
+  if (complete && scan.runs == 1) return true;
+  if (complete && scan.descending) {
+    scr_sort_reverse_slots(values, n);
+    return true;
+  }
+  uint64_t key;
+  for (size_t i = scan.scanned; i < n; i++)
+    if (!scr_sort_key_encode(SCR_SORT_NUMBER_AT(i), flip, &key)) return false;
+#undef SCR_SORT_NUMBER_AT
+  for (size_t i = 0; i < n; i++) {
+    scr_sort_key_encode(scr_slot_to_f64(values[i]), flip, &key);
+    values[i] = key;
+  }
+  bool few_runs = complete && scan.runs <= SCR_SORT_KEYED_RUNS;
+  uint64_t *tmp = NULL, *sorted = values;
+  if (few_runs || n > SCR_SORT_KEYED_INSERTION) {
+    tmp = malloc(n * sizeof(*tmp));
+    if (!tmp) scr_arr_oom();
+  }
+  SCR_SORT_KEYED_RECORDS(uint64_t, SCR_SORT_SELF_KEY, values, tmp, n, few_runs, &sorted);
+  for (size_t i = 0; i < n; i++) values[i] = scr_sort_key_decode(sorted[i], flip);
+  free(tmp);
+  return true;
+}
+
+/* A reference element's key through the borrowed reader closure. */
+static double scr_sort_read_key(const ScrSortCompare *c, uint64_t slot) {
+  ScrClosure *reader = c->key;
+  void *x = scr_slot_to_ptr(slot);
+  if (reader->fn_borrowed)
+    return ((double (*)(ScrClosure *, void *))reader->fn_borrowed)(reader, x);
+  return ((double (*)(ScrClosure *, void *))reader->fn)(reader, x ? c->retain(x) : x);
+}
+
+/* Ascending keys followed by a short tail (values pushed onto a sorted
+ * array): sorts the tail alone, finds where each of its slots belongs in
+ * the head by binary search, then moves the head's slots as blocks, without
+ * a buffer for the whole input. Every key is read before any slot moves. */
+static bool scr_sort_keyed_tail(uint64_t *values, size_t n, size_t head, const ScrSortCompare *c,
+                                uint64_t flip) {
+  size_t tail = n - head;
+  ScrSortItem *items = malloc(tail * 2 * sizeof(*items));
+  if (!items) scr_arr_oom();
+  for (size_t i = 0; i < tail; i++) {
+    if (!scr_sort_key_encode(scr_sort_read_key(c, values[head + i]), flip, &items[i].key)) {
+      free(items);
+      return false;
+    }
+    items[i].slot = values[head + i];
+  }
+  ScrSortItem *sorted = items;
+  SCR_SORT_KEYED_RECORDS(ScrSortItem, SCR_SORT_ITEM_KEY, items, items + tail, tail, false,
+                         &sorted);
+  /* Each tail slot follows the head's slots with keys up to its own. The
+   * places only grow, so each search starts at the previous one. */
+  size_t *places = malloc(tail * sizeof(*places));
+  if (!places) scr_arr_oom();
+  for (size_t i = 0, low = 0; i < tail; i++) {
+    size_t high = head;
+    while (low < high) {
+      size_t center = low + (high - low) / 2;
+      uint64_t key;
+      scr_sort_key_encode(scr_sort_read_key(c, values[center]), flip, &key);
+      if (key > sorted[i].key) high = center;
+      else low = center + 1;
+    }
+    places[i] = low;
+  }
+  for (size_t i = tail, end = head; i-- > 0;) {
+    memmove(values + places[i] + i + 1, values + places[i], (end - places[i]) * sizeof(*values));
+    values[places[i] + i] = sorted[i].slot;
+    end = places[i];
+  }
+  free(places);
+  free(items);
+  return true;
+}
+
+/* Sorts reference slots by the keys their reader returns. The reader is a
+ * plain field read; the slots move only after every key has been read. */
+static bool scr_sort_keyed_refs(uint64_t *values, size_t n, const ScrSortCompare *c,
+                                uint64_t flip) {
+  ScrSortScan scan;
+#define SCR_SORT_REF_AT(i) scr_sort_read_key(c, values[i])
+  SCR_SORT_SCAN(scan, n, SCR_SORT_REF_AT);
+#undef SCR_SORT_REF_AT
+  if (!scan.valid) return false;
+  bool complete = scan.scanned == n;
+  if (complete && scan.runs == 1) return true;
+  if (complete && scan.descending) {
+    /* Strictly descending keys reverse without reordering ties. */
+    scr_sort_reverse_slots(values, n);
+    return true;
+  }
+  /* The scan has read and checked the head's keys; the tail's are checked
+   * as they are read again. */
+  if (scan.head < n && scan.head >= n - n / 8)
+    return scr_sort_keyed_tail(values, n, scan.head, c, flip);
+  ScrSortItem *items = malloc(n * sizeof(*items));
+  if (!items) scr_arr_oom();
+  for (size_t i = 0; i < n; i++) {
+    if (!scr_sort_key_encode(scr_sort_read_key(c, values[i]), flip, &items[i].key)) {
+      free(items);
+      return false;
+    }
+    items[i].slot = values[i];
+  }
+  bool few_runs = complete && scan.runs <= SCR_SORT_KEYED_RUNS;
+  ScrSortItem *tmp = NULL, *sorted = items;
+  if (few_runs || n > SCR_SORT_KEYED_INSERTION) {
+    tmp = malloc(n * sizeof(*tmp));
+    if (!tmp) scr_arr_oom();
+  }
+  SCR_SORT_KEYED_RECORDS(ScrSortItem, SCR_SORT_ITEM_KEY, items, tmp, n, few_runs, &sorted);
+  for (size_t i = 0; i < n; i++) values[i] = sorted[i].slot;
+  free(items);
+  free(tmp);
+  return true;
+}
+
+/* Orders `n >= 2` slots by key when the comparator allows it. Returns false,
+ * leaving the slots as they were, when a key is NaN or -0: the comparator
+ * sort then runs instead. */
+static bool scr_sort_keyed(uint64_t *values, size_t n, const ScrSortCompare *c) {
+  uint64_t flip = c->order < 0 ? ~UINT64_C(0) : 0;
+  if (c->numbers) return scr_sort_keyed_numbers(values, n, flip);
+  scr_dyn_this_push_dyn(NULL);
+  bool sorted = scr_sort_keyed_refs(values, n, c, flip);
+  scr_dyn_this_pop();
+  return sorted;
+}
+
+#undef SCR_SORT_SELF_KEY
+#undef SCR_SORT_ITEM_KEY
+#undef SCR_SORT_KEYED_RECORDS
+#undef SCR_SORT_RADIX_PASSES
+#undef SCR_SORT_BLOCK_MERGE
+#undef SCR_SORT_INSERT_UNTIL
+#undef SCR_SORT_SCAN
 
 /* The stable natural merge sort of the compiler's IR helper, in place over
  * `n >= 2` slots: strictly descending runs reverse, short runs grow to 16
@@ -2456,23 +2984,24 @@ done:
  * keeps owning every element and stays untouched while user code runs, so
  * the cycle collector and a throwing comparator both see the original
  * snapshot; the sorted permutation is published only after success. */
-void scr_arr_sort_values(ScrArr *a, double count, ScrClosure *f, uint32_t arity) {
+void scr_arr_sort_values(ScrArr *a, double count, ScrClosure *f, uint32_t arity,
+                         int32_t order, ScrClosure *key) {
   size_t n = (size_t)count;
   if (n < 2) return;
   if (n > a->len || n > SIZE_MAX / 2 / sizeof(uint64_t))
     scr_trap("scriptc: invalid comparator sort snapshot\n");
-  ScrSortCompare c = scr_sort_compare_for(a, f, arity);
+  ScrSortCompare c = scr_sort_compare_for(a, f, arity, order, key);
   uint64_t *src = malloc(n * sizeof(*src));
   if (!src) scr_arr_oom();
   for (size_t i = 0; i < n; i++) {
     if (scr_arr_state_at(a, i, &src[i]) != SCR_ARR_VALUE)
       scr_trap("scriptc: invalid comparator sort snapshot\n");
   }
-  bool sorted = scr_sort_slots(src, n, &c, true);
+  bool sorted = (order != 0 && scr_sort_keyed(src, n, &c)) || scr_sort_slots(src, n, &c, true);
   /* A permutation of the same owned slots: no reference count changes. */
   for (size_t i = 0; sorted && i < n; i++) {
     if (i < a->cap) {
-      a->data[i] = src[i];
+      scr_arr_dense_put(a, i, src[i]);
     } else {
       size_t pos = scr_arr_sparse_lower_bound(SCR_AX(a)->sparse, SCR_AX(a)->sparse_len, i);
       SCR_AX(a)->sparse[pos].slot = src[i];
@@ -2508,15 +3037,19 @@ static bool scr_arr_dense_values(const ScrArr *a) {
  * indices below the snapshot length are still dense storage, else through
  * the general element write, which fills holes, regrows a truncated array
  * and keeps appended indices. A comparator exception leaves `a` as the
- * comparator left it. */
-bool scr_arr_sort_dense(ScrArr *a, ScrClosure *f, uint32_t arity, bool owned) {
+ * comparator left it. A keyed sort calls no user code, so it permutes the
+ * slots of `a` in place. */
+bool scr_arr_sort_dense(ScrArr *a, ScrClosure *f, uint32_t arity, bool owned, int32_t order,
+                        ScrClosure *key) {
   if (a->rc == SIZE_MAX || !scr_arr_dense_values(a)) return false;
   size_t n = a->len;
   if (n < 2) return true;
   if (n > SIZE_MAX / 2 / sizeof(uint64_t)) scr_arr_oom();
-  ScrSortCompare c = scr_sort_compare_for(a, f, arity);
+  ScrSortCompare c = scr_sort_compare_for(a, f, arity, order, key);
   /* Nothing else can reach a private copy: its own storage is sorted, and
-   * the same owned slots only permute. */
+   * the same owned slots only permute. A keyed sort runs no user code, so
+   * it permutes a shared array's slots in place too. */
+  if (order != 0 && scr_sort_keyed(a->data, n, &c)) return true;
   if (owned) {
     scr_sort_slots(a->data, n, &c, false);
     return true;
@@ -2566,7 +3099,43 @@ bool scr_arr_sort_dense(ScrArr *a, ScrClosure *f, uint32_t arity, bool owned) {
   return true;
 }
 
+/* join over a hole-free string array: size the result exactly, then copy
+ * each piece without per-append capacity checks. Only a piece starting
+ * with a lone low surrogate can complete a pair across its seam. */
+static ScrStr *scr_arr_join_dense_str(const ScrArr *a, const ScrStr *sep) {
+  const size_t limit = SIZE_MAX - sizeof(ScrStr) - 1;
+  size_t n = a->len;
+  if (n > 1 && sep->len > limit / (n - 1)) scr_arr_oom();
+  size_t total = n > 1 ? (n - 1) * sep->len : 0;
+  bool ascii = n < 2 || sep->ascii, lone = scr_wtf8_any();
+  bool lead_low = lone && n > 1 && scr_wtf8_low_at(sep->data);
+  for (size_t i = 0; i < n; i++) {
+    const ScrStr *s = (const ScrStr *)scr_slot_to_ptr(a->data[i]);
+    if (!s) continue;
+    total = scr_join_size(total, s->len);
+    ascii &= s->ascii;
+    if (lone) lead_low |= scr_wtf8_low_at(s->data);
+  }
+  ScrStr *out = scr_str_alloc_raw(total, total);
+  char *w = out->data;
+  for (size_t i = 0; i < n; i++) {
+    if (i > 0) {
+      scr_copy_bytes(w, sep->data, sep->len);
+      w += sep->len;
+    }
+    const ScrStr *s = (const ScrStr *)scr_slot_to_ptr(a->data[i]);
+    if (!s) continue;
+    scr_copy_bytes(w, s->data, s->len);
+    w += s->len;
+  }
+  out->data[total] = '\0';
+  if (lead_low) scr_str_fuse_surrogates(out);
+  else if (ascii) scr_str_note_ascii(out);
+  return out;
+}
+
 ScrStr *scr_arr_join(ScrArr *a, ScrStr *sep) {
+  if (a->elem == SCR_ELEM_STR && a->filled == a->len) return scr_arr_join_dense_str(a, sep);
   size_t cap = 64;
   /* String widths are already known. Size once to avoid growth and copying
    * even when the array holds holes, explicit undefined or sparse slots.
@@ -2583,6 +3152,10 @@ ScrStr *scr_arr_join(ScrArr *a, ScrStr *sep) {
     }
   }
   ScrStr *out = scr_str_alloc_raw(0, cap);
+  /* Only a piece starting with a lone low surrogate can complete a pair
+   * across its seam; the finished string then needs fusing. */
+  bool lone = scr_wtf8_any();
+  bool lead_low = lone && a->len > 1 && scr_wtf8_low_at(sep->data);
   for (size_t i = 0; i < a->len; i++) {
     if (i > 0) scr_join_append(&out, sep->data, sep->len);
     uint64_t slot;
@@ -2601,7 +3174,9 @@ ScrStr *scr_arr_join(ScrArr *a, ScrStr *sep) {
         break;
       case SCR_ELEM_STR: {
         const ScrStr *s = (const ScrStr *)scr_slot_to_ptr(slot);
-        if (s) scr_join_append(&out, s->data, s->len);
+        if (!s) break;
+        if (lone) lead_low |= scr_wtf8_low_at(s->data);
+        scr_join_append(&out, s->data, s->len);
         break;
       }
       case SCR_ELEM_ARR:
@@ -2612,6 +3187,7 @@ ScrStr *scr_arr_join(ScrArr *a, ScrStr *sep) {
     }
   }
   out->data[out->len] = '\0';
+  if (lead_low) scr_str_fuse_surrogates(out);
   return out;
 }
 
@@ -2637,6 +3213,7 @@ ScrStr *scr_str_raw(ScrArr *raw, ScrArr *subs) {
     }
   }
   out->data[out->len] = '\0';
+  scr_str_fuse_surrogates(out); /* pieces may complete surrogate pairs */
   return out;
 }
 

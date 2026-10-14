@@ -73,13 +73,22 @@ function eligible(local: IrLocal): boolean {
  * extracts and retains the payload, so the stored union is only projected. */
 export type NullableFieldTest = (className: string, field: string) => boolean;
 
-function collectUses(fn: IrFunction, nullableField: NullableFieldTest): Uses {
+function scalarValue(value: IrExpr): boolean {
+  return value.type.kind === "f64" || value.type.kind === "bool";
+}
+
+function collectUses(
+  fn: IrFunction,
+  nullableField: NullableFieldTest,
+  registerReturn: boolean,
+): Uses {
   const uses: Uses = {
     invalid: new Set(),
     written: new Set(),
     declarations: new Map(),
     forwards: new Map(),
   };
+  const aliases: { alias: string; source: string }[] = [];
   const stringInput = (value: IrExpr): boolean => {
     if (value.kind === "varRef" && value.type.kind === "string") return true;
     return expr(value);
@@ -161,8 +170,21 @@ function collectUses(fn: IrFunction, nullableField: NullableFieldTest): Uses {
   }
   function stmt(node: IrStmt, inExpression: boolean): boolean {
     switch (node.kind) {
+      case "return":
+        // A register result reads the returned binding's tag and bits.
+        if (registerReturn && node.value?.kind === "varRef") return true;
+        break;
       case "varDecl":
         uses.declarations.set(node.localId, (uses.declarations.get(node.localId) ?? 0) + 1);
+        // A receiver temporary (`%compoundReceiver = this`) projects its
+        // source as long as the temporary itself is only projected.
+        if (
+          node.init?.kind === "varRef" &&
+          (node.init.type.kind === "object" || node.init.type.kind === "record")
+        ) {
+          aliases.push({ alias: node.localId, source: node.init.localId });
+          return true;
+        }
         break;
       case "fieldSet":
         if (
@@ -171,6 +193,12 @@ function collectUses(fn: IrFunction, nullableField: NullableFieldTest): Uses {
           nullableField(node.className, node.field)
         )
           return expr(node.obj);
+        if (node.obj.kind === "varRef" && scalarValue(node.value)) return expr(node.value);
+        break;
+      case "recordSet":
+        // A number or boolean stored through the binding leaves the object
+        // where it is; the write itself stays visible to effect proofs.
+        if (node.obj.kind === "varRef" && scalarValue(node.value)) return expr(node.value);
         break;
       case "assign":
         uses.written.add(node.localId);
@@ -197,6 +225,29 @@ function collectUses(fn: IrFunction, nullableField: NullableFieldTest): Uses {
     return everyStmtChild(node, expr, (node) => stmt(node, inExpression));
   }
   fn.body.forEach((node) => stmt(node, false));
+  // An alias of a rebound source would keep the old object; chains of
+  // aliases settle to a fixpoint.
+  const locals = new Map(fn.locals.map((local) => [local.id, local]));
+  for (let changed = aliases.length > 0; changed;) {
+    changed = false;
+    for (const { alias, source } of aliases) {
+      const local = locals.get(alias);
+      if (
+        !uses.invalid.has(source) &&
+        (!local ||
+          local.boxed ||
+          local.tdz ||
+          uses.invalid.has(alias) ||
+          uses.written.has(alias) ||
+          uses.written.has(source) ||
+          uses.declarations.get(alias) !== 1 ||
+          uses.forwards.has(alias))
+      ) {
+        uses.invalid.add(source);
+        changed = true;
+      }
+    }
+  }
   for (const capture of [...(fn.captures ?? []), ...(fn.classCaptures ?? [])]) {
     uses.invalid.add(capture.localId);
     uses.written.add(capture.localId);
@@ -220,6 +271,9 @@ export function analyzeCallLifetimes(
   /** Rebound parameters that only ever hold borrowed walk pointers
    * (walk-borrows.ts): they keep the borrowed convention although written. */
   walkParameters: ReadonlyMap<string, ReadonlySet<number>> = new Map(),
+  /** Functions returning a scalar union as tag and payload bits
+   * (Int32Abi.union): `return x` only projects `x`. */
+  registerReturns: ReadonlySet<string> = new Set(),
 ): CallLifetimes {
   const usesByFunction = new Map<string, Uses>();
   const lazyCaptures = new LazyCaptures(functions);
@@ -234,7 +288,7 @@ export function analyzeCallLifetimes(
   };
   for (const fn of functions.values()) {
     if (fn.async || fn.generator) continue;
-    const uses = collectUses(fn, nullableField);
+    const uses = collectUses(fn, nullableField, registerReturns.has(fn.name));
     usesByFunction.set(fn.name, uses);
     // Class-capturing bodies get only local facts (computed below from
     // their uses; class captures are already invalid). Binding and
@@ -252,10 +306,20 @@ export function analyzeCallLifetimes(
       ),
     );
     if (fn.captures !== undefined) {
-      // A closure body is invoked through its environment trampoline, so
-      // its parameters keep the owned convention and no direct call can
-      // forward to them. Its own unboxed locals follow the same rules as
-      // any synchronous body; captured cells are boxed and marked invalid.
+      // A closure body is invoked through its environment: its owned entry
+      // adapts the closure ABI to a body that borrows every unchanged
+      // reference parameter, and callers that know the body (or the
+      // runtime, through the closure's borrowing entry) may lend instead.
+      // No direct call can forward to these parameters. Its own unboxed
+      // locals follow the same rules as any synchronous body; captured
+      // cells are boxed and marked invalid.
+      const borrowed = new Set<number>();
+      fn.params.forEach((param, index) => {
+        const local = locals.get(param.localId);
+        if (local && isRefCounted(param.type) && stable(local) && !uses.declarations.has(local.id))
+          borrowed.add(index);
+      });
+      if (borrowed.size > 0) result.borrowed.set(fn.name, borrowed);
       continue;
     }
     const borrowed = new Set<number>(walkParameters.get(fn.name));

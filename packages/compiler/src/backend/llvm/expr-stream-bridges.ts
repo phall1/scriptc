@@ -3,6 +3,7 @@ import { typedRefConstructor } from "./shapes.js";
 import { InternalCompilerError } from "../../errors.js";
 import { streamTypedRefEligible, undefinedArmTag } from "../../ir/analysis.js";
 import {
+  type IrRecordShape,
   type IrType,
   DYN_CLASS_PROPERTIES,
   RUNTIME_STREAM_CLASSES,
@@ -15,7 +16,7 @@ import {
 } from "../../ir/ir.js";
 import { mangleFunction, mangleGlobal, mangleRecordStruct } from "../mangle.js";
 import { BlockBuilder } from "./blocks.js";
-import { classFieldIndex, classStructSym } from "./classes.js";
+import { type LlClassMeta, classFieldIndex, classStructSym } from "./classes.js";
 import { SCR_ARR_FIELD, llvmCommentText } from "./common.js";
 import {
   FN_ATTRS,
@@ -165,6 +166,7 @@ export function streamTypedRefCommitAdapter(
     const commit = `${snapshot}_commit`;
     const check = host.dyn.dynCheckHelper(t);
     host.declare(`declare void @scr_arr_release(ptr)`);
+    host.declare(`declare void @scr_arr_outline(ptr)`);
     const lines = [
       `define internal void @${commit}(ptr %target, ptr %d) ${FN_ATTRS} { ; commit live stream element ${typeKey(t)}`,
       `entry:`,
@@ -172,6 +174,9 @@ export function streamTypedRefCommitAdapter(
       `  %missing = icmp eq ptr %next, null`,
       `  br i1 %missing, label %done, label %swap`,
       `swap:`,
+      // Inline slots live in each header's block; move them out first.
+      `  call void @scr_arr_outline(ptr %target)`,
+      `  call void @scr_arr_outline(ptr %next)`,
     ];
     const storageMembers = [
       { name: "len", index: 1, type: host.sizeType },
@@ -696,6 +701,10 @@ export function streamTypedRefMaterializeAdapter(
         `llvm emitter bug: typed-ref materialize of unknown class ${t.className}`,
       );
     }
+    if (liveClassOpsEligible(meta)) {
+      adapter.classOps = `@${snapshot}_cops`;
+      liveClassOps(host, snapshot, meta);
+    }
     if (meta.hierarchy && meta.children.length) {
       const vtSlot = B.tmp(),
         vt = B.tmp(),
@@ -941,6 +950,11 @@ export function streamTypedRefMaterializeAdapter(
         ...order.map((name) => byName.get(name)).filter((field) => field !== undefined),
         ...shape.fields.filter((field) => !inOrder.has(field.name)),
       ];
+      // Published before the field converters, like the array hooks below.
+      if (liveRecordOpsEligible(fields)) {
+        adapter.recordOps = `@${snapshot}_rops`;
+        liveRecordOps(host, t, snapshot, fields);
+      }
       for (const field of fields) {
         const index = shape.fields.indexOf(field) + 1;
         const fieldPtr = B.tmp();
@@ -1131,15 +1145,206 @@ function liveArrayOps(
   );
 }
 
-/** Attach the element hooks right after a live array capsule is built. */
+/** Field names whose snapshot order is not JS own-key order (array-index
+ * spellings sort first) or that an object literal cannot own as data
+ * (`__proto__`) keep every operation on the snapshot. */
+function liveRecordOpsEligible(fields: readonly { name: string }[]): boolean {
+  return fields.every(
+    (field) => field.name !== "__proto__" && !/^(?:0|[1-9][0-9]*)$/.test(field.name),
+  );
+}
+
+/** Per-field hooks for a live record capsule (ScrDynTypedRecordOps). The
+ * runtime answers keyed reads, presence and key walks of a capsule whose
+ * checked view was never created from the native record: `has` applies the
+ * snapshot's absent-optional-field rule and `get` boxes one field exactly
+ * like the snapshot does, so a walk over the record as `unknown` converts
+ * only the fields it reads instead of rebuilding the whole object per
+ * access. `fields` is the snapshot's definition order. */
+function liveRecordOps(
+  host: LlvmEmitterContext,
+  t: IrType & { kind: "record" },
+  snapshot: string,
+  fields: readonly IrRecordShape["fields"][number][],
+): void {
+  const shape = host.recordsById.get(t.shapeId)!;
+  const struct = mangleRecordStruct(t.shapeId);
+  const has = `${snapshot}_has`;
+  const get = `${snapshot}_get`;
+  const names = `${snapshot}_names`;
+  const ops = `${snapshot}_rops`;
+  const loadField = (B: BlockBuilder, field: IrRecordShape["fields"][number]): string => {
+    const index = shape.fields.indexOf(field) + 1;
+    const fieldPtr = B.tmp();
+    let fieldValue = B.tmp();
+    B.line(`${fieldPtr} = getelementptr inbounds %${struct}, ptr %p, i64 0, i32 ${index}`);
+    B.line(`${fieldValue} = load ${llFieldType(field.type)}, ptr ${fieldPtr}`);
+    if (llFieldType(field.type) === "i8") {
+      const boolValue = B.tmp();
+      B.line(`${boolValue} = trunc i8 ${fieldValue} to i1`);
+      fieldValue = boolValue;
+    }
+    return fieldValue;
+  };
+
+  const H = new BlockBuilder();
+  const optional = fields
+    .map((field, position) => ({ field, position }))
+    .filter(
+      ({ field }) =>
+        field.type.kind === "union" && undefinedArmTag(field.type, host.unionsById) >= 0,
+    );
+  const hasLabels = optional.map(() => H.newLabel("live.record.has"));
+  const always = H.newLabel("live.record.always");
+  H.terminate(
+    `switch ${host.sizeType} %i, label %${always} [ ${optional
+      .map(({ position }, k) => `${host.sizeType} ${position}, label %${hasLabels[k]}`)
+      .join(" ")} ]`,
+  );
+  optional.forEach(({ field }, k) => {
+    H.startBlock(hasLabels[k]!);
+    const value = loadField(H, field);
+    const absent = host.fieldAbsentTestIn(
+      H,
+      value,
+      (field.type as IrType & { kind: "union" }).unionId,
+    );
+    const present = H.tmp();
+    H.line(`${present} = xor i1 ${absent}, true`);
+    H.terminate(`ret i1 ${present}`);
+  });
+  H.startBlock(always);
+  H.terminate(`ret i1 true`);
+
+  const G = new BlockBuilder();
+  const getLabels = fields.map(() => G.newLabel("live.record.get"));
+  const bad = G.newLabel("live.record.bad");
+  G.terminate(
+    `switch ${host.sizeType} %i, label %${bad} [ ${fields
+      .map((_, position) => `${host.sizeType} ${position}, label %${getLabels[position]}`)
+      .join(" ")} ]`,
+  );
+  fields.forEach((field, position) => {
+    G.startBlock(getLabels[position]!);
+    const value = loadField(G, field);
+    const boxed = host.streamTypedRefBoxValue(G, field.type, value);
+    G.terminate(`ret ptr ${boxed}`);
+  });
+  G.startBlock(bad);
+  G.terminate(`unreachable`);
+
+  const literals = fields.map((field) => `ptr ${host.internLiteral(field.name)}`);
+  host.resolveThunkDefs.push(
+    `define internal zeroext i1 @${has}(ptr %p, ${host.sizeType} %i) ${FN_ATTRS} { ; live field presence of ${typeKey(t)}`,
+    H.render(),
+    `}`,
+    ``,
+    `define internal ptr @${get}(ptr %p, ${host.sizeType} %i) ${FN_ATTRS} { ; live field of ${typeKey(t)}`,
+    G.render(),
+    `}`,
+    ``,
+    `@${names} = internal constant [${fields.length} x ptr] [${literals.join(", ")}]`,
+    // Mutable: the runtime fills the trailing key-array slot on first use.
+    `@${ops} = internal global { ${host.sizeType}, ptr, ptr, ptr, i8, ptr } { ${host.sizeType} ${fields.length}, ptr @${names}, ptr @${has}, ptr @${get}, i8 ${optional.length === 0 ? 1 : 0}, ptr null }`,
+    ``,
+  );
+}
+
+/** Compiled classes whose instance views have no prototype object. Runtime
+ * classes and JavaScript classes with prototype data answer through their
+ * own views. */
+function liveClassOpsEligible(meta: LlClassMeta): boolean {
+  return (
+    !meta.def.runtime &&
+    !meta.root.def.runtime &&
+    !meta.def.prototypeDataHelper &&
+    !meta.def.instancePrototypeHelper
+  );
+}
+
+/** The prototype member names of a class instance capsule
+ * (ScrDynTypedClassOps): the class's and its bases' methods and accessors,
+ * plus `constructor`. A hierarchy's table resolves the instance's exact
+ * class first, like the materializer, since an instance seen through a base
+ * type still has its own class's prototype. */
+function liveClassOps(host: LlvmEmitterContext, snapshot: string, meta: LlClassMeta): void {
+  const ops = `${snapshot}_cops`;
+  const names = `${snapshot}_cnames`;
+  const members = ["constructor"];
+  for (let current: LlClassMeta | null = meta; current; current = current.base) {
+    for (const name of current.def.prototypeNames ?? []) {
+      if (!members.includes(name)) members.push(name);
+    }
+  }
+  const literals = members.map((name) => `ptr ${host.internLiteral(name)}`);
+  const descendants = (current: LlClassMeta): LlClassMeta[] =>
+    current.children.flatMap((child) => [child, ...descendants(child)]);
+  const subclasses = meta.hierarchy ? descendants(meta).filter(liveClassOpsEligible) : [];
+  let exact = "null";
+  if (subclasses.length > 0) {
+    exact = `@${snapshot}_cexact`;
+    const B = new BlockBuilder();
+    const vtSlot = B.tmp(),
+      vt = B.tmp(),
+      preSlot = B.tmp(),
+      pre = B.tmp();
+    B.line(
+      `${vtSlot} = getelementptr inbounds %${classStructSym(meta.def.name)}, ptr %p, i64 0, i32 1`,
+    );
+    B.line(`${vt} = load ptr, ptr ${vtSlot}`);
+    B.line(`${preSlot} = getelementptr inbounds %ScrVt, ptr ${vt}, i64 0, i32 0`);
+    B.line(`${pre} = load ${host.sizeType}, ptr ${preSlot}`);
+    for (const child of subclasses.reverse()) {
+      const childAdapter = host.liveDynRefAdapter({ kind: "object", className: child.def.name });
+      const match = B.tmp(),
+        yes = B.newLabel("class.ops.derived"),
+        next = B.newLabel("class.ops.next");
+      B.line(`${match} = icmp eq ${host.sizeType} ${pre}, ${child.pre}`);
+      B.condBr(match, yes, next);
+      B.startBlock(yes);
+      B.terminate(`ret ptr ${childAdapter.classOps ?? `@${ops}`}`);
+      B.startBlock(next);
+    }
+    B.terminate(`ret ptr @${ops}`);
+    host.resolveThunkDefs.push(
+      `define internal ptr ${exact}(ptr %p) ${FN_ATTRS} { ; exact class members of ${meta.def.name}`,
+      B.render(),
+      `}`,
+      ``,
+    );
+  }
+  host.resolveThunkDefs.push(
+    `@${names} = internal constant [${members.length} x ptr] [${literals.join(", ")}]`,
+    `@${ops} = internal constant { ptr, ${host.sizeType}, ptr } { ptr ${exact}, ${host.sizeType} ${members.length}, ptr @${names} }`,
+    ``,
+  );
+}
+
+/** The live view a capsule of this adapter binds: the runtime bind call
+ * and its ops constant, with the view code a deferred receiver recipe
+ * records (1 array, 2 record, 3 class). */
+export function liveRefView(
+  adapter: LlStreamTypedRefAdapter,
+): { bind: string; ops: string; code: 1 | 2 | 3 } | null {
+  if (adapter.classOps !== undefined)
+    return { bind: "scr_dyn_typed_ref_bind_class", ops: adapter.classOps, code: 3 };
+  if (adapter.recordOps !== undefined)
+    return { bind: "scr_dyn_typed_ref_bind_record", ops: adapter.recordOps, code: 2 };
+  if (adapter.arrayOps !== undefined)
+    return { bind: "scr_dyn_typed_ref_bind_array", ops: adapter.arrayOps, code: 1 };
+  return null;
+}
+
+/** Attach the element or field hooks right after a live capsule is built. */
 export function bindLiveArrayOps(
   host: ShapeHost,
   adapter: LlStreamTypedRefAdapter,
   capsule: string,
 ): string[] {
-  if (adapter.arrayOps === undefined) return [];
-  host.declare(`declare void @scr_dyn_typed_ref_bind_array(ptr, ptr)`);
-  return [`call void @scr_dyn_typed_ref_bind_array(ptr ${capsule}, ptr ${adapter.arrayOps})`];
+  const view = liveRefView(adapter);
+  if (view === null) return [];
+  host.declare(`declare void @${view.bind}(ptr, ptr)`);
+  return [`call void @${view.bind}(ptr ${capsule}, ptr ${view.ops})`];
 }
 
 export function streamFromArrayAdapter(

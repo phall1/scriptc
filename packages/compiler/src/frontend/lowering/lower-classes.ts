@@ -1,4 +1,5 @@
-import { dynUndefinedExpr, nodeThrowExpr } from "../../ir/build.js";
+import { dynUndefinedExpr, nodeThrowExpr, varRef } from "../../ir/build.js";
+import { checkedIterableSpread } from "./checked-iterable-spread.js";
 import { collectClassMethodMutations } from "./class-method-mutations.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Class lowering: shape collection over the single-inheritance graph
@@ -103,7 +104,6 @@ import {
   classSymbolKeyOfSymbol,
   symbolFieldDisplayName,
 } from "./symbol-fields.js";
-import { builtinFenceHintOf } from "./surfaces.js";
 import { lowerHttpAgentNew, lowerHttpServerNew } from "./lower-server.js";
 import {
   ambientNsRootOf,
@@ -503,6 +503,10 @@ export interface ClassInfo {
    * the base chain. The value names which SIDES the class carries. User
    * `extends` of these classes is fenced at the declaration (phase 1). */
   builtinStream?: "r" | "w" | "rw";
+  /** The synthetic LifetimeRegion class (@scriptc/experimental,
+   * lifetime-regions.ts): its constructor is synthesized with the class,
+   * and its methods lower at their call sites. */
+  lifetimeRegion?: true;
   /** This class's own `emit` override in the FORWARDING SHAPE (the one
    * EventEmitter member a subclass may re-declare): never in `methods` —
    * emit calls keep routing through the emitter spoke, which lowers the
@@ -1912,7 +1916,11 @@ export function collectClassShapeInner(
           lowerer.isStdlibGlobal(t.expression.expression, "globalThis")
             ? lowerer.builtinErrorInfoOf(resolved)
             : null;
-        if (globalError && globalError.def.name !== "%DOMException") {
+        if (
+          globalError &&
+          globalError.def.name !== "%DOMException" &&
+          globalError.def.name !== "%AggregateError"
+        ) {
           if (t.typeArguments) lowerer.unsupported("SC1090", t, "extending generic classes");
           base = globalError;
           continue;
@@ -2062,6 +2070,15 @@ export function collectClassShapeInner(
           "SC1090",
           t,
           "extending DOMException (its runtime layout carries hidden slots a subclass would overlap — extend Error and set name/code yourself)",
+        );
+      }
+      // `extends AggregateError`: the errors list is the same kind of
+      // hidden runtime slot.
+      if (lowerer.builtinErrorInfoOf(symbol)?.def.name === "%AggregateError") {
+        lowerer.unsupported(
+          "SC1090",
+          t,
+          "extending AggregateError (its runtime layout carries a hidden errors slot a subclass would overlap — extend Error and keep the list in a field)",
         );
       }
       const named =
@@ -3968,6 +3985,10 @@ export function collectClassShapeInner(
             .map((f) => ({ name: f.name, type: f.type })),
         ],
         ...(methods.size > 0 ? { methods: [...methods.keys()] } : {}),
+        ...((): { prototypeNames?: string[] } => {
+          const names = classPrototypeNames(decl);
+          return names.length > 0 ? { prototypeNames: names } : {};
+        })(),
         ...(abstractClass ? { abstract: true as const } : {}),
         ...((): { abstractMethods?: string[] } => {
           const am = [...methods.entries()].filter(([, s]) => s.abstract === true).map(([n]) => n);
@@ -6699,6 +6720,37 @@ function lowerClassCtorInner(lowerer: Lowerer, info: ClassInfo): IrFunction {
   }
 }
 
+/** The string keys a class declaration puts on its prototype: concrete
+ * instance methods and accessors with literal names. Symbol-keyed,
+ * private, static and abstract members are not prototype string keys. */
+function classPrototypeNames(decl: ts.ClassLikeDeclaration): string[] {
+  const names: string[] = [];
+  for (const member of decl.members) {
+    if (
+      !ts.isMethodDeclaration(member) &&
+      !ts.isGetAccessorDeclaration(member) &&
+      !ts.isSetAccessorDeclaration(member)
+    )
+      continue;
+    if (
+      ts
+        .getModifiers(member)
+        ?.some(
+          (m) => m.kind === ts.SyntaxKind.StaticKeyword || m.kind === ts.SyntaxKind.AbstractKeyword,
+        )
+    )
+      continue;
+    const name = member.name;
+    let text: string | null = null;
+    if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) text = name.text;
+    else if (ts.isNumericLiteral(name)) text = String(Number(name.text));
+    else if (ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression))
+      text = name.expression.text;
+    if (text !== null && !names.includes(text)) names.push(text);
+  }
+  return names;
+}
+
 /** The lowered method-map name of a class member: identifier text, a
  * COMPUTED name that folds to one compile-time string
  * (foldedStringKeyOf — the object-literal computed-key machinery
@@ -7943,6 +7995,66 @@ function inheritsBuiltinStreamCtor(lowerer: Lowerer, info: ClassInfo): boolean {
 /** Preserve argument evaluation order and option presence through builtin
  * and inherited Error constructors. Checked-dynamic conversion retains
  * Error identity and distinguishes a missing cause from undefined. */
+/** `new AggregateError(errors, message, options)` in the spec's order:
+ * the message and cause install first, then `errors` iterates (a
+ * non-iterable throws out of the constructor). */
+function aggregateErrorConstructor(lowerer: Lowerer, loc: SrcLoc): string {
+  const name = "%aggregate.new";
+  if (lowerer.liftedFns.some((fn) => fn.name === name)) return name;
+  const type: IrType = { kind: "object", className: "%AggregateError" };
+  const context = newFnCtx(false, null, null, type);
+  lowerer.fnStack.push(context);
+  try {
+    const params = ["errors", "message", "options"].map((id) => ({
+      localId: id,
+      name: id,
+      type: DYN,
+    }));
+    const error = varRef("error", type, loc);
+    const list = checkedIterableSpread(lowerer, varRef("errors", DYN, loc), "", loc);
+    lowerer.liftedFns.push({
+      name,
+      params,
+      returnType: type,
+      locals: [
+        ...params.map((p) => ({ id: p.localId, name: p.name, type: DYN, mutable: false })),
+        { id: "error", name: "error", type, mutable: false },
+        ...context.locals,
+      ],
+      body: [
+        {
+          kind: "varDecl",
+          localId: "error",
+          init: {
+            kind: "libCall",
+            fn: "error.newAggregate",
+            args: [varRef("message", DYN, loc), varRef("options", DYN, loc)],
+            type,
+            loc,
+          },
+          loc,
+        },
+        {
+          kind: "exprStmt",
+          expr: {
+            kind: "libCall",
+            fn: "error.aggregateSetErrors",
+            args: [error, list],
+            type: VOID,
+            loc,
+          },
+          loc,
+        },
+        { kind: "return", value: error, loc },
+      ],
+      loc,
+    });
+  } finally {
+    lowerer.fnStack.pop();
+  }
+  return name;
+}
+
 export function errorConstructorArgs(
   lowerer: Lowerer,
   args: readonly ts.Expression[],
@@ -8275,15 +8387,6 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     const result: IrExpr = { kind: "libCall", fn: "intl.segmenterNew", args: [], type: DYN, loc };
     return stmts.length ? { kind: "seqExpr", stmts, result, type: DYN, loc } : result;
   }
-  const consoleCtor = ts.isIdentifier(expr.expression)
-    ? lowerer.builtinImportOf(expr.expression)
-    : ts.isPropertyAccessExpression(expr.expression) &&
-        lowerer.builtinNamespaceModuleOf(expr.expression.expression) === "console"
-      ? { module: "console", member: expr.expression.name.text }
-      : null;
-  if (consoleCtor?.module === "console" && consoleCtor.member === "Console") {
-    lowerer.noLowering("new console.Console", expr, builtinFenceHintOf("console", "Console"));
-  }
   // A package declaration without a compiled constructor cannot provide
   // a runtime value. Report the package at the construction site.
   {
@@ -8487,6 +8590,20 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         fn: "error.newDom",
         args: [msgArg, nameArg],
         type: { kind: "object", className: "%DOMException" },
+        loc,
+      };
+    }
+    if (errInfo && errInfo.def.name === "%AggregateError") {
+      const args = expr.arguments ?? [];
+      if (args.length > 3 || args.some(ts.isSpreadElement)) {
+        lowerer.noLowering(`new AggregateError with this argument list`, expr);
+      }
+      const errors = args[0] ? lowerer.lowerExprExpecting(args[0], DYN) : dynUndefinedExpr(loc);
+      return {
+        kind: "call",
+        callee: aggregateErrorConstructor(lowerer, loc),
+        args: [errors, ...lowerer.errorConstructorArgs(args.slice(1), loc, expr)],
+        type: { kind: "object", className: "%AggregateError" },
         loc,
       };
     }

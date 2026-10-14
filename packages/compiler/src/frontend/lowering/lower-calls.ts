@@ -143,7 +143,11 @@ import {
 } from "./lower-classes.js";
 import { classCallbackCall, isClassCallback } from "./class-callbacks.js";
 import { emitterRooted, lowerEmitterMethodCall } from "./lower-event-emitter.js";
-import { lowerConsoleInspectArg, lowerFormatCall } from "./lower-inspect.js";
+import {
+  lowerConsoleInstanceCall,
+  lowerConsoleMethodCall,
+  lowerConsoleOutput,
+} from "./lower-console.js";
 import {
   STREAM_API_MEMBERS,
   lowerStreamMethodCall,
@@ -464,7 +468,8 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
   }
 
   const consoleMember = lowerer.consoleCallMember(expr);
-  if (consoleMember !== null) {
+  const consoleMethod = consoleMember === null ? lowerer.consoleMethodMember(expr) : null;
+  if (consoleMember !== null || consoleMethod !== null) {
     // A namespace returned by user code must evaluate before the log
     // arguments. Only the global and literal builtin require plumbing
     // have no receiver evaluation to preserve.
@@ -481,127 +486,29 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
       created?.spec !== "console"
         ? lowerer.lowerExpr(access.expression)
         : null;
-    const withReceiver = (result: IrExpr): IrExpr =>
-      receiver === null
-        ? result
-        : {
-            kind: "seqExpr",
-            stmts: [{ kind: "exprStmt", expr: receiver, loc }],
-            result,
-            type: result.type,
+    const result =
+      consoleMember !== null
+        ? lowerConsoleOutput(
+            lowerer,
+            expr,
+            consoleMember === "log" || consoleMember === "info" || consoleMember === "debug",
+            `console.${consoleMember}`,
             loc,
-          };
-    // console.log/info/debug write stdout; console.error and console.warn
-    // are one stream in Node (warn IS error, info and debug ARE log) and
-    // write stderr with the exact same formatting. Node's formatter is
-    // formatWithOptions: string arguments print verbatim, numbers and
-    // booleans directly, and EVERYTHING else through util.inspect at the
-    // rest-args depth 2 — which the static inspect machinery renders
-    // here (arrays, records, unions, Maps/Sets, undefined/null, ...);
-    // shapes inspect cannot render keep honest per-argument fences.
-    const surface = `console.${consoleMember}`;
-    const stdoutMember =
-      consoleMember === "log" || consoleMember === "info" || consoleMember === "debug";
-    // A LITERAL format string with %-specifiers and further arguments
-    // (`console.log('Mismatched %s function calls. Expected %s, actual
-    // %d.', name, seg, n)` — test/common's exit report): Node's console
-    // formatter IS util.format — route through the format lowering and
-    // print its one string. Specifier-free first strings keep the
-    // plain space-joined path below (identical output, cheaper).
-    if (
-      expr.arguments.length > 1 &&
-      expr.arguments[0] !== undefined &&
-      (ts.isStringLiteral(expr.arguments[0]) ||
-        ts.isNoSubstitutionTemplateLiteral(expr.arguments[0])) &&
-      /%[sdifjoOc%]/.test(expr.arguments[0].text)
-    ) {
-      const formatted = lowerFormatCall(lowerer, expr, loc, false);
-      return withReceiver({
-        kind: "intrinsic",
-        name: stdoutMember ? "console.log" : "console.error",
-        args: [formatted],
-        type: VOID,
-        loc,
-      });
-    }
-    const args = expr.arguments.map((a) => {
-      const lowered = lowerer.lowerExpr(a);
-
-      // Checked-dynamic values carry their own shape, so the runtime
-      // renders them exactly like Node's console formatter renders a
-      // non-format argument: strings VERBATIM, everything else through
-      // inspect at the rest-args depth 2 (formatWithOptions) — scalar
-      // kinds byte-exactly, boxed functions as [Function: name] /
-      // [Function (anonymous)], composites through the dyn walk
-      // (insp.dyn). Never throws — Node's console.log never does.
-      if (lowered.type.kind === "dyn") {
-        return {
-          kind: "libCall",
-          fn: "insp.dynS",
-          args: [lowered, { kind: "numLit", value: 2, type: F64, loc }],
-          type: STRING,
-          loc,
-        } satisfies IrExpr;
-      }
-      // A function VALUE prints Node's [Function: name] form by boxing
-      // across the checked-dynamic boundary (the box carries the
-      // best-effort reference-site name — the documented naming stance)
-      // and rendering through the same dyn arm.
-      if (
-        lowered.type.kind === "func" &&
-        canBoxFuncIntoDyn(
-          lowered.type,
-          (id) => lowerer.shapes.get(id),
-          (id) => lowerer.unions.get(id),
-        )
-      ) {
-        const name = jsFuncNameOf(a);
-        const boxed: IrExpr = {
-          kind: "dynFrom",
-          value: lowered,
-          type: DYN,
-          ...(name !== null ? { fnName: name } : {}),
+          )
+        : lowerConsoleMethodCall(lowerer, expr, consoleMethod!, loc);
+    return receiver === null
+      ? result
+      : {
+          kind: "seqExpr",
+          stmts: [{ kind: "exprStmt", expr: receiver, loc }],
+          result,
+          type: result.type,
           loc,
         };
-        return {
-          kind: "libCall",
-          fn: "insp.dynS",
-          args: [boxed, { kind: "numLit", value: 2, type: F64, loc }],
-          type: STRING,
-          loc,
-        } satisfies IrExpr;
-      }
-      // number/string/boolean ride the ScrLogArg protocol directly (the
-      // runtime formats them Node-exactly — including -0).
-      if (
-        lowered.type.kind === "f64" ||
-        lowered.type.kind === "string" ||
-        lowered.type.kind === "bool"
-      ) {
-        return lowered;
-      }
-      // Everything else renders through the static inspect machinery at
-      // the rest-args depth 2 (formatWithOptions): arrays, records,
-      // unions (a string arm prints VERBATIM — the console.log vs
-      // inspect distinction, per arm), Maps/Sets, plain undefined/null,
-      // regexes, symbols, error values, Buffers. Shapes inspect cannot
-      // render fence honestly with the reason.
-      return lowerConsoleInspectArg(
-        lowerer,
-        a,
-        lowerer.deferredFieldSlot(lowered) ?? lowered,
-        surface,
-        loc,
-      );
-    });
-    return withReceiver({
-      kind: "intrinsic",
-      name: stdoutMember ? "console.log" : "console.error",
-      args,
-      type: VOID,
-      loc,
-    });
   }
+
+  const consoleInstanceCall = lowerConsoleInstanceCall(lowerer, expr, loc);
+  if (consoleInstanceCall) return consoleInstanceCall;
 
   if (
     ts.isPropertyAccessExpression(expr.expression) &&
@@ -1006,10 +913,9 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
     // shadowing the name has a different, non-stdlib symbol. The
     // ENCODERS accept string | number | boolean — the spec ToStrings
     // first, which ensureString reproduces exactly for these types;
-    // they are total (the spec's URIError is the unpaired surrogate,
-    // which cannot exist in well-formed UTF-8). decode THROWS the
-    // spec's URIError ("URI malformed") catchably and keeps the
-    // string-only argument rule. `globalThis.decodeURIComponent` is
+    // they THROW the spec's URIError on an unpaired surrogate. decode
+    // THROWS the spec's URIError ("URI malformed") catchably and keeps
+    // the string-only argument rule. `globalThis.decodeURIComponent` is
     // the same intrinsic; see lowerGlobalThisUriCall.
     if (
       (expr.expression.text === "encodeURIComponent" ||
@@ -5505,18 +5411,46 @@ export function lowerPromiseMethodCall(
           ? [{ kind: "varDecl", localId: vLocal.id, init: awaitE, loc }]
           : [{ kind: "exprStmt", expr: awaitE, loc }];
         const resultOf = (value: IrExpr, returnsPromise = false): IrStmt[] => {
-          const settled: IrExpr =
-            value.type.kind === "promise"
-              ? { kind: "awaitExpr", value, type: value.type.inner, loc }
-              : returnsPromise
-                ? { kind: "libCall", fn: "async.awaitDyn", args: [value], type: DYN, loc }
-                : value;
+          if (value.type.kind === "promise")
+            return [lowerer.adoptingReturn(value, R, (e) => lowerer.coerceInto(call, e, R))];
+          if (returnsPromise) {
+            // A boxed handler's promise result adopts too: the then job's
+            // turn after the call, then the await of the returned value.
+            const hLocal = lowerer.declareHiddenLocal("h", DYN);
+            const settledDyn: IrExpr = {
+              kind: "libCall",
+              fn: "async.awaitDyn",
+              args: [{ kind: "varRef", localId: hLocal.id, type: DYN, loc }],
+              type: DYN,
+              loc,
+            };
+            return [
+              { kind: "varDecl", localId: hLocal.id, init: value, loc },
+              {
+                kind: "exprStmt",
+                expr: { kind: "libCall", fn: "async.hop", args: [], type: VOID, loc },
+                loc,
+              },
+              ...(R.kind === "void"
+                ? [
+                    { kind: "exprStmt" as const, expr: settledDyn, loc },
+                    { kind: "return" as const, value: null, loc },
+                  ]
+                : [
+                    {
+                      kind: "return" as const,
+                      value: lowerer.coerceInto(call, settledDyn, R),
+                      loc,
+                    },
+                  ]),
+            ];
+          }
           return R.kind === "void"
             ? [
-                { kind: "exprStmt", expr: settled, loc },
+                { kind: "exprStmt", expr: value, loc },
                 { kind: "return", value: null, loc },
               ]
-            : [{ kind: "return", value: lowerer.coerceInto(call, settled, R), loc }];
+            : [{ kind: "return", value: lowerer.coerceInto(call, value, R), loc }];
         };
         const rejectedCall: IrExpr | null = rLocal
           ? {
@@ -5827,27 +5761,13 @@ export function lowerPromiseMethodCall(
         loc,
       };
       // The handler's result: promise returns flatten exactly like
-      // `return p` in any async body (awaitExpr re-throws rejections —
-      // the spec's thenable adoption); everything else coerces into R.
-      if (R.kind === "void") {
-        if (handlerCall.type.kind === "promise") {
-          body.push({
-            kind: "exprStmt",
-            expr: { kind: "awaitExpr", value: handlerCall, type: handlerCall.type.inner, loc },
-            loc,
-          });
-        } else {
-          body.push({ kind: "exprStmt", expr: handlerCall, loc });
-        }
+      // `return p` in any async body (the spec's thenable adoption);
+      // everything else coerces into R.
+      if (handlerCall.type.kind === "promise" && R.kind !== "promise") {
+        body.push(lowerer.adoptingReturn(handlerCall, R, (e) => lowerer.coerceInto(call, e, R)));
+      } else if (R.kind === "void") {
+        body.push({ kind: "exprStmt", expr: handlerCall, loc });
         body.push({ kind: "return", value: null, loc });
-      } else if (handlerCall.type.kind === "promise" && R.kind !== "promise") {
-        const awaited: IrExpr = {
-          kind: "awaitExpr",
-          value: handlerCall,
-          type: handlerCall.type.inner,
-          loc,
-        };
-        body.push({ kind: "return", value: lowerer.coerceInto(call, awaited, R), loc });
       } else {
         body.push({ kind: "return", value: lowerer.coerceInto(call, handlerCall, R), loc });
       }
@@ -6940,6 +6860,17 @@ function objectIsDisjointFalse(left: IrExpr, right: IrExpr, loc: SrcLoc): IrExpr
   return { kind: "seqExpr", stmts, result: answer, type: BOOL, loc };
 }
 
+/** A native [string, any][]: the result Object.entries builds directly
+ * from a checked-dynamic value's pairs (dyn.objEntryPairs). */
+function isDynEntryPairsType(lowerer: Lowerer, t: IrType): boolean {
+  if (t.kind !== "array" || t.elem.kind !== "record") return false;
+  const shape = lowerer.shapes.get(t.elem.shapeId);
+  if (!shape?.tuple || shape.indexValue || shape.fields.length !== 2) return false;
+  const field = (name: string): IrType | undefined =>
+    shape.fields.find((f) => f.name === name)?.type;
+  return field("0")?.kind === "string" && field("1")?.kind === "dyn";
+}
+
 function lowerObjectStaticCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -7241,6 +7172,18 @@ function lowerObjectStaticCall(
       proto.type.kind === "string"
     )
       proto = { kind: "dynFrom", value: proto, type: DYN, loc };
+    // Typed records, arrays and class instances stay live prototypes.
+    if (
+      (proto.type.kind === "record" ||
+        proto.type.kind === "array" ||
+        proto.type.kind === "object") &&
+      canConvertToDyn(
+        proto.type,
+        (id) => lowerer.shapes.get(id),
+        (id) => lowerer.unions.get(id),
+      )
+    )
+      proto = lowerer.coerceInto(protoNode, proto, DYN);
     if (proto.type.kind === "dyn") {
       if (call.arguments.length === 1)
         return { kind: "libCall", fn: "dyn.objCreate", args: [proto], type: DYN, loc };
@@ -7908,6 +7851,30 @@ function lowerObjectStaticCall(
             : "dyn.objEntries";
       let v = lowerer.lowerExpr(argNode);
       if (v.type.kind !== "dyn") v = { kind: "dynFrom", value: v, type: DYN, loc: locOf(call) };
+      // In TypeScript the keys come back as a native string[] and the
+      // entries as a native [string, any][]: the checker keeps every later
+      // write to the arrays well typed. JavaScript may store anything into
+      // them, so it keeps the checked-dynamic arrays.
+      const resultT =
+        member !== "values" && !isJsSourceFile(call.getSourceFile())
+          ? lowerer.mapTypeOf(lowerer.typeOf(call))
+          : null;
+      if (member === "keys" && resultT?.kind === "array" && resultT.elem.kind === "string")
+        return {
+          kind: "libCall",
+          fn: "dyn.objKeyStrings",
+          args: [v],
+          type: resultT,
+          loc: locOf(call),
+        };
+      if (member === "entries" && resultT && isDynEntryPairsType(lowerer, resultT))
+        return {
+          kind: "libCall",
+          fn: "dyn.objEntryPairs",
+          args: [v],
+          type: resultT,
+          loc: locOf(call),
+        };
       return { kind: "libCall", fn, args: [v], type: DYN, loc: locOf(call) };
     }
   }
@@ -8467,9 +8434,11 @@ export function lowerRecordFieldCall(
   // reserved %call slot — `colors.blue("x")` where blue also carries
   // `.bold` (the chalk shape).
   if (callee.type.kind === "record") callee = lowerer.hybridCallUnwrap(callee);
-  // Option records can retain checked callables in fields even when the
-  // checker only describes those members as any. A hidden package
-  // declaration leaves the same dyn field on a TypeScript record.
+  // Inferred JavaScript option records, and a hidden package declaration
+  // on a TypeScript record, can retain checked callables in fields even
+  // when the checker only describes those members as any. TypeScript also
+  // reaches here for callable library types that are checked values
+  // (util.DebugLogger). A dyn field is called at runtime.
   if (callee.type.kind === "dyn") {
     const receiver =
       target && receiverLocal ? lowerer.coerceToExpected(target.obj, DYN) : undefined;
@@ -9752,10 +9721,26 @@ export function lowerStaticNumberGlobal(
                       type: BOOL,
                       loc,
                     },
+                    // parseInt(undefined, radix) parses the text
+                    // "undefined" (a number from radix 31 up).
                     then: [
                       {
                         kind: "return",
-                        value: { kind: "numLit", value: NaN, type: F64, loc },
+                        value: {
+                          kind: "libCall",
+                          fn: "num.parseInt",
+                          args: [
+                            {
+                              kind: "strLit",
+                              value: arm.kind === "nullT" ? "null" : "undefined",
+                              type: STRING,
+                              loc,
+                            },
+                            radixRef,
+                          ],
+                          type: F64,
+                          loc,
+                        },
                         loc,
                       },
                     ],

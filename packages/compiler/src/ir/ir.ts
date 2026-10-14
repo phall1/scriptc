@@ -927,6 +927,10 @@ export interface IrModule {
   entry: string;
   /** Executable roots run in isolated native worker contexts. */
   workers?: boolean;
+  /** The program constructs LifetimeRegion (@scriptc/experimental): every
+   * ProgramLifetime instance lives in a counted region (the region.*
+   * intrinsics; backend/llvm/regions.ts). */
+  lifetimeRegions?: true;
   /** The entry module is CommonJS under Node's classification. Node runs a
    * CommonJS main synchronously and drains process.nextTick callbacks
    * before promise jobs at the first checkpoint; an ES-module main's
@@ -1314,6 +1318,10 @@ export interface IrClassDef {
    * `get:<prop>` / `set:<prop>` entries — names no user identifier can
    * spell — and behave as ordinary methods here. */
   methods?: string[];
+  /** String names of the methods and accessors this class declares on its
+   * prototype (not inherited), independent of method reachability. A
+   * reflective `in` over an instance seen as `unknown` answers them. */
+  prototypeNames?: string[];
   /** Declared `abstract class` — never instantiated (tsc rejects `new` on
    * it, including through class values), so its own vtable entries for
    * abstract slots may stay empty. */
@@ -1359,6 +1367,11 @@ export const RUNTIME_ERROR_CLASSES: ReadonlyMap<
   ["%ReferenceError", { lib: "ReferenceError", kind: 5, base: "%Error" }],
   ["%EvalError", { lib: "EvalError", kind: 6, base: "%Error" }],
   ["%URIError", { lib: "URIError", kind: 7, base: "%Error" }],
+  // AggregateError — Promise.any's rejection and its own constructor. Its
+  // `errors` list lives in a runtime-side slot beyond the ScrError prefix
+  // (the DOMException arrangement), read through error.aggregateErrors, so
+  // user `extends AggregateError` is fenced too.
+  ["%AggregateError", { lib: "AggregateError", kind: 8, base: "%Error" }],
 ]);
 
 /** The runtime-provided node:events EventEmitter class (ScrEmitter /
@@ -1526,7 +1539,8 @@ export interface IrFunction {
    * completion verdict instead of a build-time-selected member. */
   asyncCycleCacheGlobal?: string;
   /** Generator (`function*` / `async function*`): the body runs on a fiber created SUSPENDED
-   * (nothing runs until the first `.next()`); `returnType` is the
+   * (nothing runs until the first `.next()`; backends may instead compile a
+   * synchronous body as a stackless coroutine with the same protocol); `returnType` is the
    * generator's TReturn (VOID when it carries no value — `return;`
    * completes with the undefined arm) while call sites receive the
    * generator type `{ async?, yieldT, retT: returnType, nextT }` from an emitted
@@ -1691,7 +1705,11 @@ export type IrStmt =
       labels?: string[];
       loc: SrcLoc;
     }
-  | { kind: "return"; value: IrExpr | null; loc: SrcLoc }
+  /** `awaited`: a return of an async generator that needs no Await of its
+   * own — its operand's await performed it (`return p` of a promise), or
+   * it has no operand (`return;`). The request settles as the body
+   * completes instead of one microtask turn later. */
+  | { kind: "return"; value: IrExpr | null; awaited?: true; loc: SrcLoc }
   /** Field write `obj.f = v` — statement-only, like `assign`/`arraySet`.
    * Evaluation order: obj, then value. The old value is released; ownership
    * of a refcounted new value MOVES into the object. */
@@ -1811,7 +1829,13 @@ export type IrArrIntrinsicMethod =
    * arguments are [value count, comparator]. Every slot below the count is
    * a value of an `isSortValuesElement` type; the comparator is invoked
    * with exactly its declared arity. Returns void; comparator exceptions
-   * propagate and leave the snapshot unchanged. */
+   * propagate and leave the snapshot unchanged. Optional trailing
+   * arguments [order, key] describe a comparator that orders numbers
+   * ascending (order 1) or descending (-1), a numeric literal: the runtime
+   * may then sort by key without calling it. Number elements are their own
+   * keys; record and class elements pass the capture-free key reader
+   * `(elem) => number` both comparator operands apply. Keys the runtime
+   * does not order directly (NaN, -0) still sort through the comparator. */
   | "sortValues"
   /** Internal stable comparator sort of a dense array in place: arguments
    * are [comparator, owned]. Returns false, without calling the comparator,
@@ -1819,7 +1843,8 @@ export type IrArrIntrinsicMethod =
    * is published; the caller then sorts a compacted snapshot. Otherwise the
    * receiver's values are sorted outside it and written back only after
    * success, as the spec's sort writes them, and it returns true. `owned`
-   * (a boolean literal) marks a private copy no user code can reach. */
+   * (a boolean literal) marks a private copy no user code can reach.
+   * Optional trailing arguments [order, key] as for sortValues. */
   | "sortDense"
   | "length"
   /** Internal ToNumber(a[index]) for f64-backed arrays: one numeric index,
@@ -1948,7 +1973,7 @@ export type IrSetIntrinsicMethod =
  * regexIntrinsic): args[0] is the separator and args[1] the numeric limit
  * (an omitted source limit is completed to 2^32-1), result a fresh +1
  * string[] — the empty separator splits per UTF-16 code unit (astral
- * halves become U+FFFD, divergence 2). `padStart`/`padEnd` take (target
+ * halves become lone surrogates). `padStart`/`padEnd` take (target
  * length, fill) — the frontend completes an omitted fill to " ", Node's
  * default. `trimStart`/`trimEnd` are trim's one-sided halves. */
 export type IrStrIntrinsicMethod =
@@ -1971,9 +1996,8 @@ export type IrStrIntrinsicMethod =
   | "toLowerCase"
   | "toUpperCase"
   | "normalize"
-  // isWellFormed()/toWellFormed() — no-ops over the runtime's well-formed
-  // storage (lone surrogates became U+FFFD at their producers): constant
-  // true and the identity, per spec on well-formed input.
+  // isWellFormed()/toWellFormed(): whether the string holds a lone
+  // surrogate, and the copy with each one replaced by U+FFFD.
   | "isWellFormed"
   | "toWellFormed"
   // The string iterator's step: the full code-POINT character at a UTF-16
@@ -2183,6 +2207,21 @@ export type IrRegexIntrinsicMethod =
   /** exec uses the same string-first operands but keeps the g/y
    * lastIndex refusal, independently of global String.match iteration. */
   | "exec"
+  /** exec whose result is read only by null tests and constant-index
+   * element reads: args[1] is a numeric literal whose bit k marks capture k
+   * as read (k < 53). Unmarked captures read as undefined and the result
+   * carries no index/input properties; the match, lastIndex transitions
+   * and null result are exec's. */
+  | "execGroups"
+  /** execGroups whose args[2] (a numeric literal, a subset of args[1])
+   * marks the captures read only through the regex.groupEquals/
+   * groupNumber/groupParseInt libCalls; the runtime may keep those as
+   * spans of the subject rather than strings. */
+  | "execSpans"
+  /** `s.match(re)` read like an execGroups result: a global regex answers
+   * match's whole-match array; otherwise execSpans with args[1], args[2]
+   * (args[2] is 0 until regex span folding marks lazy captures). */
+  | "matchGroups"
   | "lastIndex"
   /** `s.matchAll(re)` — every match as its honest string[] slice (match's
    * rule), drained EAGERLY into a fresh string[][]: the lazy iterator is
@@ -2648,11 +2687,14 @@ export type IrExpr =
    * as the GENRET sentinel — pending like an exception, it unwinds
    * through finally blocks but must NOT be taken by catch handlers
    * (backends emit a sentinel re-unwind prologue at catch entry inside
-   * generator bodies; scr_exc_genret_pending answers it). */
+   * generator bodies; scr_exc_genret_pending answers it). `delegated`:
+   * only as the `arg` of a `delegate` genResume, which reads the resumed
+   * value and handles a pending throw or return; the yield itself is VOID. */
   | {
       kind: "yieldExpr";
       value: IrExpr | null;
       awaited?: true;
+      delegated?: true;
       captureCompletion?: { returnType: IrType };
       type: IrType;
       loc: SrcLoc;
@@ -2674,10 +2716,33 @@ export type IrExpr =
    * non-suspended generator marks it done and re-throws at the call site.
    * Sync generators return that record directly and propagate body errors
    * synchronously. Async generators return Promise<record>; requests queue,
-   * and body errors reject the corresponding promise. */
+   * and body errors reject the corresponding promise.
+   *
+   * Three record-free modes serve the compiler's own drives of a sync
+   * generator (for-of, spread, yield*), which read only `done` and then the
+   * yielded value: `step` is a valueless next() answering `done` (BOOL;
+   * throws like next); `value` moves the yielded value out, typed as the
+   * yield channel (valid only right after a `step` or `delegate` that
+   * answered false; never throws), or the completion value typed as the
+   * return channel (once a `delegate` answered true); `close` is a valueless return() whose result is dropped
+   * (IteratorClose; VOID; throws like return). All three have a null
+   * `arg`.
+   *
+   * `delegate` drives a sync generator from a `yield*` in a sync generator
+   * body. With a null `arg` it is the delegation's first resume: a
+   * valueless next() on any next channel (a suspended delegate whose next
+   * channel is typed throws an SC1071 fence error instead). Otherwise `arg`
+   * is a `delegated` yieldExpr, and once the body resumes, the consumer's
+   * next(v), return(v), or throw(e) passes to the delegate; the body
+   * itself unwinds only on a delegate exception or when the delegate
+   * completes a forwarded return(). The delegate's next channel is
+   * undefined, dyn, or the body's own. The result is the delegate's
+   * IteratorResult record, or BOOL `done` for a record-free drive (then
+   * `value` reads a yielded value or the completion; an empty completion
+   * on a valued return channel throws an SC1071 fence error). */
   | {
       kind: "genResume";
-      mode: "next" | "return" | "throw";
+      mode: "next" | "return" | "throw" | "step" | "value" | "close" | "delegate";
       gen: IrExpr;
       arg: IrExpr | null;
       type: IrType;
@@ -2685,8 +2750,13 @@ export type IrExpr =
     }
   /** Await a promise: parks the current fiber until it settles; a rejected
    * promise re-throws into the awaiter (may-throw seed). Result is the
-   * promise's inner value (+1 for refcounted kinds). Only inside async fns. */
-  | { kind: "awaitExpr"; value: IrExpr; type: IrType; loc: SrcLoc }
+   * promise's inner value (+1 for refcounted kinds). Only inside async fns.
+   * `adopt`: the operand of `return` in an async (non-generator) function.
+   * JS resolves the function's promise with the returned promise, which
+   * adopts its settlement through a then job: one microtask turn before
+   * the await proper. Any enclosing finally runs first, and a rejection
+   * leaves the function without reaching its catch handlers. */
+  | { kind: "awaitExpr"; value: IrExpr; type: IrType; adopt?: true; loc: SrcLoc }
   /** Await of a promise-or-absent union (`Promise<T> | undefined`, the
    * mapped `Promise<T> | void`): `value` is a union whose arm `promiseTag`
    * is a promise and whose other arms are all units. The promise arm awaits
@@ -2797,16 +2867,9 @@ export type IrExpr =
    * shape (their values have the shape's indexValue type — dyn included);
    * they insert into the overflow map in list order, interleaved with the
    * declared writes (one list keeps JS source-order evaluation). */
-  /** Entries flagged `drop` are fields the shape MAPPING dropped (the
-   * PromiseSettledResult honest subset — SEMANTICS.md 46): the value
-   * expression still evaluates in its source-order slot (the awaited
-   * mapper in `{ status: "fulfilled", value: await fn(...) }` must run and
-   * may throw), but nothing is stored — the emitter releases the result
-   * with the statement frame. Any value type is legal here, void included
-   * (an awaited Promise<void>). */
   | {
       kind: "recordLit";
-      fields: { name: string; value: IrExpr; overflow?: true; drop?: true }[];
+      fields: { name: string; value: IrExpr; overflow?: true }[];
       type: IrType;
       loc: SrcLoc;
     }
@@ -3290,11 +3353,17 @@ export type IrExpr =
    * promise.race: every arg is a PROMISE (the array literal's
    * entries, lowered individually — the array never materializes), the
    * type is the checker's combined result promise; the backend emits a
-   * fresh promise plus one scr_promise_race_add per entry with an
+   * fresh promise plus one scr_promise_race_join per entry with an
    * interned per-(entry-inner → result-inner) adapter (raceAdapterFor) —
    * same-type entries share the runtime's copy adapter, arm entries wrap
    * into the result union, sub-union entries re-tag arm-wise. First
    * settle wins; rejections copy raw and count handled on the entry.
+   * promise.allSettled / promise.any: ONE arg, an array of promises
+   * (Promise.all's countdown machinery). allSettled's type is a promise
+   * of the PromiseSettledResult union array — the backend's per-entry
+   * store adapter builds the fulfilled/rejected record arm; any's type is
+   * the entries' own promise type (the first fulfillment copies through;
+   * exhaustion rejects with an AggregateError of the dyn reasons).
    * promise.reject: one %Error-rooted arg (the reason — rejection
    * payloads share the thrown-Error representation), type is the
    * context-named result promise; the backend mints a fresh promise and
@@ -3317,13 +3386,24 @@ export type IrExpr =
         | "console.error"
         | "promise.race"
         | "promise.all"
+        | "promise.allSettled"
+        | "promise.any"
         | "promise.reject"
         | "promise.resolve"
         | "module.await"
         | "module.tdzCheck"
         /* @scriptc/threads publish(value): one argument, the result is the
          * same value (and type); its graph becomes immortal and immutable. */
-        | "threads.publish";
+        | "threads.publish"
+        /* LifetimeRegion (@scriptc/experimental), in modules with
+         * lifetimeRegions: region.create () → f64, a fresh region id;
+         * region.enter (f64 id) → void makes it the thread's current
+         * region until the matching region.leave () → void; region.release
+         * (f64 id) → void condemns it. None of them throws. */
+        | "region.create"
+        | "region.enter"
+        | "region.leave"
+        | "region.release";
       args: IrExpr[];
       type: IrType;
       loc: SrcLoc;
