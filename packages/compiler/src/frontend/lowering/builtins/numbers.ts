@@ -95,7 +95,9 @@ export function lowerNumberStaticCall(
     // An untyped argument is still ToString'd by the spec. The value form
     // of Number.parseInt already does this; the call form follows it so a
     // specialized string parses instead of fencing the whole function.
-    if (member === "parseInt" && probed?.type.kind === "dyn") {
+    // Number.parseFloat is the same ToString-then-parse (Effect's float
+    // prompts pass an unknown accumulator).
+    if (probed?.type.kind === "dyn" && (member === "parseInt" || member === "parseFloat")) {
       const text: IrExpr = {
         kind: "libCall",
         fn: "dyn.toStringCoerce",
@@ -103,6 +105,9 @@ export function lowerNumberStaticCall(
         type: STRING,
         loc,
       };
+      if (member === "parseFloat") {
+        return { kind: "libCall", fn: "num.parseFloat", args: [text], type: F64, loc };
+      }
       const radix = call.arguments[1]
         ? lowerer.lowerExprExpecting(call.arguments[1], F64)
         : numLit(0, loc);

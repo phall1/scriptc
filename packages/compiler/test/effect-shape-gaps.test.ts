@@ -992,6 +992,36 @@ test("Number.parseInt omits the radix the way the global does", async () => {
   await matchesNode("parse-int-fixture", parseIntProbe, parseIntProgram);
 });
 
+const parseFloatProbe = `
+export function fromUnknown(value) {
+  return globalThis.Number.parseFloat(value);
+}
+export function joined(state, input) {
+  return globalThis.Number.parseFloat(state.value + input);
+}
+`;
+
+const parseFloatProgram = `
+import { fromUnknown, joined } from "parse-float-fixture/probe.js";
+
+const values: unknown[] = [
+  "1.5px",
+  2,
+  null,
+  undefined,
+  true,
+  { toString() { return "4.25x"; } },
+];
+for (const value of values) console.log(fromUnknown(value));
+const states: unknown[] = [{ value: "" }, { value: "1" }, { value: "-" }];
+const inputs = [".", "2px", "3"];
+for (let i = 0; i < states.length; i++) console.log(joined(states[i], inputs[i]!));
+`;
+
+test("Number.parseFloat stringifies an unknown argument", async () => {
+  await matchesNode("parse-float-fixture", parseFloatProbe, parseFloatProgram);
+});
+
 const varyProbe = `
 export function varyWith(headers, dimension) {
   const vary = headers["vary"];
