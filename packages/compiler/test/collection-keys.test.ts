@@ -1,8 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { analyze } from "../src/index.js";
+import { analyze, compile } from "../src/index.js";
 import {
   BOOL,
   DYN,
@@ -180,3 +181,40 @@ test.each(["map", "set"] as const)("validator checks the arms behind a %s key un
     ),
   ).toBe(true);
 });
+
+test("Set.add returns the same set", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-set-add-"));
+  const entry = join(directory, "main.js");
+  const binary = join(directory, "main");
+  writeFileSync(
+    entry,
+    `
+const seen = new Set(["a"]);
+const next = new Set(seen).add("b");
+const chained = new Set().add("a").add("b");
+const same = new Set([1]);
+console.log(next.has("a") + "," + next.has("b") + "," + next.size);
+console.log(chained.has("a") + "," + chained.has("b") + "," + chained.size);
+console.log(same.add(2) === same);
+console.log(same.size);
+`,
+  );
+  try {
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, [entry], { encoding: "utf8", timeout: 30_000 });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 180_000);

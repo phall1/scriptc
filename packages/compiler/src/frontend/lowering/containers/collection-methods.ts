@@ -604,7 +604,36 @@ export function lowerSetMethodCall(
   }
   if (name === "add") {
     const v = lowerer.lowerCollectionKey(call.arguments[0]!, receiverIr.elem);
-    return { kind: "setIntrinsic", method: "add", receiver, args: [v], type: VOID, loc };
+    // Set.add returns the same set. A discarded call stays a void
+    // intrinsic; a used result (`new Set(seen).add(key)`) keeps that set.
+    let parent: ts.Node | undefined = call.parent;
+    while (ts.isParenthesizedExpression(parent)) parent = parent.parent;
+    if (ts.isExpressionStatement(parent)) {
+      return { kind: "setIntrinsic", method: "add", receiver, args: [v], type: VOID, loc };
+    }
+    const slot = lowerer.declareHiddenLocal("%setAddReceiver", receiver.type);
+    const ref = varRef(slot.id, receiver.type, loc);
+    return {
+      kind: "seqExpr",
+      stmts: [
+        { kind: "varDecl", localId: slot.id, init: receiver, loc },
+        {
+          kind: "exprStmt",
+          expr: {
+            kind: "setIntrinsic",
+            method: "add",
+            receiver: ref,
+            args: [v],
+            type: VOID,
+            loc,
+          },
+          loc,
+        },
+      ],
+      result: ref,
+      type: receiver.type,
+      loc,
+    };
   }
   if (name === "has" || name === "delete") {
     const v = lowerer.lowerCollectionKey(call.arguments[0]!, receiverIr.elem);
