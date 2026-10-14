@@ -17,13 +17,16 @@ import {
   type SrcLoc,
   VOID,
   arrayOf,
+  typeEquals,
 } from "../../../ir/ir.js";
 
-/** Global Web Crypto `crypto.randomUUID()` and `globalThis.crypto.randomUUID()`.
- * Named and namespace imports of node:crypto already dispatch through the
- * module table. The bare global lowers as the dyn `crypto.native` object,
- * whose only runtime member is `subtle.digest`, so the zero-argument call
- * is the same CSPRNG libCall as `import { randomUUID } from "node:crypto"`.
+/** Global Web Crypto `crypto.randomUUID()` / `getRandomValues(bytes)` and the
+ * same calls on `globalThis.crypto`. Named and namespace imports of
+ * node:crypto already dispatch through the module table. The bare global
+ * lowers as the dyn `crypto.native` object, whose only runtime member is
+ * `subtle.digest`, so the zero-argument uuid call is the same CSPRNG libCall
+ * as `import { randomUUID } from "node:crypto"`. `getRandomValues` fills a
+ * Uint8Array through `randomFillSync`'s rest filler and returns that array.
  * Optional calls, spreads, and the node:crypto options object fall through. */
 export function lowerGlobalCryptoCall(
   lowerer: Lowerer,
@@ -31,10 +34,27 @@ export function lowerGlobalCryptoCall(
   access: ts.PropertyAccessExpression,
 ): IrExpr | null {
   if (call.questionDotToken || access.questionDotToken) return null;
-  if (access.name.text !== "randomUUID") return null;
   if (!lowerer.isStdlibGlobal(access.expression, "crypto")) return null;
-  if (call.arguments.length !== 0 || call.arguments.some(ts.isSpreadElement)) return null;
-  return { kind: "libCall", fn: "crypto.randomUUID", args: [], type: STRING, loc: locOf(call) };
+  if (access.name.text === "randomUUID") {
+    if (call.arguments.length !== 0 || call.arguments.some(ts.isSpreadElement)) return null;
+    return { kind: "libCall", fn: "crypto.randomUUID", args: [], type: STRING, loc: locOf(call) };
+  }
+  if (access.name.text !== "getRandomValues") return null;
+  if (call.arguments.length !== 1 || call.arguments.some(ts.isSpreadElement)) return null;
+  const arg = call.arguments[0]!;
+  const mapped = lowerer.mapTypeOf(lowerer.typeOf(arg));
+  // Web Crypto fills integer views. The existing filler's signature is the
+  // Uint8Array Effect's uuid helper passes; other views keep the member fence.
+  if (!mapped || !typeEquals(mapped, BYTES_U8)) return null;
+  const loc = locOf(call);
+  const buffer = lowerer.lowerExprExpecting(arg, BYTES_U8);
+  return {
+    kind: "libCall",
+    fn: "crypto.randomFillRest",
+    args: [buffer, { kind: "numLit", value: 0, type: F64, loc }],
+    type: BYTES_U8,
+    loc,
+  };
 }
 
 /** The composed crypto pattern: `randomBytes(n).toString(enc)` lowers
