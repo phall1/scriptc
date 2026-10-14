@@ -12971,6 +12971,14 @@ function lowerInExpression(lowerer: Lowerer, expr: ts.BinaryExpression, loc: Src
   if (ts.isPrivateIdentifier(expr.left)) {
     return lowerPrivateIn(lowerer, expr, expr.left, loc);
   }
+  // `Symbol.iterator in value` folds when the type pins it. A plain
+  // record is false, so `for-of` of that record is not lowered. An
+  // array, string, Map, or Set is true, so the Object.entries arm of
+  // the same function is not lowered.
+  {
+    const knownIterator = lowerKnownSymbolIteratorIn(lowerer, expr, loc);
+    if (knownIterator) return knownIterator;
+  }
   // Compile-time-known STRING keys fold — literals, and the same
   // const/enum-literal and template folding computed property keys get
   // (foldedStringKeyOf); runtime-valued keys keep the fence.
@@ -14849,6 +14857,92 @@ export function uniqueSymbolKeyOf(
     return null;
   // Symbol() and Symbol('') both print `Symbol()` — Node's toString.
   return { sym, fieldName: `Symbol(${arg?.text ?? ""})` };
+}
+
+/** Whether every value of `type` has `Symbol.iterator`, or none of them do.
+ * Null when the answer depends on a value this type does not pin. Tuple
+ * records stay null: they are not arrays, so they do not inherit one. */
+function symbolIteratorAnswer(lowerer: Lowerer, type: IrType | null): boolean | null {
+  if (type === null) return null;
+  if (type.kind === "record") {
+    const shape = lowerer.shapes.get(type.shapeId);
+    if (shape === undefined || shape.tuple === true) return null;
+    return false;
+  }
+  if (
+    type.kind === "array" ||
+    type.kind === "string" ||
+    type.kind === "map" ||
+    type.kind === "set" ||
+    type.kind === "searchParams" ||
+    type.kind === "bytes" ||
+    type.kind === "generator"
+  ) {
+    return true;
+  }
+  if (type.kind === "object") {
+    const info = lowerer.classes.get(type.className);
+    return info !== undefined && lowerer.findMethodOn(info, "sym:iterator") ? true : null;
+  }
+  if (type.kind === "union") {
+    const arms = lowerer.unions.get(type.unionId)?.arms;
+    if (arms === undefined || arms.length === 0) return null;
+    let answer: boolean | null = null;
+    for (const arm of arms) {
+      const one = symbolIteratorAnswer(lowerer, arm);
+      if (one === null || (answer !== null && answer !== one)) return null;
+      answer = one;
+    }
+    return answer;
+  }
+  return null;
+}
+
+/** `Symbol.iterator in value` when the type pins the answer. A false answer
+ * on a plain record skips `for-of` of that record; a true answer on an
+ * array skips `Object.entries`. The receiver is lowered only after that
+ * decision, so a decline does not evaluate it twice. */
+function lowerKnownSymbolIteratorIn(
+  lowerer: Lowerer,
+  expr: ts.BinaryExpression,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (!isSymbolIteratorAccess(lowerer, expr.left)) return null;
+  const answer = symbolIteratorAnswer(lowerer, lowerer.mapTypeOf(lowerer.typeOf(expr.right)));
+  if (answer === null) return null;
+  const receiver = lowerer.lowerExpr(expr.right);
+  const lowered = symbolIteratorAnswer(lowerer, receiver.type);
+  if (lowered === answer) {
+    const folded: IrExpr = { kind: "boolLit", value: answer, type: BOOL, loc };
+    if (isSafeToDiscard(receiver)) return folded;
+    return {
+      kind: "seqExpr",
+      stmts: [{ kind: "exprStmt", expr: receiver, loc }],
+      result: folded,
+      type: BOOL,
+      loc,
+    };
+  }
+  // The checker type pinned the answer, but the value lowered
+  // checked-dynamic. Ask that object; do not lower the receiver again.
+  if (lowerer.dynConvertible(receiver.type)) {
+    const key = lowerer.lowerExprExpecting(expr.left, DYN);
+    return {
+      kind: "libCall",
+      fn: "dyn.hasKeyComputed",
+      args: [lowerer.coerceToExpected(receiver, DYN), key],
+      type: BOOL,
+      loc,
+    };
+  }
+  const folded: IrExpr = { kind: "boolLit", value: answer, type: BOOL, loc };
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "exprStmt", expr: receiver, loc }],
+    result: folded,
+    type: BOOL,
+    loc,
+  };
 }
 
 /** `typeof params[Symbol.iterator]` on a URLSearchParams value is "function".

@@ -1521,6 +1521,34 @@ console.log(make(undefined));
   }
 });
 
+test("Symbol.iterator in a plain record takes Object.entries", async () => {
+  await matchesNode(
+    "headers-in",
+    `
+export function fromInput(input) {
+  if (input === undefined) return { empty: "yes" };
+  if (Symbol.iterator in input) {
+    const out = Object.create(null);
+    for (const [k, v] of input) out[k.toLowerCase()] = v;
+    return out;
+  }
+  const out = Object.create(null);
+  for (const [k, v] of Object.entries(input)) {
+    if (Array.isArray(v)) out[k.toLowerCase()] = v.join(", ");
+    else if (v !== undefined) out[k.toLowerCase()] = v;
+  }
+  return out;
+}
+`,
+    `
+import { fromInput } from "headers-in/probe.js";
+console.log(JSON.stringify(fromInput({ "X-Fixture": "first", "content-type": "text/plain" })));
+console.log(JSON.stringify(fromInput({ "Content-Range": "bytes 0-1/2" })));
+console.log(JSON.stringify(fromInput(undefined)));
+`,
+  );
+});
+
 test("a one-shot Headers keys iterator matches Node", async () => {
   const directory = mkdtempSync(join(tmpdir(), "scriptc-headers-keys-"));
   const types = join(directory, "node_modules", "@types");
