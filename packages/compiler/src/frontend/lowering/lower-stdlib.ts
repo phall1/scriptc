@@ -33,6 +33,7 @@ import {
 } from "../../diagnostics/diagnostic.js";
 import { esmNamedImportLinkCrash, isCjsJsFile, locOf, npmPackageNameOf } from "../program.js";
 import { foldedStringKeyOf, lowerDynObjectLiteral } from "./expressions/object-literals.js";
+import { lowerStaticallyUndefinedArgument } from "./optional-arguments.js";
 import { PoisonError, newFnCtx, own } from "./lowerer.js";
 import {
   NODE24_FETCH_COMPAT_PROFILE,
@@ -1840,13 +1841,10 @@ export function lowerStaticReadableStreamNew(
   lowerer: Lowerer,
   expr: ts.NewExpression,
 ): IrExpr | null {
-  if (!ts.isIdentifier(expr.expression) || expr.expression.text !== "ReadableStream") {
-    return null;
-  }
-  const symbol = lowerer.resolveValueSymbol(expr.expression);
-  if (!symbol || !lowerer.isStdlibSymbol(symbol)) return null;
+  // `globalThis.ReadableStream` is the same constructor as the bare name.
+  if (stdlibGlobalNameOf(lowerer, expr.expression) !== "ReadableStream") return null;
   const args = expr.arguments ?? [];
-  if (args.length > 1) return null;
+  if (args.length > 2 || args.some((argument) => ts.isSpreadElement(argument))) return null;
   const loc = locOf(expr);
 
   const source =
@@ -1855,10 +1853,48 @@ export function lowerStaticReadableStreamNew(
       : ts.isObjectLiteralExpression(args[0]!)
         ? lowerDynObjectLiteral(lowerer, args[0]!)
         : lowerLiveWebValue(lowerer, args[0]!);
-  return {
+  const constructed = (value: IrExpr): IrExpr => ({
     kind: "libCall",
     fn: "fetch.streamNew",
-    args: [source],
+    args: [value],
+    type: DYN,
+    loc,
+  });
+  const strategyNode = args[1];
+  if (!strategyNode) return constructed(source);
+  // Effect passes `options?.strategy`. An absent strategy is Node's default
+  // stream, which the one-argument runtime already builds. A real queuing
+  // strategy has no runtime parameter; refuse it instead of dropping it.
+  const omitted = lowerStaticallyUndefinedArgument(lowerer, strategyNode);
+  if (omitted) {
+    return {
+      kind: "seqExpr",
+      stmts: [{ kind: "exprStmt", expr: omitted, loc: locOf(strategyNode) }],
+      result: constructed(source),
+      type: DYN,
+      loc,
+    };
+  }
+  const strategy = lowerer.coerceToExpected(lowerer.lowerExpr(strategyNode), DYN);
+  if (strategy.type.kind !== "dyn") return null;
+  const sourceLocal = lowerer.declareHiddenLocal("%streamSource", DYN);
+  const strategyLocal = lowerer.declareHiddenLocal("%streamStrategy", DYN);
+  const sourceRef: IrExpr = { kind: "varRef", localId: sourceLocal.id, type: DYN, loc };
+  const strategyRef: IrExpr = { kind: "varRef", localId: strategyLocal.id, type: DYN, loc };
+  return {
+    kind: "seqExpr",
+    stmts: [
+      { kind: "varDecl", localId: sourceLocal.id, init: source, loc },
+      { kind: "varDecl", localId: strategyLocal.id, init: strategy, loc },
+    ],
+    result: {
+      kind: "ternary",
+      cond: { kind: "dynTest", test: "undefined", value: strategyRef, type: BOOL, loc },
+      then: constructed(sourceRef),
+      else_: nodeThrowExpr(1, "", "ReadableStream queuing strategies are not supported", DYN, loc),
+      type: DYN,
+      loc,
+    },
     type: DYN,
     loc,
   };

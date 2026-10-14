@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -1189,4 +1189,64 @@ console.log(cut("alpha,beta"));
 
 test("a dictionary node split is the instance method", async () => {
   await matchesNode("router-split-fixture", routerSplitProbe, routerSplitProgram);
+});
+
+test("an undefined ReadableStream strategy uses the default stream", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-stream-strategy-"));
+  const types = join(directory, "node_modules", "@types");
+  mkdirSync(types, { recursive: true });
+  symlinkSync(join(import.meta.dirname, "../../../node_modules/@types/node"), join(types, "node"));
+  writeFileSync(
+    join(directory, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        target: "ES2025",
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        strict: true,
+        types: ["node"],
+      },
+    }),
+  );
+  const entry = join(directory, "main.js");
+  const binary = join(directory, "main");
+  writeFileSync(
+    entry,
+    `
+function make(strategy) {
+  let seen = "no";
+  const stream = new ReadableStream({
+    start() {
+      seen = "yes";
+    },
+  }, strategy);
+  return seen + ":" + String(stream !== undefined);
+}
+console.log(make(undefined));
+`,
+  );
+  try {
+    const coverage = analyze(entry, {});
+    const fences = [...coverage.coverage.diagnostics, ...(coverage.coverage.runtimeFences ?? [])];
+    expect(fences, JSON.stringify(fences)).toEqual([]);
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, ["--experimental-strip-types", entry], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
