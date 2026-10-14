@@ -2202,6 +2202,23 @@ export function lowerDynArrayFlatMapCall(
   if (call.arguments.length !== 1) return null;
   const argNode = call.arguments[0]!;
   const loc = locOf(call);
+  // An any/unknown callback (`files.flatMap(Option.match({...}))`, where
+  // `dual` reads `arguments` and the data-last helper stays untyped) has
+  // no function signature. lowerArrayCallback would report SC2011.
+  // Dispatch flatMap on the receiver's runtime kind, the same way map
+  // does: a dyn array flattens one level and anything else throws.
+  const callbackTs = lowerer.typeOf(argNode);
+  if ((callbackTs.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) {
+    return {
+      kind: "dynInvoke",
+      recv,
+      method: "flatMap",
+      calleeName: access.getText(),
+      args: [lowerer.lowerExprExpecting(argNode, DYN)],
+      type: DYN,
+      loc,
+    };
+  }
   const { fnArg, arity } = lowerArrayCallback(lowerer, argNode, [DYN], DYN);
   const ret = fnArg.type.ret;
   if (ret.kind !== "array") {
