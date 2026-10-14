@@ -1460,6 +1460,26 @@ export function lowerArrayFlatMapCall(
   const arrT = arrayOf(elem);
   const argNode = call.arguments[0];
   if (!argNode) lowerer.unsupported("SC1090", call, "this call form"); // tsc-guarded
+  // An any/unknown callback (`array.flatMap(Option.match({...}))`, where
+  // the data-last helper is an untyped JavaScript function) has no static
+  // signature. The runtime flatMap calls it with the element, index, and
+  // array and flattens array results one level, matching map/filter.
+  const callbackTs = lowerer.typeOf(argNode);
+  if (
+    (callbackTs.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0 &&
+    call.arguments.length <= 2 &&
+    call.arguments.every((arg) => !ts.isSpreadElement(arg))
+  ) {
+    return {
+      kind: "dynInvoke",
+      recv: lowerer.coerceToExpected(receiver, DYN),
+      method: "flatMap",
+      calleeName: access.getText(),
+      args: call.arguments.map((arg) => lowerer.lowerExprExpecting(arg, DYN)),
+      type: DYN,
+      loc,
+    };
+  }
   const present = presentElements(lowerer, call, elem);
   const { fnArg, arity } = lowerArrayCallback(
     lowerer,

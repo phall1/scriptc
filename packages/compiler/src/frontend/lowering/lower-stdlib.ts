@@ -40,7 +40,14 @@ import {
   unsupportedNativeApiDiag,
   unsupportedPackageValueDiag,
 } from "../../diagnostics/diagnostic.js";
-import { esmNamedImportLinkCrash, isCjsJsFile, locOf, npmPackageNameOf } from "../program.js";
+import {
+  esmNamedImportLinkCrash,
+  isCjsJsFile,
+  isJsSourceFile,
+  locOf,
+  npmPackageNameOf,
+} from "../program.js";
+import { npmStaticPackageOfPath } from "../npm-static.js";
 import { foldedStringKeyOf, lowerDynObjectLiteral } from "./expressions/object-literals.js";
 import { lowerStaticallyUndefinedArgument } from "./optional-arguments.js";
 import { PoisonError, newFnCtx, own } from "./lowerer.js";
@@ -2383,6 +2390,20 @@ export function lowerStaticReadableStreamReaderCall(
 export function lowerDynamicImportCall(lowerer: Lowerer, call: ts.CallExpression): IrExpr | null {
   if (call.expression.kind !== ts.SyntaxKind.ImportKeyword) return null;
   const arg = call.arguments[0];
+  // Opted-in package JavaScript evaluates a computed specifier and rejects.
+  // The module graph is still static, so the promise never loads an arbitrary
+  // runtime module. Effect's filesystem migrator builds this promise inside a
+  // loader the memory-queue cases never call. User TypeScript keeps the fence.
+  if (
+    arg !== undefined &&
+    !ts.isSpreadElement(arg) &&
+    !ts.isStringLiteralLike(arg) &&
+    call.arguments.length === 1 &&
+    isJsSourceFile(call.getSourceFile()) &&
+    npmStaticPackageOfPath(call.getSourceFile().fileName) !== null
+  ) {
+    return lowerNpmComputedImport(lowerer, call, arg);
+  }
   if (arg === undefined || !ts.isStringLiteralLike(arg)) {
     lowerer.unsupported(
       "SC1090",
@@ -2403,6 +2424,43 @@ export function lowerDynamicImportCall(lowerer: Lowerer, call: ts.CallExpression
     kind: "moduleNs",
     moduleId: `builtin:${res.module}`,
   });
+}
+
+/** Computed `import(expr)` inside an opted-in package. The specifier runs
+ * for its side effects, then the promise rejects. Nothing in the static
+ * module graph can host an arbitrary runtime specifier. */
+function lowerNpmComputedImport(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  arg: ts.Expression,
+): IrExpr {
+  const loc = locOf(call);
+  const spec = lowerer.lowerExpr(arg);
+  const mapped = lowerer.mapTypeOf(lowerer.typeOf(call));
+  const resultT: IrType = mapped?.kind === "promise" ? mapped : { kind: "promise", inner: DYN };
+  const reason = lowerer.coerceToExpected(
+    {
+      kind: "strLit",
+      value: "dynamic import() of a computed specifier is not available",
+      type: STRING,
+      loc,
+    },
+    DYN,
+  );
+  const rejected: IrExpr = {
+    kind: "intrinsic",
+    name: "promise.reject",
+    args: [reason],
+    type: resultT,
+    loc,
+  };
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "exprStmt", expr: spec, loc }],
+    result: rejected,
+    type: resultT,
+    loc,
+  };
 }
 
 /** The checker-resolved program source behind one literal import(). */
