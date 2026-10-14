@@ -3615,10 +3615,14 @@ function lowerDynReceiverMethodCall(
     !separatorAdmitsStringSplit(lowerer, call.arguments[0]);
   if (DYN_STRING_ONLY_METHODS.has(access.name.text) && !ownCallable && !objectSplit) {
     const checked = (): IrExpr => dynStringReceiver(lowerer, recv, access);
-    return (
+    const asString =
       lowerRegexMethodCall(lowerer, call, access, checked) ??
-      lowerStringMethodCall(lowerer, call, access, checked)
-    );
+      lowerStringMethodCall(lowerer, call, access, checked);
+    // A regex argument is String.prototype.match. A string argument is
+    // not: Effect stores `match` as an own property on registrations
+    // held in an implicit-any array (`template.match(uri)`). Declining
+    // the string form must keep the own-property call.
+    if (asString) return asString;
   }
   // The argument is a radix for bigint and an encoding for Buffer.
   // Preserve its runtime value so receiver dispatch can choose correctly.

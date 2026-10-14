@@ -1521,6 +1521,42 @@ console.log(make(undefined));
   }
 });
 
+test("a registration array calls match on each element", async () => {
+  await matchesNode(
+    "mcp-match",
+    `
+export function make() {
+  const regs = [];
+  const register = registration => {
+    regs.push(registration);
+  };
+  const read = uri => {
+    for (const template of regs) {
+      const params = template.match(uri);
+      if (params !== undefined && template.isVisible()) return template.read(uri, params);
+    }
+    return undefined;
+  };
+  const scan = value => value.match(/id/);
+  return { register, read, scan };
+}
+`,
+    `
+import { make } from "mcp-match/probe.js";
+const core = make();
+core.register({
+  match: (uri: string) => (uri === "/a" ? ["id"] : undefined),
+  isVisible: () => true,
+  read: (_uri: string, params: string[]) => params.join(","),
+});
+console.log(String(core.read("/a")));
+console.log(String(core.read("/b")));
+console.log(JSON.stringify(core.scan("id-1")));
+console.log(JSON.stringify(core.scan("none")));
+`,
+  );
+});
+
 test("metric keys sort entry names with localeCompare", async () => {
   await matchesNode(
     "metric-key",
