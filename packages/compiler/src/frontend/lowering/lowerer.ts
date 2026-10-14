@@ -437,6 +437,8 @@ import {
   lowerStaticReadableStreamCancelCall,
   lowerStaticReadableStreamControllerCall,
   lowerStaticReadableStreamNew,
+  lowerStaticWebSocketNew,
+  lowerStaticCompressionStreamNew,
   lowerStaticReadableStreamReaderCall,
   lowerStaticResponseCall,
   lowerStdlibMethodCall,
@@ -10618,7 +10620,9 @@ export class Lowerer {
       lowerAbortControllerNew(this, expr) ??
       lowerFetchWebNew(this, expr) ??
       lowerResponseNew(this, expr) ??
-      lowerStaticReadableStreamNew(this, expr);
+      lowerStaticReadableStreamNew(this, expr) ??
+      lowerStaticWebSocketNew(this, expr) ??
+      lowerStaticCompressionStreamNew(this, expr);
     return (
       builtin ?? this.withRuntimeOptionalClassValue(expr.expression, () => lowerNew(this, expr))
     );

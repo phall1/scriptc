@@ -1900,6 +1900,50 @@ export function lowerStaticReadableStreamNew(
   };
 }
 
+/** Evaluate constructor arguments, then refuse. These globals typecheck
+ * under `@types/node` and Effect mentions them from uncalled callbacks.
+ * Opening a socket or a compression stream has no native lowering. */
+function lowerRefusedWebConstructor(
+  lowerer: Lowerer,
+  expr: ts.NewExpression,
+  name: "WebSocket" | "CompressionStream",
+  message: string,
+): IrExpr | null {
+  if (stdlibGlobalNameOf(lowerer, expr.expression) !== name) return null;
+  const args = expr.arguments ?? [];
+  if (args.length > 2 || args.some((argument) => ts.isSpreadElement(argument))) return null;
+  const loc = locOf(expr);
+  const lowered = args.map((argument) =>
+    lowerer.coerceToExpected(lowerer.lowerExpr(argument), DYN),
+  );
+  if (lowered.some((value) => value.type.kind !== "dyn")) return null;
+  const refused = nodeThrowExpr(1, "", message, DYN, loc);
+  if (lowered.length === 0) return refused;
+  return {
+    kind: "seqExpr",
+    stmts: lowered.map((value): IrStmt => ({ kind: "exprStmt", expr: value, loc: value.loc })),
+    result: refused,
+    type: DYN,
+    loc,
+  };
+}
+
+export function lowerStaticWebSocketNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr | null {
+  return lowerRefusedWebConstructor(lowerer, expr, "WebSocket", "WebSocket is not supported");
+}
+
+export function lowerStaticCompressionStreamNew(
+  lowerer: Lowerer,
+  expr: ts.NewExpression,
+): IrExpr | null {
+  return lowerRefusedWebConstructor(
+    lowerer,
+    expr,
+    "CompressionStream",
+    "CompressionStream is not supported",
+  );
+}
+
 /** Native Request and Headers values share the fetch runtime's handles. */
 export function lowerFetchWebNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr | null {
   const name = stdlibGlobalNameOf(lowerer, expr.expression);
