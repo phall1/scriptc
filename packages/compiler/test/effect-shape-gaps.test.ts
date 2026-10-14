@@ -1022,6 +1022,48 @@ test("Number.parseFloat stringifies an unknown argument", async () => {
   await matchesNode("parse-float-fixture", parseFloatProbe, parseFloatProgram);
 });
 
+const flatMapUnionProbe = `
+export class Filter {
+  constructor(name) {
+    this.name = name;
+    this.kind = "f";
+  }
+}
+export class Group {
+  constructor(name) {
+    this.name = name;
+    this.kind = "g";
+  }
+}
+/**
+ * @param {{ _tag: string, name: string }} check
+ * @returns {Filter[] | Group[]}
+ */
+export function compilerCheck(check) {
+  if (check._tag === "Filter") return [new Filter(check.name)];
+  return [new Group(check.name)];
+}
+export function run(checks) {
+  return checks.flatMap(compilerCheck).map((item) => item.kind + item.name).join(",");
+}
+`;
+
+const flatMapUnionProgram = `
+import { run } from "flatmap-union-fixture/probe.js";
+
+const checks: unknown = [
+  { _tag: "Filter", name: "a" },
+  { _tag: "Other", name: "b" },
+];
+const empty: unknown = [];
+console.log(run(checks));
+console.log(run(empty));
+`;
+
+test("flatMap concatenates a union of array returns", async () => {
+  await matchesNode("flatmap-union-fixture", flatMapUnionProbe, flatMapUnionProgram);
+});
+
 const varyProbe = `
 export function varyWith(headers, dimension) {
   const vary = headers["vary"];

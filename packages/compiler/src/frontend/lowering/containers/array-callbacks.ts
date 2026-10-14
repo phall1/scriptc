@@ -22,6 +22,7 @@ import {
   arrayOf,
   funcOf,
   isSortValuesElement,
+  isSupportedArrayElem,
   isUnitType,
   typeEquals,
 } from "../../../ir/ir.js";
@@ -2202,6 +2203,25 @@ export function lowerDynArrayFlatMapCall(
         loc,
       };
     }
+    // `checks.flatMap(compilerCheck)` returns `Filter[] | FilterGroup[]`.
+    // Each arm is already an array; concatenate them into one array whose
+    // element is the union of those element types.
+    const joined = ret.kind === "union" ? joinedArrayUnionElement(lowerer, ret) : null;
+    if (ret.kind === "union" && joined) {
+      const helper = unionArrayFlatMapHelper(lowerer, ret, joined, arity, loc);
+      return {
+        kind: "call",
+        callee: helper,
+        args: [
+          recv,
+          fnArg,
+          { kind: "strLit", value: access.name.text, type: STRING, loc },
+          { kind: "strLit", value: access.getText(), type: STRING, loc },
+        ],
+        type: arrayOf(joined),
+        loc,
+      };
+    }
     lowerer.unsupported(
       "SC1090",
       call,
@@ -2221,6 +2241,250 @@ export function lowerDynArrayFlatMapCall(
       { kind: "strLit", value: access.getText(), type: STRING, loc },
     ],
     type: arrayOf(ret.elem),
+    loc,
+  };
+}
+
+/** Element type of a callback that returns a union of arrays, or null when
+ * an arm is not an array or its element cannot live in one result array. */
+function joinedArrayUnionElement(lowerer: Lowerer, ret: IrType & { kind: "union" }): IrType | null {
+  const arms = lowerer.unions.get(ret.unionId)?.arms;
+  if (!arms || arms.length === 0 || arms.some((arm) => arm.kind !== "array")) return null;
+  const elems = arms.map((arm) => (arm.kind === "array" ? arm.elem : DYN));
+  if (elems.some((elem) => !isSupportedArrayElem(elem) || elem.kind === "union")) return null;
+  const first = elems[0]!;
+  if (elems.every((elem) => typeEquals(elem, first))) return first;
+  return { kind: "union", unionId: lowerer.unions.intern(elems) };
+}
+
+function unionArrayFlatMapHelper(
+  lowerer: Lowerer,
+  ret: IrType & { kind: "union" },
+  elemT: IrType,
+  arity: number,
+  loc: SrcLoc,
+): string {
+  const key = `unionflatmap:${ret.unionId}:${typeKey(elemT)}:${arity}`;
+  const existing = lowerer.arrHofHelpers.get(key);
+  if (existing) return existing;
+  const name = `%union.flatmap.${lowerer.arrHofHelpers.size}`;
+  lowerer.arrHofHelpers.set(key, name);
+  lowerer.liftedFns.push(buildUnionArrayFlatMapFn(lowerer, name, ret, elemT, arity, loc));
+  return name;
+}
+
+/** Same receiver walk as the single-array flatMap helper. The callback's
+ * union of arrays is narrowed arm by arm, and each element is wrapped into
+ * the joined element type before it is pushed. */
+function buildUnionArrayFlatMapFn(
+  lowerer: Lowerer,
+  name: string,
+  ret: IrType & { kind: "union" },
+  elemT: IrType,
+  arity: number,
+  loc: SrcLoc,
+): IrFunction {
+  const outT = arrayOf(elemT);
+  const fnT = funcOf([DYN, F64, DYN].slice(0, arity), ret);
+  const arms = lowerer.unions.get(ret.unionId)?.arms ?? [];
+  const d = varRef("d.0", DYN, loc);
+  const r = varRef("r.0", ret, loc);
+  let chain: IrStmt | null = null;
+  for (let tag = arms.length - 1; tag >= 0; tag--) {
+    const arm = arms[tag]!;
+    if (arm.kind !== "array") throw new InternalCompilerError("union flatMap arm is not an array");
+    const narrowed = (): IrExpr => ({
+      kind: "unionNarrow",
+      value: r,
+      unionId: ret.unionId,
+      tag,
+      type: arm,
+      loc,
+    });
+    const wrapTag = elemT.kind === "union" ? lowerer.armTag(elemT.unionId, arm.elem) : tag;
+    if (!typeEquals(arm.elem, elemT) && wrapTag < 0) {
+      throw new InternalCompilerError("union flatMap element is not an arm of the joined element");
+    }
+    const element: IrExpr = {
+      kind: "arrayGet",
+      arr: narrowed(),
+      index: varRef("j.0", F64, loc),
+      type: arm.elem,
+      loc,
+    };
+    const stored: IrExpr = typeEquals(arm.elem, elemT)
+      ? element
+      : {
+          kind: "unionWrap",
+          value: element,
+          unionId: elemT.kind === "union" ? elemT.unionId : ret.unionId,
+          tag: wrapTag,
+          type: elemT,
+          loc,
+        };
+    const copy: IrStmt = {
+      kind: "block",
+      body: [
+        {
+          kind: "varDecl",
+          localId: "rn.0",
+          init: {
+            kind: "arrIntrinsic",
+            method: "length",
+            receiver: narrowed(),
+            args: [],
+            type: F64,
+            loc,
+          },
+          loc,
+        },
+        {
+          kind: "for",
+          init: { kind: "varDecl", localId: "j.0", init: numLit(0, loc), loc },
+          cond: {
+            kind: "bin",
+            op: "<",
+            left: varRef("j.0", F64, loc),
+            right: varRef("rn.0", F64, loc),
+            type: BOOL,
+            loc,
+          },
+          update: {
+            kind: "assign",
+            localId: "j.0",
+            value: {
+              kind: "bin",
+              op: "+",
+              left: varRef("j.0", F64, loc),
+              right: numLit(1, loc),
+              type: F64,
+              loc,
+            },
+            loc,
+          },
+          body: [
+            {
+              kind: "exprStmt",
+              expr: {
+                kind: "arrIntrinsic",
+                method: "push",
+                receiver: varRef("out.0", outT, loc),
+                args: [stored],
+                type: F64,
+                loc,
+              },
+              loc,
+            },
+          ],
+          loc,
+        },
+      ],
+      loc,
+    };
+    chain = {
+      kind: "if",
+      cond: {
+        kind: "unionIsTag",
+        unionId: ret.unionId,
+        tag,
+        negated: false,
+        value: r,
+        type: BOOL,
+        loc,
+      },
+      then: [copy],
+      else_: chain === null ? null : [chain],
+      loc,
+    };
+  }
+  const body: IrStmt[] = [
+    {
+      kind: "if",
+      cond: { kind: "dynTest", test: "array", negated: true, value: d, type: BOOL, loc },
+      then: dynamicReceiverThrows(
+        d,
+        varRef("m.0", STRING, loc),
+        varRef("full.0", STRING, loc),
+        loc,
+      ),
+      else_: null,
+      loc,
+    },
+    {
+      kind: "varDecl",
+      localId: "n.0",
+      init: {
+        kind: "dynCheck",
+        value: {
+          kind: "dynKeyGet",
+          key: { kind: "strLit", value: "length", type: STRING, loc },
+          value: d,
+          type: DYN,
+          loc,
+        },
+        type: F64,
+        loc,
+      },
+      loc,
+    },
+    {
+      kind: "varDecl",
+      localId: "out.0",
+      init: { kind: "arrayLit", elems: [], type: outT, loc },
+      loc,
+    },
+    countedFor(loc, varRef("n.0", F64, loc), () => [
+      {
+        kind: "varDecl",
+        localId: "v.0",
+        init: {
+          kind: "dynKeyGet",
+          key: { kind: "toString", operand: varRef("i.0", F64, loc), type: STRING, loc },
+          value: d,
+          type: DYN,
+          loc,
+        },
+        loc,
+      },
+      {
+        kind: "varDecl",
+        localId: "r.0",
+        init: {
+          kind: "callValue",
+          callee: varRef("f.0", fnT, loc),
+          args: [varRef("v.0", DYN, loc), varRef("i.0", F64, loc), d].slice(0, arity),
+          type: ret,
+          loc,
+        },
+        loc,
+      },
+      chain ?? { kind: "block", body: [], loc },
+    ]),
+    { kind: "return", value: varRef("out.0", outT, loc), loc },
+  ];
+  return {
+    name,
+    params: [
+      { localId: "d.0", name: "d", type: DYN },
+      { localId: "f.0", name: "f", type: fnT },
+      { localId: "m.0", name: "m", type: STRING },
+      { localId: "full.0", name: "full", type: STRING },
+    ],
+    returnType: outT,
+    locals: [
+      { id: "d.0", name: "d", type: DYN, mutable: false },
+      { id: "f.0", name: "f", type: fnT, mutable: false },
+      { id: "m.0", name: "m", type: STRING, mutable: false },
+      { id: "full.0", name: "full", type: STRING, mutable: false },
+      { id: "n.0", name: "n", type: F64, mutable: false },
+      { id: "i.0", name: "i", type: F64, mutable: true },
+      { id: "v.0", name: "v", type: DYN, mutable: false },
+      { id: "r.0", name: "r", type: ret, mutable: false },
+      { id: "rn.0", name: "rn", type: F64, mutable: true },
+      { id: "j.0", name: "j", type: F64, mutable: true },
+      { id: "out.0", name: "out", type: outT, mutable: false },
+    ],
+    body,
     loc,
   };
 }
