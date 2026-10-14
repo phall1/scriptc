@@ -1051,3 +1051,60 @@ for (const sample of [0n, 1n, -1n, -2n, 300n] as unknown[]) {
 test("varint updates and zigzag negation keep bigint kinds", async () => {
   await matchesNode("varint-fixture", varintProbe, varintProgram);
 });
+
+const readerVarintProbe = `
+const BIGINT_ZERO = BigInt(0);
+const BIGINT_ONE = BigInt(1);
+const BIGINT_SEVEN = BigInt(7);
+
+class Reader {
+  buf;
+  pos = 0;
+  end = 0;
+  constructor(bytes) {
+    this.buf = bytes;
+    this.end = bytes.length;
+  }
+  byte() {
+    if (this.pos >= this.end) throw new Error("complete value");
+    return this.buf[this.pos++];
+  }
+  uvarintBig() {
+    let value = BIGINT_ZERO;
+    let shift = BIGINT_ZERO;
+    while (true) {
+      const b = this.byte();
+      value |= BigInt(b & 0x7F) << shift;
+      if ((b & 0x80) === 0) return value;
+      shift += BIGINT_SEVEN;
+    }
+  }
+  numberVarint() {
+    const code = this.uvarintBig();
+    const magnitude = Number(code >> BIGINT_ONE);
+    return (code & BIGINT_ONE) === BIGINT_ONE ? -magnitude : magnitude;
+  }
+  zigzag() {
+    const u = this.uvarintBig();
+    return (u & BIGINT_ONE) === BIGINT_ONE ? -(u + BIGINT_ONE >> BIGINT_ONE) : u >> BIGINT_ONE;
+  }
+}
+
+export function decode(bytes) {
+  const numberReader = new Reader(Uint8Array.from(bytes));
+  const zigzagReader = new Reader(Uint8Array.from(bytes));
+  return numberReader.numberVarint() + "," + zigzagReader.zigzag().toString();
+}
+`;
+
+const readerVarintProgram = `
+import { decode } from "reader-varint-fixture/probe.js";
+
+for (const bytes of [[0x05], [0x80, 0x01], [0x01], [0xff, 0x01]]) {
+  console.log(decode(bytes));
+}
+`;
+
+test("a while-true bigint decoder keeps its return kind", async () => {
+  await matchesNode("reader-varint-fixture", readerVarintProbe, readerVarintProgram);
+});
