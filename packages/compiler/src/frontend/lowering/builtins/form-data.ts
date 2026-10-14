@@ -1,7 +1,14 @@
-import { dynUndefinedExpr } from "../../../ir/build.js";
-import type { IrExpr, IrFunction, IrType, SrcLoc } from "../../../ir/ir.js";
-import { DYN, STRING } from "../../../ir/ir.js";
-import { locOf } from "../../program.js";
+import { dynUndefinedExpr, varRef } from "../../../ir/build.js";
+import {
+  BOOL,
+  DYN,
+  STRING,
+  type IrExpr,
+  type IrFunction,
+  type IrType,
+  type SrcLoc,
+} from "../../../ir/ir.js";
+import { isJsSourceFile, locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
 import * as ts from "../../ts7/adapter.js";
 
@@ -100,6 +107,15 @@ function ensureFormDataFactory(lowerer: Lowerer, loc: SrcLoc): void {
           kind: "dynObjLit",
           fields: [
             {
+              key: str("%formData"),
+              value: {
+                kind: "dynFrom",
+                value: { kind: "boolLit", value: true, type: BOOL, loc },
+                type: DYN,
+                loc,
+              },
+            },
+            {
               key: str("append"),
               value: {
                 kind: "dynFrom",
@@ -141,4 +157,63 @@ function ensureFormDataFactory(lowerer: Lowerer, loc: SrcLoc): void {
     loc,
   };
   lowerer.liftedFns.push(append, readEntries, wrap);
+}
+
+/** The same FormData constructor `new FormData()` lowers: the stdlib global,
+ * or a free JavaScript name that no user declaration shadows. */
+export function isScriptcFormDataConstructor(lowerer: Lowerer, expr: ts.Expression): boolean {
+  if (!ts.isIdentifier(expr) || expr.text !== "FormData") return false;
+  if (!isJsSourceFile(expr.getSourceFile()) && !lowerer.isStdlibGlobal(expr, "FormData"))
+    return false;
+  const symbol = lowerer.checker.getSymbolAtLocation(expr);
+  const declarations = symbol ? lowerer.checker.declarationsOf(symbol) : [];
+  return !declarations.some((decl) => !lowerer.isStdlibFile(decl.getSourceFile()));
+}
+
+/** `value instanceof FormData`. scriptc FormData values are checked-dynamic
+ * objects carrying the reserved `%formData` marker. Nullish receivers answer
+ * false without reading the marker; every other kind misses the key. */
+export function lowerFormDataInstanceOf(
+  lowerer: Lowerer,
+  expr: ts.BinaryExpression,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (!isScriptcFormDataConstructor(lowerer, expr.right)) return null;
+  const left = lowerer.lowerExpr(expr.left);
+  const value = left.type.kind === "dyn" ? left : lowerer.coerceInto(expr.left, left, DYN);
+  const local = lowerer.declareHiddenLocal("%formDataValue", DYN);
+  const reference = varRef(local.id, DYN, loc);
+  const brand: IrExpr = {
+    kind: "dynKeyGet",
+    value: reference,
+    key: { kind: "strLit", value: "%formData", type: STRING, loc },
+    type: DYN,
+    loc,
+  };
+  const present: IrExpr = {
+    kind: "dynScalarEq",
+    left: brand,
+    right: {
+      kind: "dynFrom",
+      value: { kind: "boolLit", value: true, type: BOOL, loc },
+      type: DYN,
+      loc,
+    },
+    type: BOOL,
+    loc,
+  };
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "varDecl", localId: local.id, init: value, loc }],
+    result: {
+      kind: "ternary",
+      cond: { kind: "dynTest", test: "nullish", value: reference, type: BOOL, loc },
+      then: { kind: "boolLit", value: false, type: BOOL, loc },
+      else_: present,
+      type: BOOL,
+      loc,
+    },
+    type: BOOL,
+    loc,
+  };
 }

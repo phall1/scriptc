@@ -5502,10 +5502,42 @@ function constantFalsy(expr: IrExpr): { effects: IrStmt[] } | null {
   return null;
 }
 
+/** A dyn value that is a null or undefined literal, through effect wrappers.
+ * A missing specialized record field reads as `dynFrom(undefined)`. */
+function knownNullishLiteral(expr: IrExpr): {
+  unit: "null" | "undefined";
+  effects: IrStmt[];
+} | null {
+  if (expr.kind === "unitLit") return { unit: expr.unit, effects: [] };
+  if (expr.kind === "dynFrom" && expr.value.kind === "unitLit") {
+    return { unit: expr.value.unit, effects: [] };
+  }
+  if (expr.kind === "seqExpr") {
+    const inner = knownNullishLiteral(expr.result);
+    if (inner === null) return null;
+    return { unit: inner.unit, effects: [...expr.stmts, ...inner.effects] };
+  }
+  return null;
+}
+
+/** `missing !== undefined` on a specialized option record is a constant.
+ * The comparison lowers to a dyn kind test of that undefined literal, and
+ * the guarded call must not lower in the dead arm. */
+function foldedNullishDynTest(expr: IrExpr): { value: boolean; effects: IrStmt[] } | null {
+  if (expr.kind !== "dynTest") return null;
+  if (expr.test !== "undefined" && expr.test !== "null" && expr.test !== "nullish") return null;
+  const known = knownNullishLiteral(expr.value);
+  if (known === null) return null;
+  const matches = expr.test === "nullish" || known.unit === expr.test;
+  return { value: expr.negated === true ? !matches : matches, effects: known.effects };
+}
+
 function foldedCondition(expr: IrExpr): { value: boolean; effects: IrStmt[] } | null {
   if (expr.kind === "boolLit") return { value: expr.value, effects: [] };
   const falsy = constantFalsy(expr);
   if (falsy !== null) return { value: false, effects: falsy.effects };
+  const nullish = foldedNullishDynTest(expr);
+  if (nullish !== null) return nullish;
   if (expr.kind === "seqExpr") {
     const inner = foldedCondition(expr.result);
     if (inner === null) return null;

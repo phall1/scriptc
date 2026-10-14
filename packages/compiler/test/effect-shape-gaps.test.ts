@@ -153,6 +153,63 @@ test("a missing option method is not called", async () => {
   await matchesNode("options-fixture", optionsProbe, optionsProgram);
 });
 
+const annotationProbe = `
+export function selected(annotations, options) {
+  const keys = [];
+  if (options?.includeAnnotationKey !== undefined) {
+    for (const key of Object.keys(annotations)) {
+      if (options.includeAnnotationKey(key)) keys.push(key);
+    }
+  }
+  return keys;
+}
+`;
+
+const annotationProgram = `
+import { selected } from "annotation-fixture/probe.js";
+
+const annotations = { title: "A", markdownDescription: "B" };
+console.log(JSON.stringify(selected(annotations, { onExcessProperty: "error" })));
+console.log(JSON.stringify(selected(annotations, {
+  includeAnnotationKey: (key: string) => key.startsWith("markdown"),
+})));
+`;
+
+test("an omitted annotation predicate is not called", async () => {
+  await matchesNode("annotation-fixture", annotationProbe, annotationProgram);
+});
+
+const schemaCellProbe = `
+export function cell(references, key) {
+  const compiled = new Map();
+  function compileDefinition(name, path) {
+    const cached = compiled.get(name);
+    if (cached !== undefined) return cached;
+    const result = [{}, []];
+    compiled.set(name, result);
+    const local = [];
+    local.push(path[0]);
+    result[1].push(local);
+    result[1].push(false);
+    result[0] = { tag: path[0] };
+    return result;
+  }
+  return compileDefinition(key, ["references", key]);
+}
+`;
+
+const schemaCellProgram = `
+import { cell } from "schema-cell-fixture/probe.js";
+
+const value = cell({ a: { _tag: "Any" } }, "a");
+console.log(JSON.stringify(value[0]));
+console.log(JSON.stringify(value[1]));
+`;
+
+test("a heterogeneous schema cell stays checked-dynamic", async () => {
+  await matchesNode("schema-cell-fixture", schemaCellProbe, schemaCellProgram);
+});
+
 test("Object.keys and object spread of Error match Node", async () => {
   await matchesNode("error-spread-fixture", errorProbe, errorProgram);
 });
@@ -340,6 +397,31 @@ console.log(isBlob({ a: 1 }));
 
 test("empty FormData append and entries match Node", async () => {
   await matchesNode("form-data-fixture", formProbe, formProgram);
+});
+
+const formIdentityProbe = `
+export function checks(value) {
+  const own = new FormData();
+  own.append("a", "1");
+  return JSON.stringify([
+    typeof FormData,
+    own instanceof FormData,
+    value instanceof FormData,
+    null instanceof FormData,
+    typeof FormData !== "undefined" && own instanceof FormData,
+  ]);
+}
+`;
+
+const formIdentityProgram = `
+import { checks } from "form-identity-fixture/probe.js";
+
+console.log(checks("x"));
+console.log(checks({ a: 1 }));
+`;
+
+test("FormData identity matches Node", async () => {
+  await matchesNode("form-identity-fixture", formIdentityProbe, formIdentityProgram);
 });
 
 const searchProgram = `

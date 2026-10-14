@@ -217,6 +217,7 @@ import {
   lowerStringCodesValue,
 } from "./lower-builtin-values.js";
 import { lowerArrayFromValue } from "./containers/array-construction.js";
+import { isScriptcFormDataConstructor, lowerFormDataInstanceOf } from "./builtins/form-data.js";
 import { lowerPerfHooksTypeof } from "./builtins/performance.js";
 import { lowerUrlAssignment } from "./builtins/url.js";
 import { jsBindingHasOpenWrites } from "./lower-stmts.js";
@@ -753,6 +754,15 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     while (ts.isParenthesizedExpression(tested)) tested = tested.expression;
     if (ts.isIdentifier(tested)) {
       const sym = lowerer.checker.getSymbolAtLocation(tested);
+      if (
+        tested.text === "FormData" &&
+        isJsSourceFile(tested.getSourceFile()) &&
+        !(sym ? lowerer.checker.declarationsOf(sym) : []).some(
+          (decl) => !lowerer.isStdlibFile(decl.getSourceFile()),
+        )
+      ) {
+        return { kind: "strLit", value: "function", type: STRING, loc };
+      }
       if (!sym) {
         return { kind: "strLit", value: "undefined", type: STRING, loc };
       }
@@ -5966,9 +5976,13 @@ export function lowerArrayLiteral(
   ) {
     const elements = expr.elements.map((element) => tryLowerExpression(lowerer, element));
     const first = elements[0];
+    // A shared dyn element (`[{}, []]` widened by the checker to `{}[]`)
+    // is the checked-dynamic array, not a native array of unknown. The
+    // native form cannot enter the empty-record array the widening names.
     if (
       first !== undefined &&
       first !== null &&
+      first.type.kind !== "dyn" &&
       isSupportedArrayElem(first.type) &&
       elements.every((element) => element !== null && typeEquals(element.type, first.type))
     ) {
@@ -11836,6 +11850,28 @@ function lowerDynTypeofTest(
     // Non-literal comparisons use the ordinary typeof string value,
     // preserving both operands' evaluation order without a narrowing test.
     if (!ts.isStringLiteral(b)) continue;
+    // `typeof FormData` is "function" even when the name has no value
+    // binding. Reading it here would throw ReferenceError before the
+    // comparison.
+    if (isScriptcFormDataConstructor(lowerer, a.expression)) {
+      if (
+        b.text === "function" ||
+        b.text === "undefined" ||
+        b.text === "object" ||
+        b.text === "string" ||
+        b.text === "number" ||
+        b.text === "boolean" ||
+        b.text === "bigint" ||
+        b.text === "symbol"
+      ) {
+        return {
+          kind: "boolLit",
+          value: b.text === "function" ? !negated : negated,
+          type: BOOL,
+          loc,
+        };
+      }
+    }
     const declared = lowerer.mapTypeOf(lowerer.typeOf(a.expression));
     let value: IrExpr;
     if (declared?.kind === "dyn") {
@@ -12480,6 +12516,8 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
         "statically-decided 'instanceof' on computed operands (bind the values to variables first)",
       );
     }
+    const formData = lowerFormDataInstanceOf(lowerer, expr, loc);
+    if (formData) return formData;
     if (
       ts.isIdentifier(expr.right) &&
       (lowerer.isStdlibGlobal(expr.right, "Blob") || lowerer.isStdlibGlobal(expr.right, "File"))
