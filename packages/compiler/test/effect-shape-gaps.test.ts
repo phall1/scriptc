@@ -1135,3 +1135,58 @@ console.log(readLocation());
 test("a guarded bare location matches Node", async () => {
   await matchesNode("location-fixture", locationProbe, locationProgram);
 });
+
+const routerSplitProbe = `
+class RouteNode {
+  constructor(prefix) {
+    this.prefix = prefix;
+  }
+  prefix;
+  split(parent, length) {
+    const parentPrefix = this.prefix.slice(0, length);
+    const childPrefix = this.prefix.slice(length);
+    this.prefix = childPrefix;
+    const created = new RouteNode(parentPrefix);
+    created.child = this;
+    parent.kids[parentPrefix.charAt(0)] = created;
+    return created;
+  }
+}
+export class RouteParent {
+  constructor() {
+    this.kids = Object.create(null);
+  }
+  kids;
+  add(path) {
+    let child = this.kids[path.charAt(0)];
+    if (child) {
+      let index = 1;
+      for (; index < child.prefix.length; index++) {
+        if (path.charCodeAt(index) !== child.prefix.charCodeAt(index)) {
+          child = child.split(this, index);
+          break;
+        }
+      }
+      return child.prefix + ":" + String(index) + ":" + child.child.prefix;
+    }
+    this.kids[path.charAt(0)] = new RouteNode(path);
+    return "new:" + path;
+  }
+}
+export function cut(value) {
+  return value.split(",")[0];
+}
+`;
+
+const routerSplitProgram = `
+import { RouteParent, cut } from "router-split-fixture/probe.js";
+
+const parent = new RouteParent();
+console.log(parent.add("items"));
+console.log(parent.add("index"));
+console.log(cut("alpha,beta"));
+`;
+
+test("a dictionary node split is the instance method", async () => {
+  await matchesNode("router-split-fixture", routerSplitProbe, routerSplitProgram);
+});

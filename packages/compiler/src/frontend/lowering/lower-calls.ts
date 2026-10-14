@@ -3598,7 +3598,16 @@ function lowerDynReceiverMethodCall(
   // these, "the receiver is a string, or the call throws V8's TypeError"
   // IS Node's semantics for every possible dyn value. Shared names would
   // need a receiver-kind dispatch — they keep the fence.
-  if (DYN_STRING_ONLY_METHODS.has(access.name.text) && !ownCallable) {
+  // `split` is the exception when the separator is a class value. Effect's
+  // router stores StaticNode instances in an untyped dictionary and calls
+  // `staticChild.split(parent, index)`. That is the instance method, and a
+  // ParentNode separator cannot be String.prototype.split's separator.
+  const objectSplit =
+    access.name.text === "split" &&
+    !call.arguments.some((arg) => ts.isSpreadElement(arg)) &&
+    call.arguments[0] !== undefined &&
+    !separatorAdmitsStringSplit(lowerer, call.arguments[0]);
+  if (DYN_STRING_ONLY_METHODS.has(access.name.text) && !ownCallable && !objectSplit) {
     const checked = (): IrExpr => dynStringReceiver(lowerer, recv, access);
     return (
       lowerRegexMethodCall(lowerer, call, access, checked) ??
@@ -4138,6 +4147,26 @@ export function lowerDynDispatchMethodCall(
     type: DYN,
     loc: locOf(call),
   };
+}
+
+/** A String.prototype.split separator is a string, a primitive that
+ * ToStrings, or a regex. A class or record separator is a different method
+ * that happens to be named split. */
+function separatorAdmitsStringSplit(lowerer: Lowerer, node: ts.Expression): boolean {
+  const mapped = lowerer.mapTypeOf(lowerer.typeOf(node));
+  if (mapped === null || mapped.kind === "dyn" || mapped.kind === "regex") return true;
+  const admits = (type: IrType): boolean =>
+    type.kind === "string" ||
+    type.kind === "f64" ||
+    type.kind === "bool" ||
+    type.kind === "bigint" ||
+    type.kind === "nullT" ||
+    type.kind === "undefinedT" ||
+    type.kind === "dyn" ||
+    type.kind === "regex" ||
+    (type.kind === "union" &&
+      (lowerer.unions.get(type.unionId)?.arms.every(admits) ?? false));
+  return admits(mapped);
 }
 
 /** STR_METHODS ∪ the regex-form names, MINUS everything Array (or any
