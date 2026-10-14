@@ -89,6 +89,7 @@ import {
 } from "./binding-analysis.js";
 import { funcTypeFromParamShapes, registerOverloadedCallableAlias } from "./call-signatures.js";
 import {
+  inferredEvolvingLetType,
   jsBindingHasOpenWrites,
   ambientFetchAnnotation,
   hasJsTypeAnnotation,
@@ -2005,11 +2006,16 @@ export function collectGlobals(
             dynFallbackType(lowerer, nameNode, lowerer.typeOf(nameNode))?.kind === "dyn"
           ) {
             const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
+            // An evolving `let` whose only writes are one concrete value
+            // (`sharedTextDecoder ??= new TextDecoder()`) keeps that
+            // value. A checked-dynamic slot would refuse the codec record.
+            const evolved =
+              isLet && !decl.initializer ? inferredEvolvingLetType(lowerer, decl) : null;
             if (symbol && !lowerer.globalsBySymbol.has(symbol)) {
               const g: IrGlobal = {
                 id: `%g.${tag}${nsPrefix}${nameNode.text}`,
                 name: nameNode.text,
-                type: DYN,
+                type: evolved ?? DYN,
                 mutable: isLet,
                 source: bindingSource(nameNode),
               };
@@ -2018,8 +2024,9 @@ export function collectGlobals(
               // Mutable dyn globals hold the dyn undefined from module
               // entry (the main path's rule below): a closure called
               // above the declaration reads undefined instead of
-              // faulting on NULL.
-              if (g.mutable) noteVarGlobalEntryInit(lowerer, sf, g);
+              // faulting on NULL. A recovered union initializes when its
+              // `let` statement runs.
+              if (g.mutable && g.type.kind === "dyn") noteVarGlobalEntryInit(lowerer, sf, g);
             }
             continue;
           }
@@ -2320,6 +2327,23 @@ export function collectGlobals(
             type = unitOnlyUnion(lowerer.unions);
           }
           if (type.kind === "void") lowerer.badType(nameNode, lowerer.typeOf(nameNode));
+          // `let sharedTextDecoder;` at module scope is an evolving any.
+          // A later `??= new TextDecoder()` is the only write, and the
+          // nullish assignment exists because the slot may still be empty.
+          // Keep the codec record (with an undefined arm) so the write is
+          // not a typed value entering an unknown slot.
+          if (
+            isJsSourceFile(sf) &&
+            isLet &&
+            !decl.initializer &&
+            !decl.type &&
+            !hasJsTypeAnnotation(decl) &&
+            type.kind === "dyn" &&
+            ts.isIdentifier(decl.name) &&
+            nameNode === decl.name
+          ) {
+            type = inferredEvolvingLetType(lowerer, decl) ?? type;
+          }
           // A JS file-scope FUNCTION binding whose unannotated return
           // infers a record (`const wrapped = function () { return
           // expectedResult; }`): the closure VALUE lowers with a dyn

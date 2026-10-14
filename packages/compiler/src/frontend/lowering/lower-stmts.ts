@@ -3937,7 +3937,10 @@ export function lowerVarDeclList(
  * observe the local before that write, and `??=` exists because the slot
  * may still be empty, so those bindings keep an undefined arm instead of
  * staying a checked-dynamic value the concrete write cannot enter. */
-function inferredEvolvingLetType(lowerer: Lowerer, decl: ts.VariableDeclaration): IrType | null {
+export function inferredEvolvingLetType(
+  lowerer: Lowerer,
+  decl: ts.VariableDeclaration,
+): IrType | null {
   if (!ts.isIdentifier(decl.name)) return null;
   const symbol = lowerer.checker.getSymbolAtLocation(decl.name);
   const scope = decl.parent?.parent?.parent;

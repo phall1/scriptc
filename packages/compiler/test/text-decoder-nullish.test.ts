@@ -24,6 +24,42 @@ const chunk = new Uint8Array([97, 98, 99]);
 console.log(JSON.stringify([decoder.decode("hi"), decoder.decode(chunk), decoder.decode(chunk)]));
 `;
 
+const moduleSource = `
+let sharedTextDecoder;
+const decodeText = (bytes) => (sharedTextDecoder ??= new TextDecoder()).decode(bytes);
+export function go(bytes) {
+  return typeof bytes === "string" ? bytes : decodeText(bytes);
+}
+const chunk = new Uint8Array([97, 98, 99]);
+console.log(JSON.stringify([go("hi"), go(chunk), go(chunk)]));
+`;
+
+test("a module-level JavaScript TextDecoder survives ??=", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-text-decoder-module-"));
+  const entry = join(directory, "main.js");
+  const binary = join(directory, "main");
+  writeFileSync(entry, moduleSource);
+  try {
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, [entry], { encoding: "utf8", timeout: 30_000 });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(oracle.stdout).toBe('["hi","abc","abc"]\n');
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 180_000);
+
 test("a captured JavaScript TextDecoder survives ??= and streams bytes", async () => {
   const directory = mkdtempSync(join(tmpdir(), "scriptc-text-decoder-"));
   const entry = join(directory, "main.js");
