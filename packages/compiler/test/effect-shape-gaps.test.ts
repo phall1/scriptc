@@ -424,6 +424,44 @@ test("FormData identity matches Node", async () => {
   await matchesNode("form-identity-fixture", formIdentityProbe, formIdentityProgram);
 });
 
+const promptMaxProbe = `
+export function Int(options) {
+  const opts = {
+    min: -Infinity,
+    max: Infinity,
+    ...options,
+  };
+  return opts.max;
+}
+export function count(metadata) {
+  let reads = 0;
+  const source = {
+    get max() {
+      reads++;
+      return metadata.max;
+    },
+  };
+  const result = Int({
+    message: "count",
+    default: 0,
+    min: 0,
+    ...(metadata.hasMax ? { max: source.max } : {}),
+  });
+  return result + ":" + reads;
+}
+`;
+
+const promptMaxProgram = `
+import { count } from "prompt-max-fixture/probe.js";
+
+console.log(count({ hasMax: true, max: 3 }));
+console.log(count({ hasMax: false, max: 9 }));
+`;
+
+test("a conditional spread omits an optional any field", async () => {
+  await matchesNode("prompt-max-fixture", promptMaxProbe, promptMaxProgram);
+});
+
 const searchProgram = `
 console.log("a.b".search("."));
 console.log("abc".search("b"));

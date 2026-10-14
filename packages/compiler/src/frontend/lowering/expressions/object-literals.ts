@@ -291,6 +291,41 @@ export function lowerDynObjectLiteral(
       continue;
     }
     if (ts.isSpreadAssignment(prop)) {
+      // `...(c ? { k: v } : {})` — copy the carrier only when its arm is
+      // taken. Lowering the joined type would materialize `k: undefined`
+      // on the empty arm, and a later object spread would keep that key.
+      const spread = conditionalSpreadOf(prop.expression);
+      if (spread && spread !== "unsupported" && spread.props.length === 1) {
+        flushFields();
+        acc ??= { kind: "dynObjLit", fields: [], type: DYN, loc };
+        const saved = lowerer.declareHiddenLocal("%condSpread", DYN);
+        const base = varRef(saved.id, DYN, locOf(prop));
+        const carrier = lowerer.lowerExprExpecting(spread.carrier, DYN);
+        const copied: IrExpr = {
+          kind: "libCall",
+          fn: "dyn.copyDataProperties",
+          args: [base, carrier],
+          type: DYN,
+          loc: locOf(prop),
+        };
+        const taken = spread.whenTrue ? copied : base;
+        const skipped = spread.whenTrue ? base : copied;
+        acc = {
+          kind: "seqExpr",
+          stmts: [{ kind: "varDecl", localId: saved.id, init: acc, loc: locOf(prop) }],
+          result: {
+            kind: "ternary",
+            cond: lowerer.lowerCondition(spread.cond),
+            then: taken,
+            else_: skipped,
+            type: DYN,
+            loc: locOf(prop),
+          },
+          type: DYN,
+          loc: locOf(prop),
+        };
+        continue;
+      }
       flushFields();
       const builtin = lowerer.builtinNamespaceModuleOf(prop.expression);
       const raw =
@@ -1234,6 +1269,22 @@ export function lowerObjectLiteral(
     }
   }
   const fieldTypes = new Map(shape.fields.map((f) => [f.name, f.type]));
+  // `max?: any` is just `any` to the checker (`any` absorbs undefined), so
+  // the field maps to unknown with no absent state. A conditional spread's
+  // empty arm must omit the key: Prompt.Int copies present keys over its
+  // defaults, and an explicit undefined would replace +Infinity. Build the
+  // literal in checked-dynamic storage, where the empty arm copies nothing.
+  if (
+    isJsSourceFile(expr.getSourceFile()) &&
+    expr.properties.some((prop) => {
+      if (!ts.isSpreadAssignment(prop)) return false;
+      const spread = conditionalSpreadOf(prop.expression);
+      if (!spread || spread === "unsupported") return false;
+      return spread.props.some((carrier) => fieldTypes.get(carrier.name.text)?.kind === "dyn");
+    })
+  ) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
   // File-scope JavaScript object bindings live in the checked-dynamic tree
   // to preserve open writes and identity. The checker can infer fields
   // from later writes; those fields must remain absent when the literal
@@ -2597,9 +2648,15 @@ export type CondSpreadProp = (ts.PropertyAssignment | ts.ShorthandPropertyAssign
   name: ts.Identifier | ts.StringLiteral;
 };
 
-export function conditionalSpreadOf(
-  expr: ts.Expression,
-): { cond: ts.Expression; props: CondSpreadProp[]; whenTrue: boolean } | "unsupported" | null {
+export function conditionalSpreadOf(expr: ts.Expression):
+  | {
+      cond: ts.Expression;
+      props: CondSpreadProp[];
+      whenTrue: boolean;
+      carrier: ts.ObjectLiteralExpression;
+    }
+  | "unsupported"
+  | null {
   let e: ts.Expression = expr;
   while (ts.isParenthesizedExpression(e)) e = e.expression;
   if (!ts.isConditionalExpression(e)) return null;
@@ -2629,7 +2686,7 @@ export function conditionalSpreadOf(
       return "unsupported";
     }
   }
-  return { cond: e.condition, props, whenTrue: trueCarries };
+  return { cond: e.condition, props, whenTrue: trueCarries, carrier };
 }
 
 /** `{ ...idx, ...idx2 }` typed a DECLARED shape (no index signature) — the

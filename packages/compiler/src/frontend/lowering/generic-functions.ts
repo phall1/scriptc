@@ -1525,6 +1525,35 @@ function bindableImplicitIr(t: IrType | null): t is IrType {
   );
 }
 
+/** `...(c ? { k: v } : {})` where `k` is optional any/unknown on the
+ * literal's own type. `any` absorbs undefined, so the record field has no
+ * absent state. */
+function optionalAnyConditionalSpread(lowerer: Lowerer, arg: ts.ObjectLiteralExpression): boolean {
+  const objectType = lowerer.typeOf(arg);
+  for (const property of arg.properties) {
+    if (!ts.isSpreadAssignment(property)) continue;
+    let expr: ts.Expression = property.expression;
+    while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
+    if (!ts.isConditionalExpression(expr)) continue;
+    for (const arm of [expr.whenTrue, expr.whenFalse]) {
+      let inner: ts.Expression = arm;
+      while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+      if (!ts.isObjectLiteralExpression(inner)) continue;
+      for (const carrier of inner.properties) {
+        if (!ts.isPropertyAssignment(carrier) && !ts.isShorthandPropertyAssignment(carrier))
+          continue;
+        const name = carrier.name;
+        if (!ts.isIdentifier(name) && !ts.isStringLiteral(name)) continue;
+        const prop = lowerer.checker.getPropertyOfType(objectType, name.text);
+        if (!prop || (prop.flags & ts.SymbolFlags.Optional) === 0) continue;
+        const mapped = lowerer.mapTypeOf(lowerer.checker.getTypeOfSymbol(prop));
+        if (mapped === null || mapped.kind === "dyn") return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** A represented binding or direct callable result can be wider than the
  * checker's inferred shape. Preserve that boundary when specializing JS. */
 function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrType | null {
@@ -1551,10 +1580,14 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
     const awaited = storedImplicitArgumentType(lowerer, arg.expression);
     return awaited?.kind === "promise" ? awaited.inner : awaited;
   }
-  if (
-    ts.isObjectLiteralExpression(arg) &&
-    isJsSourceFile(arg.getSourceFile()) &&
-    (arg.properties.length === 0 ||
+  if (ts.isObjectLiteralExpression(arg) && isJsSourceFile(arg.getSourceFile())) {
+    // `...(c ? { max: v } : {})` on `max?: any`. The checker types the field
+    // as any, so a record slot cannot tell an omitted key from undefined.
+    // Prompt.Int spreads the argument over defaults; undefined would replace
+    // +Infinity. Keep the value checked-dynamic so the empty arm copies nothing.
+    if (optionalAnyConditionalSpread(lowerer, arg)) return DYN;
+    if (
+      arg.properties.length === 0 ||
       arg.properties.some(
         (property) =>
           ts.isMethodDeclaration(property) ||
@@ -1562,9 +1595,10 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
           (!ts.isSpreadAssignment(property) &&
             property.name !== undefined &&
             ts.isComputedPropertyName(property.name)),
-      ))
-  )
-    return DYN;
+      )
+    )
+      return DYN;
+  }
   if (ts.isIdentifier(arg))
     return lowerer.peekLocal(arg)?.type ?? lowerer.globalOf(arg)?.type ?? null;
   // `[workflow]` is inferred as `(() => void)[]` after Workflow.make assigns
