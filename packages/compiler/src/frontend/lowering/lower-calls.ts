@@ -5,6 +5,7 @@ import { lowerArrayCallbackCall } from "./containers/array-callback-call.js";
  * own owners; this module selects the applicable call path. */
 import { dynUndefinedExpr, nodeThrowExpr, countedFor, numLit, varRef } from "../../ir/build.js";
 import { lowerBuiltinCall } from "./builtin-calls.js";
+import { lowerHeadersIteratorNext } from "./lower-stdlib.js";
 import { threadsImportOf } from "../threads-import.js";
 import {
   adaptZeroArgTimerCallback,
@@ -1543,6 +1544,11 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
         if (t) return nsUndefRead(lowerer, ambientRoot.text, expr, t);
       }
     }
+    // `headers.keys().next()` is a one-shot iterator step. keys() itself
+    // stays fenced when the iterator is stored; this call shape is the
+    // Effect toWeb emptiness check.
+    const headersNext = lowerHeadersIteratorNext(lowerer, expr);
+    if (headersNext) return headersNext;
     // The lib fence's METHOD-CALL chokepoint: a stdlib-declared member
     // that every lowering above declined — an unlowered member
     // (m.keys(), p.then(f), Object.keys(o)) or an unlowered call FORM of
@@ -3662,9 +3668,18 @@ function lowerDynReceiverMethodCall(
         .some((decl) => ts.isPropertyDeclaration(decl) || ts.isPropertySignature(decl))
     );
   })();
-  const dispatched = callbackProperty
-    ? null
-    : lowerDynDispatchMethodCall(lowerer, call, access, recv, arrayReceiver);
+  // undici spells Headers.append/get/forEach as properties. On the native
+  // handle those are prototype methods; an own-property read is missing.
+  const headersMethod =
+    recvSymbol?.name === "Headers" &&
+    lowerer.isStdlibSymbol(recvSymbol) &&
+    ["append", "delete", "get", "getSetCookie", "has", "set", "forEach"].includes(
+      access.name.text,
+    );
+  const dispatched =
+    callbackProperty && !headersMethod
+      ? null
+      : lowerDynDispatchMethodCall(lowerer, call, access, recv, arrayReceiver);
   if (dispatched) return dispatched;
   // Names NO dyn-representable prototype declares: the member can only
   // be an OWN property, so "read the member, call it" IS Node's

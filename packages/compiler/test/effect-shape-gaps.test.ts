@@ -1305,3 +1305,69 @@ console.log(make(undefined));
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("a one-shot Headers keys iterator matches Node", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-headers-keys-"));
+  const types = join(directory, "node_modules", "@types");
+  mkdirSync(types, { recursive: true });
+  symlinkSync(join(import.meta.dirname, "../../../node_modules/@types/node"), join(types, "node"));
+  writeFileSync(
+    join(directory, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        target: "ES2025",
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        strict: true,
+        types: ["node"],
+      },
+    }),
+  );
+  const entry = join(directory, "main.js");
+  const binary = join(directory, "main");
+  writeFileSync(
+    entry,
+    `
+const none = new globalThis.Headers();
+const some = new globalThis.Headers();
+some.append("b", "2");
+some.append("a", "1");
+const cookies = new globalThis.Headers();
+cookies.append("Set-Cookie", "a=1");
+cookies.append("Set-Cookie", "b=2");
+const noneStep = none.keys().next();
+const someStep = some.keys().next();
+const cookieStep = cookies.keys().next();
+console.log(String(noneStep.done) + ":" + String(noneStep.value));
+console.log(String(someStep.done) + ":" + String(someStep.value));
+console.log(String(cookieStep.done) + ":" + String(cookieStep.value));
+console.log(String(some.keys().next().done) + ":" + String(some.keys().next().value));
+console.log(none.keys().next().done ? "raw" : "copy");
+console.log(some.keys().next().done ? "raw" : "copy");
+`,
+  );
+  try {
+    const coverage = analyze(entry, {});
+    const fences = [...coverage.coverage.diagnostics, ...(coverage.coverage.runtimeFences ?? [])];
+    expect(fences, JSON.stringify(fences)).toEqual([]);
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, ["--experimental-strip-types", entry], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

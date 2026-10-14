@@ -1,4 +1,11 @@
-import { dynUndefinedExpr, nodeThrowExpr, numLit, strLit, varRef } from "../../ir/build.js";
+import {
+  boolLit,
+  dynUndefinedExpr,
+  nodeThrowExpr,
+  numLit,
+  strLit,
+  varRef,
+} from "../../ir/build.js";
 import { checkedIterableSpread } from "./checked-iterable-spread.js";
 import { InternalCompilerError } from "../../errors.js";
 
@@ -12,6 +19,8 @@ import {
   DYN,
   F64,
   type IrExpr,
+  type IrFunction,
+  type IrLocal,
   type IrStmt,
   type IrType,
   type SrcLoc,
@@ -999,6 +1008,217 @@ export function fenceStaticHeadersMember(
     "the native static Headers surface is append/delete/get/getSetCookie/has/set/forEach; keys()/values()/entries(), symbol-keyed iteration, and construction remain unsupported",
     sym,
   );
+}
+
+const HEADERS_KEYS_COLLECT = "%headers.keys";
+const HEADERS_KEYS_PUSH = "%headers.keys.push";
+const HEADER_NAMES = arrayOf(STRING);
+const HEADER_NAMES_LOCAL = "names.0";
+const HEADERS_KEYS_PUSH_TYPE: IrType = { kind: "func", params: [DYN, DYN, DYN], ret: VOID };
+
+/** `headers.keys().next()` on a native Headers handle. The iterator is
+ * created and stepped once, so the first sorted name is the whole result.
+ * `forEach` already visits each name once in that order. A stored iterator
+ * (`const it = headers.keys()`) still has no handle and keeps its fence. */
+export function lowerHeadersIteratorNext(lowerer: Lowerer, call: ts.CallExpression): IrExpr | null {
+  if (
+    call.questionDotToken ||
+    !ts.isPropertyAccessExpression(call.expression) ||
+    lowerer.chainBlocked(call, call.expression) ||
+    call.expression.name.text !== "next" ||
+    call.arguments.length !== 0 ||
+    call.arguments.some((argument) => ts.isSpreadElement(argument))
+  ) {
+    return null;
+  }
+  const source = call.expression.expression;
+  if (
+    !ts.isCallExpression(source) ||
+    source.questionDotToken ||
+    !ts.isPropertyAccessExpression(source.expression) ||
+    lowerer.chainBlocked(source, source.expression) ||
+    source.expression.name.text !== "keys" ||
+    source.arguments.length !== 0 ||
+    source.arguments.some((argument) => ts.isSpreadElement(argument)) ||
+    !isStdlibFetchInterface(lowerer, source.expression.expression, "Headers")
+  ) {
+    return null;
+  }
+  const resultType = lowerer.mapTypeOf(lowerer.typeOf(call));
+  const shape = resultType?.kind === "record" ? lowerer.shapes.get(resultType.shapeId) : undefined;
+  const doneField = shape?.fields.find((field) => field.name === "done");
+  const valueField = shape?.fields.find((field) => field.name === "value");
+  if (
+    resultType?.kind !== "record" ||
+    !shape ||
+    shape.fields.length !== 2 ||
+    doneField?.type.kind !== "bool" ||
+    valueField?.type.kind !== "dyn"
+  ) {
+    return null;
+  }
+  const headers = lowerer.lowerExpr(source.expression.expression);
+  if (headers.type.kind !== "dyn") return null;
+
+  const loc = locOf(call);
+  ensureHeadersKeyCollector(lowerer, loc);
+  const names = lowerer.declareHiddenLocal("%headerNames", HEADER_NAMES);
+  const namesRef = varRef(names.id, HEADER_NAMES, loc);
+  const length: IrExpr = {
+    kind: "arrIntrinsic",
+    method: "length",
+    receiver: namesRef,
+    args: [],
+    type: F64,
+    loc,
+  };
+  const firstName: IrExpr = {
+    kind: "arrayGet",
+    arr: namesRef,
+    index: numLit(0, loc),
+    type: STRING,
+    loc,
+  };
+  const result = (done: boolean, value: IrExpr): IrExpr => ({
+    kind: "recordLit",
+    fields: shape.fields.map((field) => ({
+      name: field.name,
+      value: field.name === "done" ? boolLit(done, loc) : value,
+    })),
+    type: resultType,
+    loc,
+  });
+  return {
+    kind: "seqExpr",
+    stmts: [
+      {
+        kind: "varDecl",
+        localId: names.id,
+        init: {
+          kind: "call",
+          callee: HEADERS_KEYS_COLLECT,
+          args: [headers],
+          type: HEADER_NAMES,
+          loc,
+        },
+        loc,
+      },
+    ],
+    result: {
+      kind: "ternary",
+      cond: {
+        kind: "bin",
+        op: "===",
+        left: length,
+        right: numLit(0, loc),
+        type: BOOL,
+        loc,
+      },
+      then: result(true, dynUndefinedExpr(loc)),
+      else_: result(false, { kind: "dynFrom", value: firstName, type: DYN, loc }),
+      type: resultType,
+      loc,
+    },
+    type: resultType,
+    loc,
+  };
+}
+
+function ensureHeadersKeyCollector(lowerer: Lowerer, loc: SrcLoc): void {
+  if (lowerer.liftedFns.some((fn) => fn.name === HEADERS_KEYS_COLLECT)) return;
+  const namesRef = varRef(HEADER_NAMES_LOCAL, HEADER_NAMES, loc);
+  const keyRef = varRef("key.0", DYN, loc);
+  const capturedNames: IrLocal = {
+    id: HEADER_NAMES_LOCAL,
+    name: "names",
+    type: HEADER_NAMES,
+    mutable: false,
+    boxed: true,
+  };
+  const push: IrFunction = {
+    name: HEADERS_KEYS_PUSH,
+    params: [
+      { localId: "value.0", name: "value", type: DYN },
+      { localId: "key.0", name: "key", type: DYN },
+      { localId: "parent.0", name: "parent", type: DYN },
+    ],
+    returnType: VOID,
+    captures: [{ localId: HEADER_NAMES_LOCAL, name: "names", type: HEADER_NAMES }],
+    locals: [
+      capturedNames,
+      { id: "value.0", name: "value", type: DYN, mutable: false },
+      { id: "key.0", name: "key", type: DYN, mutable: false },
+      { id: "parent.0", name: "parent", type: DYN, mutable: false },
+    ],
+    body: [
+      {
+        kind: "exprStmt",
+        expr: {
+          kind: "arrIntrinsic",
+          method: "push",
+          receiver: namesRef,
+          args: [{ kind: "dynCheck", value: keyRef, type: STRING, loc }],
+          type: F64,
+          loc,
+        },
+        loc,
+      },
+    ],
+    loc,
+  };
+  const collect: IrFunction = {
+    name: HEADERS_KEYS_COLLECT,
+    params: [{ localId: "headers.0", name: "headers", type: DYN }],
+    returnType: HEADER_NAMES,
+    locals: [
+      { id: "headers.0", name: "headers", type: DYN, mutable: false },
+      {
+        id: HEADER_NAMES_LOCAL,
+        name: "names",
+        type: HEADER_NAMES,
+        mutable: false,
+        boxed: true,
+      },
+    ],
+    body: [
+      {
+        kind: "varDecl",
+        localId: HEADER_NAMES_LOCAL,
+        init: { kind: "arrayLit", elems: [], type: HEADER_NAMES, loc },
+        loc,
+      },
+      {
+        kind: "exprStmt",
+        expr: {
+          kind: "dynInvoke",
+          recv: varRef("headers.0", DYN, loc),
+          method: "forEach",
+          calleeName: "Headers.forEach",
+          args: [
+            {
+              kind: "dynFrom",
+              value: {
+                kind: "closure",
+                fnName: HEADERS_KEYS_PUSH,
+                captures: [HEADER_NAMES_LOCAL],
+                type: HEADERS_KEYS_PUSH_TYPE,
+                loc,
+              },
+              fnName: "forEach",
+              type: DYN,
+              loc,
+            },
+          ],
+          type: DYN,
+          loc,
+        },
+        loc,
+      },
+      { kind: "return", value: namesRef, loc },
+    ],
+    loc,
+  };
+  lowerer.liftedFns.push(push, collect);
 }
 
 /** The native AbortController handle dispatches `abort()` directly and
