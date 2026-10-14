@@ -1008,3 +1008,46 @@ console.log(mergeLeaves(0, "aa", "aa"));
 test("a function declaration can call itself", async () => {
   await matchesNode("recursive-decl-fixture", recursiveDeclProbe, recursiveDeclProgram);
 });
+
+const varintProbe = `
+export function encodeVarint(value) {
+  const bytes = [];
+  let n = typeof value === "bigint" ? value : BigInt(value);
+  if (n < BigInt(0)) n = BigInt.asUintN(64, n);
+  while (n > BigInt(127)) {
+    bytes.push(Number(n & BigInt(127)) | 0x80);
+    n >>= BigInt(7);
+  }
+  bytes.push(Number(n));
+  return bytes.join(",");
+}
+export function zigzag(n) {
+  const zero = BigInt(0);
+  const one = BigInt(1);
+  const encoded = n >= zero ? n << one : (-n << one) - one;
+  let value = zero;
+  let shift = zero;
+  while (true) {
+    const byte = Number(encoded & BigInt(127));
+    value |= BigInt(byte) << shift;
+    if (byte < 128) break;
+    shift += BigInt(7);
+  }
+  return value.toString();
+}
+`;
+
+const varintProgram = `
+import { encodeVarint, zigzag } from "varint-fixture/probe.js";
+
+for (const sample of [0, 127, 128, 300, 0n, -1n, 300n] as unknown[]) {
+  console.log(encodeVarint(sample));
+}
+for (const sample of [0n, 1n, -1n, -2n, 300n] as unknown[]) {
+  console.log(zigzag(sample));
+}
+`;
+
+test("varint updates and zigzag negation keep bigint kinds", async () => {
+  await matchesNode("varint-fixture", varintProbe, varintProgram);
+});

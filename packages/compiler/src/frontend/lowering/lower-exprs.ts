@@ -9194,11 +9194,58 @@ export function lowerPrefixUnary(lowerer: Lowerer, expr: ts.PrefixUnaryExpressio
       if (raw.type.kind === "bigint") {
         return { kind: "libCall", fn: "bigint.neg", args: [raw], type: BIGINT_T, loc };
       }
+      // Unary minus is ToNumeric, not ToNumber: a bigint stays a bigint
+      // (`-1n`). Forcing a number check throws before `(-n << 1n)`.
+      if (raw.type.kind === "dyn" && isJsSourceFile(expr.getSourceFile())) {
+        const numeric = lowerer.declareHiddenLocal("%negNum", DYN);
+        const numericRef = varRef(numeric.id, DYN, loc);
+        const negated: IrExpr = {
+          kind: "ternary",
+          cond: { kind: "dynTest", test: "bigint", value: numericRef, type: BOOL, loc },
+          then: {
+            kind: "dynFrom",
+            value: {
+              kind: "libCall",
+              fn: "bigint.neg",
+              args: [{ kind: "dynCheck", value: numericRef, type: BIGINT_T, loc }],
+              type: BIGINT_T,
+              loc,
+            },
+            type: DYN,
+            loc,
+          },
+          else_: {
+            kind: "dynFrom",
+            value: {
+              kind: "unary",
+              op: "-",
+              operand: { kind: "dynCheck", value: numericRef, type: F64, loc },
+              type: F64,
+              loc,
+            },
+            type: DYN,
+            loc,
+          },
+          type: DYN,
+          loc,
+        };
+        return {
+          kind: "seqExpr",
+          stmts: [
+            {
+              kind: "varDecl",
+              localId: numeric.id,
+              init: { kind: "libCall", fn: "dyn.toNumeric", args: [raw], type: DYN, loc },
+              loc,
+            },
+          ],
+          result: negated,
+          type: DYN,
+          loc,
+        };
+      }
       // Match the checked numeric boundary used by JS binary arithmetic.
-      const operand =
-        raw.type.kind === "dyn" && isJsSourceFile(expr.getSourceFile())
-          ? { kind: "dynCheck" as const, value: raw, type: F64, loc }
-          : lowerOptionalNumber(lowerer, raw, loc, expr.operand);
+      const operand = lowerOptionalNumber(lowerer, raw, loc, expr.operand);
       if (operand.type.kind !== "f64") lowerer.unsupported("SC1043", expr);
       if (operand.kind === "numLit") return { ...operand, value: -operand.value, loc };
       return { kind: "unary", op: "-", operand, type: F64, loc };
@@ -9616,6 +9663,33 @@ export function lowerCompoundValueToTarget(
       { kind: "bin", op: compound, left: numericRead, right: numericRhs, type: F64, loc },
       target.type,
     );
+  }
+  // `n >>= 7n`, `value |= mask`, `shift += 7n`. The static bigint
+  // operations already exist for `n = n >> 7n`; the compound form was
+  // still reported as a comparison fence.
+  if (target.type.kind === "bigint" && rhs.type.kind === "bigint" && compound !== ">>>") {
+    const fn = (
+      {
+        "+": "bigint.add",
+        "-": "bigint.sub",
+        "*": "bigint.mul",
+        "/": "bigint.div",
+        "%": "bigint.mod",
+        "**": "bigint.pow",
+        "&": "bigint.and",
+        "|": "bigint.or",
+        "^": "bigint.xor",
+        "<<": "bigint.shl",
+        ">>": "bigint.shr",
+      } as const
+    )[compound];
+    return {
+      kind: "libCall",
+      fn,
+      args: [read, rhs],
+      type: BIGINT_T,
+      loc,
+    };
   }
   if (
     (target.type.kind === "dyn" || rhs.type.kind === "dyn") &&
@@ -10190,6 +10264,12 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
           type: DYN,
           loc,
         };
+        // A statically bigint operand makes a successful result a bigint
+        // (a number mixed in throws). Checking that result as a number
+        // rejects the bigint `<<` in `zigzag`.
+        if (left.type.kind === "bigint" || right.type.kind === "bigint") {
+          return { kind: "dynCheck", value, type: BIGINT_T, loc };
+        }
         return left.type.kind === "f64" || right.type.kind === "f64"
           ? { kind: "dynCheck", value, type: F64, loc }
           : value;
