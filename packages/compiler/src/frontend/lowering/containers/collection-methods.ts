@@ -41,6 +41,25 @@ import {
 import { strCharsCall } from "./array-construction.js";
 import { arrayElementRead } from "./array-iteration.js";
 
+/** A JS local can be `Set | undefined` or `Map | undefined` after `??= new
+ * Set()`. The checker still says `any`. Narrow to the collection, which
+ * throws if the value is missing, then use the ordinary method lowering. */
+function preparedCollectionReceiver(
+  lowerer: Lowerer,
+  access: ts.PropertyAccessExpression,
+  kind: "map" | "set",
+): { type: IrType; value: IrExpr } | null {
+  const probed = tryLowerExpression(lowerer, access.expression);
+  if (probed?.type.kind === kind) return { type: probed.type, value: probed };
+  if (probed?.type.kind !== "union") return null;
+  const present = lowerer.stripUndefinedArm(probed.type);
+  if (present.kind !== kind) return null;
+  const loc = locOf(access);
+  const helper = lowerer.narrowedArmHelper(probed.type.unionId, present, loc);
+  if (helper === null) return null;
+  return { type: present, value: lowerer.checkedNarrowCall(helper, probed, present, loc) };
+}
+
 /** Ambient Map method calls. `get`/`set`/`has`/`delete`/`clear` lower to
  * mapIntrinsic; `forEach` desugars to a direct call of a synthetic loop
  * function over the iteration primitives (lowerMapForEachCall). Null when
@@ -56,10 +75,12 @@ export function lowerMapMethodCall(
   if (!MAP_METHODS.has(name)) return null;
   let receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
   let probedUntyped = false;
+  let prepared: IrExpr | null = null;
   if (receiverIr?.kind !== "map" && isJsSourceFile(access.getSourceFile())) {
-    const probed = tryLowerExpression(lowerer, access.expression);
-    if (probed?.type.kind === "map") {
-      receiverIr = probed.type;
+    const found = preparedCollectionReceiver(lowerer, access, "map");
+    if (found) {
+      receiverIr = found.type;
+      prepared = found.value;
       probedUntyped = true;
     }
   }
@@ -67,7 +88,7 @@ export function lowerMapMethodCall(
   // Collection views can refine has() while retaining its native ABI.
   if (!probedUntyped && !lowerer.isStdlibMember(access) && name !== "has") return null;
   const loc = locOf(call);
-  const value = lowerer.lowerExpr(access.expression);
+  const value = prepared ?? lowerer.lowerExpr(access.expression);
   const receiver =
     lowerer.runtimeOptionalPropertyReceiver(access.expression, value, receiverIr, name) ?? value;
   if (receiver.type.kind !== "map") {
@@ -536,14 +557,17 @@ export function lowerSetMethodCall(
   if (!SET_METHODS.has(name) && !SET_COMBINE_METHODS.has(name)) return null;
   let receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
   let probedUntyped = false;
+  let prepared: IrExpr | null = null;
   // The identity-Set idiom (JS): the CHECKER type is an unmappable
   // Set<union-of-signatures>, but the VALUE lowered as a real Set of
   // identity tokens (the new-Set probe) — the lowered receiver's type
-  // is the honest dispatch key.
+  // is the honest dispatch key. `let failures; failures ??= new Set()`
+  // stores Set|undefined and needs the same narrowing.
   if (receiverIr?.kind !== "set" && isJsSourceFile(access.getSourceFile())) {
-    const probed = tryLowerExpression(lowerer, access.expression);
-    if (probed?.type.kind === "set") {
-      receiverIr = probed.type;
+    const found = preparedCollectionReceiver(lowerer, access, "set");
+    if (found) {
+      receiverIr = found.type;
+      prepared = found.value;
       probedUntyped = true;
     }
   }
@@ -553,7 +577,7 @@ export function lowerSetMethodCall(
   // still rejects structural mocks and assertions over other objects.
   if (!probedUntyped && !lowerer.isStdlibMember(access) && name !== "has") return null;
   const loc = locOf(call);
-  const value = lowerer.lowerExpr(access.expression);
+  const value = prepared ?? lowerer.lowerExpr(access.expression);
   const receiver =
     lowerer.runtimeOptionalPropertyReceiver(access.expression, value, receiverIr, name) ?? value;
   // The lib's `add` returns the Set (chaining typechecks); the lowered
@@ -580,7 +604,36 @@ export function lowerSetMethodCall(
   }
   if (name === "add") {
     const v = lowerer.lowerCollectionKey(call.arguments[0]!, receiverIr.elem);
-    return { kind: "setIntrinsic", method: "add", receiver, args: [v], type: VOID, loc };
+    // Set.add returns the same set. A discarded call stays a void
+    // intrinsic; a used result (`new Set(seen).add(key)`) keeps that set.
+    let parent: ts.Node | undefined = call.parent;
+    while (ts.isParenthesizedExpression(parent)) parent = parent.parent;
+    if (ts.isExpressionStatement(parent)) {
+      return { kind: "setIntrinsic", method: "add", receiver, args: [v], type: VOID, loc };
+    }
+    const slot = lowerer.declareHiddenLocal("%setAddReceiver", receiver.type);
+    const ref = varRef(slot.id, receiver.type, loc);
+    return {
+      kind: "seqExpr",
+      stmts: [
+        { kind: "varDecl", localId: slot.id, init: receiver, loc },
+        {
+          kind: "exprStmt",
+          expr: {
+            kind: "setIntrinsic",
+            method: "add",
+            receiver: ref,
+            args: [v],
+            type: VOID,
+            loc,
+          },
+          loc,
+        },
+      ],
+      result: ref,
+      type: receiver.type,
+      loc,
+    };
   }
   if (name === "has" || name === "delete") {
     const v = lowerer.lowerCollectionKey(call.arguments[0]!, receiverIr.elem);
@@ -883,9 +936,13 @@ export function lowerSetSeedNew(
       return selected ? defaultAfterUndefined(undefinedLeft, selected) : null;
     }
     const source = lowerer.lowerExpr(node.left);
-    if (isUnitType(source.type)) {
+    if (isUnitType(source.type) || isDynUndefined(source)) {
       const selected = lowerSetSeedNew(lowerer, fallback, setT);
       return selected ? defaultAfterUndefined(source, selected) : null;
+    }
+    if (source.type.kind === "dyn" && setT.elem.kind === "dyn") {
+      const selected = lowerSetSeedNew(lowerer, fallback, setT);
+      return selected ? setFromNullishDyn(lowerer, source, selected, setT) : null;
     }
     return setFromSeedValue(lowerer, source, setT, () => lowerSetSeedNew(lowerer, fallback, setT));
   }
@@ -965,6 +1022,47 @@ export function lowerSetSeedNew(
     }
   }
   return setFromSeedValue(lowerer, source, setT, () => ({ kind: "setNew", type: setT, loc }));
+}
+
+/** `values ?? fallback` when `values` is checked-dynamic. Null and undefined
+ * take the fallback Set; any other value is the iterable `new Set` walks. */
+function setFromNullishDyn(
+  lowerer: Lowerer,
+  source: IrExpr,
+  fallback: IrExpr,
+  setT: IrType & { kind: "set" },
+): IrExpr {
+  const loc = source.loc;
+  const slot = lowerer.declareHiddenLocal("%setSeed", DYN);
+  const value = varRef(slot.id, DYN, loc);
+  const fromDyn: IrExpr = {
+    kind: "dynCheck",
+    value: { kind: "libCall", fn: "dyn.nativeSetNew", args: [value], type: DYN, loc },
+    type: setT,
+    loc,
+  };
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "varDecl", localId: slot.id, init: source, loc }],
+    result: {
+      kind: "ternary",
+      cond: { kind: "dynTest", test: "nullish", value, type: BOOL, loc },
+      then: fallback,
+      else_: fromDyn,
+      type: setT,
+      loc,
+    },
+    type: setT,
+    loc,
+  };
+}
+
+/** A missing npm-static option reads as dyn `undefined`, not the unit type. */
+function isDynUndefined(expr: IrExpr): boolean {
+  if (expr.kind === "seqExpr") return isDynUndefined(expr.result);
+  return (
+    expr.kind === "dynFrom" && expr.value.kind === "unitLit" && expr.value.unit === "undefined"
+  );
 }
 
 function setFromSeedValue(
@@ -1073,7 +1171,7 @@ export function lowerMapSeedNew(
     argNode.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
   ) {
     const source = lowerer.lowerExpr(argNode.left);
-    if (isUnitType(source.type)) {
+    if (isUnitType(source.type) || isDynUndefined(source)) {
       const fallback = lowerMapSeedNew(lowerer, argNode.right, mapT);
       return fallback ? defaultAfterUndefined(source, fallback) : null;
     }

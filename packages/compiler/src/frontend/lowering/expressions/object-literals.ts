@@ -19,7 +19,7 @@ import type { IrExpr, IrLocal, IrRecordShape, IrStmt, IrType, SrcLoc } from "../
 import { isCjsExportTableLiteral, isJsSourceFile, locOf } from "../../program.js";
 import { NARROW_FIRST } from "../surfaces.js";
 import { recordShapeMismatchDiag } from "../../../diagnostics/diagnostic.js";
-import { PoisonError, neverTaintedJsType } from "../lowerer.js";
+import { PoisonError, anyInObjectType, neverTaintedJsType } from "../lowerer.js";
 import type { Lowerer } from "../lowerer.js";
 import { lowerIndexMergeHelper } from "../containers/indexed-objects.js";
 import type { IndexMergeContributor } from "../containers/indexed-objects.js";
@@ -37,32 +37,6 @@ import { runtimeOptionalStorageOperand } from "../lower-exprs.js";
  * smuggle a wider/narrower literal past tsc's freshness check), which the
  * exact-shape checks below reject with SC2002. Fields lower IN SOURCE
  * ORDER: JS evaluates property values in source order. */
-/** The dropped-field names of the PromiseSettledResult honest subset
- * (SEMANTICS.md 46): when the literal's target type is (a union
- * containing) the lib's PromiseFulfilledResult / PromiseRejectedResult,
- * the record mapping kept only `status` — `value` and `reason` evaluate
- * for effect and are not stored. Null for every other target. */
-function settledDropNames(lowerer: Lowerer, tsType: ts.Type): Set<string> | null {
-  let names: Set<string> | null = null;
-  const parts: readonly ts.Type[] = tsType.isUnionType() ? ts.constituentTypes(tsType) : [tsType];
-  for (const part of parts) {
-    const sym = part.getSymbol();
-    if (
-      !sym ||
-      !lowerer.checker
-        .declarationsOf(sym)
-        .some((d) => ts.isInterfaceDeclaration(d) && lowerer.isStdlibFile(d.getSourceFile()))
-    ) {
-      continue;
-    }
-    if (sym.name === "PromiseFulfilledResult" || sym.name === "PromiseRejectedResult") {
-      if (names === null) names = new Set();
-      names.add(sym.name === "PromiseFulfilledResult" ? "value" : "reason");
-    }
-  }
-  return names;
-}
-
 /** `{ [KEY]: v }` where KEY is a compile-time-known string or number:
  * the key folds into an ordinary (spelled) property name — the record
  * shape is exactly what tsc computed for the literal (the late-bound
@@ -291,6 +265,41 @@ export function lowerDynObjectLiteral(
       continue;
     }
     if (ts.isSpreadAssignment(prop)) {
+      // `...(c ? { k: v } : {})` — copy the carrier only when its arm is
+      // taken. Lowering the joined type would materialize `k: undefined`
+      // on the empty arm, and a later object spread would keep that key.
+      const spread = conditionalSpreadOf(prop.expression);
+      if (spread && spread !== "unsupported" && spread.props.length === 1) {
+        flushFields();
+        acc ??= { kind: "dynObjLit", fields: [], type: DYN, loc };
+        const saved = lowerer.declareHiddenLocal("%condSpread", DYN);
+        const base = varRef(saved.id, DYN, locOf(prop));
+        const carrier = lowerer.lowerExprExpecting(spread.carrier, DYN);
+        const copied: IrExpr = {
+          kind: "libCall",
+          fn: "dyn.copyDataProperties",
+          args: [base, carrier],
+          type: DYN,
+          loc: locOf(prop),
+        };
+        const taken = spread.whenTrue ? copied : base;
+        const skipped = spread.whenTrue ? base : copied;
+        acc = {
+          kind: "seqExpr",
+          stmts: [{ kind: "varDecl", localId: saved.id, init: acc, loc: locOf(prop) }],
+          result: {
+            kind: "ternary",
+            cond: lowerer.lowerCondition(spread.cond),
+            then: taken,
+            else_: skipped,
+            type: DYN,
+            loc: locOf(prop),
+          },
+          type: DYN,
+          loc: locOf(prop),
+        };
+        continue;
+      }
       flushFields();
       const builtin = lowerer.builtinNamespaceModuleOf(prop.expression);
       const raw =
@@ -774,6 +783,20 @@ export function lowerObjectLiteral(
   ) {
     return lowerDynObjectLiteral(lowerer, expr);
   }
+  // A JavaScript spread of an unknown source has no field list to copy.
+  // Later explicit properties still override, and the runtime copy keeps
+  // keys the checker could not name.
+  if (
+    !expected &&
+    isJsSourceFile(expr.getSourceFile()) &&
+    expr.properties.some(
+      (prop) =>
+        ts.isSpreadAssignment(prop) &&
+        lowerer.mapTypeOf(lowerer.typeOf(prop.expression))?.kind === "dyn",
+    )
+  ) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
   const loc = locOf(expr);
   // Module collection already chose checked storage for this JavaScript
   // binding. Construct in that representation: an intermediate record would
@@ -784,6 +807,18 @@ export function lowerObjectLiteral(
     expr.parent.initializer === expr &&
     ts.isIdentifier(expr.parent.name) &&
     lowerer.globalOf(expr.parent.name)?.type.kind === "dyn"
+  ) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
+  // `{ ...error, name, message }` copies an Error's enumerable own fields.
+  // The field list is not a record shape; the dyn copy is Node's spread.
+  if (
+    isJsSourceFile(expr.getSourceFile()) &&
+    expr.properties.some((prop) => {
+      if (!ts.isSpreadAssignment(prop)) return false;
+      const mapped = lowerer.mapTypeOf(lowerer.typeOf(prop.expression));
+      return mapped?.kind === "object" && lowerer.errorHierarchyClassOf(mapped.className);
+    })
   ) {
     return lowerDynObjectLiteral(lowerer, expr);
   }
@@ -1125,10 +1160,17 @@ export function lowerObjectLiteral(
   // PropertyDescriptorMap argument of Object.defineProperties, nested
   // descriptor records with `any` values) — builds as a dyn OBJECT:
   // each field converts through the usual dyn boundary, and dynamic
-  // consumers ride the keyed-dyn paths. TypeScript keeps the fence.
+  // consumers ride the keyed-dyn paths. TypeScript keeps the fence for
+  // authored `any`. An unresolved annotation is the error type, which
+  // prints as `any` (`Sharding.Sharding["Service"]` once the package
+  // `.d.ts` is hidden). An object type that merely contains `any`
+  // (a span whose fields did not resolve) is the same kind of residue.
+  // Those literals still build as checked-dynamic objects.
   if (
     mapped?.kind === "dyn" ||
     (!mapped && isJsSourceFile(expr.getSourceFile())) ||
+    (!mapped && !expected && tsType.isErrorType()) ||
+    (!mapped && !expected && anyInObjectType(lowerer, tsType)) ||
     (!expected &&
       mapped &&
       jsOpenObjectType(expr, mapped, lowerer.shapes, lowerer.unions).kind === "dyn")
@@ -1201,6 +1243,22 @@ export function lowerObjectLiteral(
     }
   }
   const fieldTypes = new Map(shape.fields.map((f) => [f.name, f.type]));
+  // `max?: any` is just `any` to the checker (`any` absorbs undefined), so
+  // the field maps to unknown with no absent state. A conditional spread's
+  // empty arm must omit the key: Prompt.Int copies present keys over its
+  // defaults, and an explicit undefined would replace +Infinity. Build the
+  // literal in checked-dynamic storage, where the empty arm copies nothing.
+  if (
+    isJsSourceFile(expr.getSourceFile()) &&
+    expr.properties.some((prop) => {
+      if (!ts.isSpreadAssignment(prop)) return false;
+      const spread = conditionalSpreadOf(prop.expression);
+      if (!spread || spread === "unsupported") return false;
+      return spread.props.some((carrier) => fieldTypes.get(carrier.name.text)?.kind === "dyn");
+    })
+  ) {
+    return lowerDynObjectLiteral(lowerer, expr);
+  }
   // File-scope JavaScript object bindings live in the checked-dynamic tree
   // to preserve open writes and identity. The checker can infer fields
   // from later writes; those fields must remain absent when the literal
@@ -1475,6 +1533,19 @@ export function lowerObjectLiteral(
       );
     })
   ) {
+    // `{ ...this }` inside Schema.Class's toString is typed with prototype
+    // methods. Object spread copies enumerable own properties only, so a
+    // required `toString` field is not a key the runtime source can supply.
+    // Copy own properties instead of fencing the method field.
+    if (
+      isJsSourceFile(expr.getSourceFile()) &&
+      shape.fields.some(
+        (field) =>
+          field.type.kind !== "union" || lowerer.armTag(field.type.unionId, UNDEFINED_T) < 0,
+      )
+    ) {
+      return lowerDynObjectLiteral(lowerer, expr);
+    }
     return lowerDeclaredSpreadMerge(lowerer, expr, type, shape, loc);
   }
 
@@ -1493,7 +1564,7 @@ export function lowerObjectLiteral(
     throw new PoisonError();
   };
 
-  const fields: { name: string; value: IrExpr; overflow?: true; drop?: true }[] = [];
+  const fields: { name: string; value: IrExpr; overflow?: true }[] = [];
   const spreadStmts: IrStmt[] = [];
   const hasSpread = expr.properties.some(ts.isSpreadAssignment);
   const captured = new Set<IrExpr>();
@@ -1581,11 +1652,6 @@ export function lowerObjectLiteral(
     if (hasSpread) {
       for (let i = 0; i < fields.length; i++) {
         const field = fields[i]!;
-        if (field.drop) {
-          spreadStmts.push({ kind: "exprStmt", expr: field.value, loc: field.value.loc });
-          fields.splice(i--, 1);
-          continue;
-        }
         field.value = captureField(field.value);
       }
     }
@@ -1665,10 +1731,21 @@ export function lowerObjectLiteral(
       // TypeScript describes a required record. Select the copy strategy
       // from that stored representation so absent sources copy nothing.
       // Checked-dynamic bindings still use the checker's field contract.
-      const srcType =
+      let srcType =
         srcLowered.type.kind === "dyn"
           ? lowerer.mapTypeOf(lowerer.typeOf(srcNode))
           : srcLowered.type;
+      // A JavaScript any-field object maps to unknown, while the literal's
+      // destination still names those fields. Copy them from the dynamic
+      // value; later properties override as usual.
+      if (
+        srcType?.kind !== "record" &&
+        isJsSourceFile(expr.getSourceFile()) &&
+        srcLowered.type.kind === "dyn" &&
+        expected?.kind === "record"
+      ) {
+        srcType = expected;
+      }
       // `...options.installConfig` — a spread of `Partial<X> | undefined`
       // (the optional-options merge idiom `{ ...DEFAULTS, ...overrides }`):
       // JS spreads nothing for the unit arm and copies present keys
@@ -1901,7 +1978,7 @@ export function lowerObjectLiteral(
             thenVal = lowerer.applyWidthLift(lift, fRead(), targetType, locOf(prop));
             if (canBeAbsent) cond = fieldPresent();
           }
-          const at = fields.findIndex((x) => x.name === f.name && !x.drop);
+          const at = fields.findIndex((x) => x.name === f.name);
           const elseVal =
             at >= 0 ? fields[at]!.value : lowerer.absentFieldValue(targetType, locOf(prop));
           if (!elseVal) {
@@ -2143,10 +2220,7 @@ export function lowerObjectLiteral(
     let fieldType = fieldTypes.get(name);
     // An undeclared name against an index-signature shape is an OVERFLOW
     // entry (tsc typechecked it against the signature's value type);
-    // against a plain shape it is the width mismatch it always was —
-    // EXCEPT the PromiseSettledResult honest subset's dropped fields
-    // (value/reason — SEMANTICS.md 46): those evaluate for effect in
-    // their source-order slot and store nothing.
+    // against a plain shape it is the width mismatch it always was.
     // A GENERIC-callable member (a generic method `m<T>(x: T) {...}` or a
     // generic arrow/function-expression property): excluded from the
     // record shape (isGenericCallableMemberType — no single closure slot
@@ -2177,30 +2251,6 @@ export function lowerObjectLiteral(
       }
     }
     if (!fieldType && !shape.indexValue) {
-      if (settledDropNames(lowerer, tsType)?.has(name)) {
-        // Identifier and shorthand initializers are effect-free reads —
-        // skipped outright. The caught `reason` MUST skip: lowering the
-        // read would hit the catch-binding narrowness fence, and the
-        // snapshot it names needs no evaluation.
-        if (ts.isPropertyAssignment(prop) && !ts.isIdentifier(prop.initializer)) {
-          const v = lowerer.lowerExpr(prop.initializer);
-          // Effect-free lowerings (literals, plain reads) drop at
-          // compile time; anything else — the awaited mapper — runs
-          // (and may throw into the enclosing catch) with its result
-          // released by the statement frame.
-          if (
-            v.kind !== "unitLit" &&
-            v.kind !== "numLit" &&
-            v.kind !== "strLit" &&
-            v.kind !== "boolLit" &&
-            v.kind !== "varRef" &&
-            v.kind !== "closure"
-          ) {
-            fields.push({ name, value: v, drop: true });
-          }
-        }
-        continue;
-      }
       shapeMismatch(prop);
     }
 
@@ -2540,9 +2590,15 @@ export type CondSpreadProp = (ts.PropertyAssignment | ts.ShorthandPropertyAssign
   name: ts.Identifier | ts.StringLiteral;
 };
 
-export function conditionalSpreadOf(
-  expr: ts.Expression,
-): { cond: ts.Expression; props: CondSpreadProp[]; whenTrue: boolean } | "unsupported" | null {
+export function conditionalSpreadOf(expr: ts.Expression):
+  | {
+      cond: ts.Expression;
+      props: CondSpreadProp[];
+      whenTrue: boolean;
+      carrier: ts.ObjectLiteralExpression;
+    }
+  | "unsupported"
+  | null {
   let e: ts.Expression = expr;
   while (ts.isParenthesizedExpression(e)) e = e.expression;
   if (!ts.isConditionalExpression(e)) return null;
@@ -2572,7 +2628,7 @@ export function conditionalSpreadOf(
       return "unsupported";
     }
   }
-  return { cond: e.condition, props, whenTrue: trueCarries };
+  return { cond: e.condition, props, whenTrue: trueCarries, carrier };
 }
 
 /** `{ ...idx, ...idx2 }` typed a DECLARED shape (no index signature) — the
@@ -2988,6 +3044,8 @@ export function lowerShorthandValue(
     const stored = runtimeOptionalStorageOperand(lowerer, propName);
     if (stored) return stored;
     const local = lowerer.resolveKey(symbol, propName);
+    // A catch binding reads like the long form `{ reason: reason }`.
+    if (local?.type.kind === "caught") return lowerer.caughtRead(propName, local, loc);
     if (local) {
       return lowerer.maybeNarrow(
         { kind: "varRef", localId: local.id, type: local.type, loc },

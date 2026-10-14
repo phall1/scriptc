@@ -1,4 +1,13 @@
-import { BOOL, F64, STRING, type IrExpr, type IrType, type SrcLoc } from "../../ir/ir.js";
+import {
+  BOOL,
+  DYN,
+  F64,
+  STRING,
+  UNDEFINED_T,
+  type IrExpr,
+  type IrType,
+  type SrcLoc,
+} from "../../ir/ir.js";
 import { numLit, varRef } from "../../ir/build.js";
 import type { Lowerer } from "./lowerer.js";
 
@@ -63,6 +72,114 @@ export function lowerOptionalStringIndex(
       loc,
     },
     type,
+    loc,
+  };
+}
+
+function isStringOrUndefined(
+  lowerer: Lowerer,
+  unionId: string,
+  arms: readonly IrType[] | undefined,
+): boolean {
+  return (
+    arms?.length === 2 &&
+    lowerer.armTag(unionId, STRING) >= 0 &&
+    lowerer.armTag(unionId, UNDEFINED_T) >= 0
+  );
+}
+
+function lowerMappedNumericStringIndex(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  index: IrExpr,
+  resultType: IrType | null,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (index.type.kind !== "f64" || receiver.type.kind !== "string") return null;
+  if (resultType?.kind === "string") {
+    return {
+      kind: "strIntrinsic",
+      method: "charAt",
+      receiver,
+      args: [index],
+      type: STRING,
+      loc,
+    };
+  }
+  if (resultType?.kind !== "union") return null;
+  const arms = lowerer.unions.get(resultType.unionId)?.arms;
+  if (!isStringOrUndefined(lowerer, resultType.unionId, arms)) return null;
+  return lowerOptionalStringIndex(lowerer, receiver, index, resultType, loc);
+}
+
+/** String element access: charAt for a string result, the optional UTF-16
+ * read for `string | undefined`, and the unmapped JavaScript fallback when
+ * the checker type did not map. */
+export function lowerStringElement(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  index: IrExpr,
+  resultType: IrType | null,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (receiver.type.kind !== "string") return null;
+  return (
+    lowerMappedNumericStringIndex(lowerer, receiver, index, resultType, loc) ??
+    lowerUnmappedStringIndex(lowerer, receiver, index, resultType, loc)
+  );
+}
+
+/** Arms that box into a dyn property key. Numbers stringify; symbols stay
+ * symbols. A plain string key does not take this path. */
+function isBoxedStringIndexArm(arm: IrType): boolean {
+  return arm.kind === "string" || arm.kind === "f64" || arm.kind === "symbol" || arm.kind === "dyn";
+}
+
+/** `string | symbol` (and the other PropertyKey unions) on a string receiver.
+ * The keyed read applies ToPropertyKey, so "length" stays a number and a
+ * symbol does not become the string "Symbol(...)". */
+function boxedStringIndexKey(lowerer: Lowerer, index: IrExpr): IrExpr | null {
+  if (index.type.kind === "dyn") return index;
+  if (index.type.kind === "symbol") {
+    return { kind: "dynFrom", value: index, type: DYN, loc: index.loc };
+  }
+  if (index.type.kind !== "union") return null;
+  const arms = lowerer.unions.get(index.type.unionId)?.arms;
+  if (!arms?.every(isBoxedStringIndexArm)) return null;
+  return { kind: "dynFrom", value: index, type: DYN, loc: index.loc };
+}
+
+/** JavaScript element access whose checker type did not map (implicit any
+ * inside a monomorphized JS function). A numeric index is a UTF-16 read
+ * that is undefined when missing. Any other property key is ordinary
+ * property lookup on the boxed string, so brand keys are undefined and
+ * "length" is kept. */
+export function lowerUnmappedStringIndex(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  index: IrExpr,
+  resultType: IrType | null,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (receiver.type.kind !== "string") return null;
+  if (resultType !== null && resultType.kind !== "dyn") return null;
+  if (index.type.kind === "f64") {
+    const optional: IrType = {
+      kind: "union",
+      unionId: lowerer.unions.intern([STRING, UNDEFINED_T]),
+    };
+    return lowerer.coerceToExpected(
+      lowerOptionalStringIndex(lowerer, receiver, index, optional, loc),
+      DYN,
+    );
+  }
+  const key = index.type.kind === "string" ? index : boxedStringIndexKey(lowerer, index);
+  if (!key) return null;
+  return {
+    kind: "dynKeyGet",
+    value: lowerer.coerceToExpected(receiver, DYN),
+    key,
+    type: DYN,
     loc,
   };
 }

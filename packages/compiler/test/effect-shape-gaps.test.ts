@@ -1,0 +1,1672 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, test } from "vitest";
+import { analyze, compile } from "../src/index.js";
+
+const dateProgram = `
+console.log(new Date(0).toJSON("ignored"));
+console.log(new Date(NaN).toJSON());
+`;
+
+const optionsProbe = `
+export function build(options) {
+  let n = 0;
+  if (options.until) n += options.until(1);
+  if (options.while) n += options.while(1);
+  return n;
+}
+`;
+
+const optionsProgram = `
+import { build } from "options-fixture/probe.js";
+
+console.log(build({ while: (value: number) => value + 2 }));
+console.log(build({ schedule: 1 }));
+`;
+
+const errorProbe = `
+export function described() {
+  const error = new Error("boom");
+  error.extra = "x";
+  const current = error instanceof Error ? { ...error, name: error.name, message: error.message } : error;
+  return Object.keys(error).sort().join(",") + "\\n" + Object.keys(current).sort().join(",") + ":" + current.name + ":" + current.message + ":" + current.extra;
+}
+`;
+
+const errorProgram = `
+import { described } from "error-spread-fixture/probe.js";
+
+console.log(described());
+`;
+
+async function matchesNode(name: string, probe: string, program: string): Promise<void> {
+  const directory = mkdtempSync(join(tmpdir(), `scriptc-${name}-`));
+  const pkg = join(directory, "node_modules", name);
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(
+    join(pkg, "package.json"),
+    JSON.stringify({ name, version: "0.0.0", type: "module" }),
+  );
+  writeFileSync(join(pkg, "probe.js"), probe);
+  const entry = join(directory, "main.ts");
+  const binary = join(directory, "main");
+  writeFileSync(entry, program);
+  try {
+    const coverage = analyze(entry, { npmStatic: [name] });
+    const fences = [...coverage.coverage.diagnostics, ...(coverage.coverage.runtimeFences ?? [])];
+    expect(fences, JSON.stringify(fences)).toEqual([]);
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+      npmStatic: [name],
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, ["--experimental-strip-types", entry], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+const utcStringProgram = `
+for (const ms of [0, -1, Date.UTC(2026, 9, 13, 12, 5, 6), 1.9, NaN, 8.64e15, 8.64e15 + 1]) {
+  const date = new Date(ms);
+  console.log(date.toUTCString());
+}
+`;
+
+test("Date toUTCString matches Node, including invalid dates", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-date-utc-"));
+  const entry = join(directory, "main.ts");
+  const binary = join(directory, "main");
+  writeFileSync(entry, utcStringProgram);
+  try {
+    const coverage = analyze(entry);
+    const fences = [...coverage.coverage.diagnostics, ...(coverage.coverage.runtimeFences ?? [])];
+    expect(fences, JSON.stringify(fences)).toEqual([]);
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, ["--experimental-strip-types", entry], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Date toJSON matches Node for valid and invalid dates", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-date-json-"));
+  const entry = join(directory, "main.ts");
+  const binary = join(directory, "main");
+  writeFileSync(entry, dateProgram);
+  try {
+    const coverage = analyze(entry);
+    const fences = [...coverage.coverage.diagnostics, ...(coverage.coverage.runtimeFences ?? [])];
+    expect(fences, JSON.stringify(fences)).toEqual([]);
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, ["--experimental-strip-types", entry], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a missing option method is not called", async () => {
+  await matchesNode("options-fixture", optionsProbe, optionsProgram);
+});
+
+const annotationProbe = `
+export function selected(annotations, options) {
+  const keys = [];
+  if (options?.includeAnnotationKey !== undefined) {
+    for (const key of Object.keys(annotations)) {
+      if (options.includeAnnotationKey(key)) keys.push(key);
+    }
+  }
+  return keys;
+}
+`;
+
+const annotationProgram = `
+import { selected } from "annotation-fixture/probe.js";
+
+const annotations = { title: "A", markdownDescription: "B" };
+console.log(JSON.stringify(selected(annotations, { onExcessProperty: "error" })));
+console.log(JSON.stringify(selected(annotations, {
+  includeAnnotationKey: (key: string) => key.startsWith("markdown"),
+})));
+`;
+
+test("an omitted annotation predicate is not called", async () => {
+  await matchesNode("annotation-fixture", annotationProbe, annotationProgram);
+});
+
+const schemaCellProbe = `
+export function cell(references, key) {
+  const compiled = new Map();
+  function compileDefinition(name, path) {
+    const cached = compiled.get(name);
+    if (cached !== undefined) return cached;
+    const result = [{}, []];
+    compiled.set(name, result);
+    const local = [];
+    local.push(path[0]);
+    result[1].push(local);
+    result[1].push(false);
+    result[0] = { tag: path[0] };
+    return result;
+  }
+  return compileDefinition(key, ["references", key]);
+}
+`;
+
+const schemaCellProgram = `
+import { cell } from "schema-cell-fixture/probe.js";
+
+const value = cell({ a: { _tag: "Any" } }, "a");
+console.log(JSON.stringify(value[0]));
+console.log(JSON.stringify(value[1]));
+`;
+
+test("a heterogeneous schema cell stays checked-dynamic", async () => {
+  await matchesNode("schema-cell-fixture", schemaCellProbe, schemaCellProgram);
+});
+
+test("Object.keys and object spread of Error match Node", async () => {
+  await matchesNode("error-spread-fixture", errorProbe, errorProgram);
+});
+
+const wrapperProbe = `
+export function kind(value) {
+  for (const valueOf of [Number.prototype.valueOf, Boolean.prototype.valueOf, String.prototype.valueOf]) {
+    try {
+      Reflect.apply(valueOf, value, []);
+      return "yes";
+    } catch {
+      continue;
+    }
+  }
+  return "no";
+}
+`;
+
+const wrapperProgram = `
+import { kind } from "primitive-wrapper-fixture/probe.js";
+
+console.log(kind({ a: 1 }));
+console.log(kind(true));
+console.log(kind(1));
+console.log(kind("ab"));
+`;
+
+test("boxed primitive valueOf probes match Node", async () => {
+  await matchesNode("primitive-wrapper-fixture", wrapperProbe, wrapperProgram);
+});
+
+const callbackProbe = `
+export function joined(transform) {
+  return ["a", "b"].map(transform).join(",");
+}
+export function kept(predicate) {
+  return [1, 2, 3, 4].filter(predicate).join(",");
+}
+export function visited(visit) {
+  ["x", "y"].forEach(visit);
+}
+`;
+
+const callbackProgram = `
+import { joined, kept, visited } from "array-callback-fixture/probe.js";
+
+const seen: string[] = [];
+visited((part: string) => {
+  seen.push(part);
+});
+console.log(joined((part: string) => part.toUpperCase()));
+console.log(kept((value: number) => value % 2 === 0));
+console.log(seen.join(","));
+`;
+
+test("unknown array callbacks match Node", async () => {
+  await matchesNode("array-callback-fixture", callbackProbe, callbackProgram);
+});
+
+const memberProbe = `
+export function compileGet(nodes) {
+  return (s) => {
+    const op = nodes[0];
+    return op.get(s);
+  };
+}
+export function fromIterator(iterator) {
+  const iter = iterator();
+  const state = iter.next();
+  return state.done ? "done" : state.value;
+}
+export function compileSet(nodes) {
+  return (a) => {
+    for (let i = nodes.length - 1; i >= 0; i--) a = nodes[i].set(a);
+    return a;
+  };
+}
+`;
+
+const memberProgram = `
+import { compileGet, compileSet, fromIterator } from "member-call-fixture/probe.js";
+
+const step: { _tag: string; get: unknown; kind: unknown; set: unknown } = {
+  _tag: "Iso",
+  get: (s: number) => s + 1,
+  kind: "Iso",
+  set: (a: number) => a + 2,
+};
+console.log(compileGet([step])(3));
+console.log(compileSet([step])(3));
+console.log(fromIterator(() => [7][Symbol.iterator]()));
+`;
+
+test("record field calls and generator next match Node", async () => {
+  await matchesNode("member-call-fixture", memberProbe, memberProgram);
+});
+
+const symbolProbe = `
+export function keys(registered) {
+  const local = Symbol("local");
+  return (Symbol.keyFor(registered) ?? "none") + ":" + (Symbol.keyFor(local) ?? "none");
+}
+export function octet(part) {
+  return Number.parseInt(part, 16);
+}
+`;
+
+const symbolProgram = `
+import { keys, octet } from "symbol-parse-fixture/probe.js";
+
+console.log(keys(Symbol.for("effect")));
+console.log(octet("0a"));
+console.log(octet("zz"));
+`;
+
+test("Symbol.keyFor and Number.parseInt of unknown values match Node", async () => {
+  await matchesNode("symbol-parse-fixture", symbolProbe, symbolProgram);
+});
+
+const setProbe = `
+export function segment(input) {
+  let failures;
+  function go(i) {
+    if (failures?.has(i)) return false;
+    failures ??= new Set();
+    failures.add(i);
+    return true;
+  }
+  const first = go(input.length);
+  const second = go(input.length);
+  return first + ":" + second;
+}
+`;
+
+const setProgram = `
+import { segment } from "set-failure-fixture/probe.js";
+
+console.log(segment("ab"));
+`;
+
+test("a lazily created Set accepts add and has", async () => {
+  await matchesNode("set-failure-fixture", setProbe, setProgram);
+});
+
+const bufferProbe = `
+export function find(chunk, needle, fromIndex) {
+  return Buffer.prototype.indexOf.call(chunk, needle, fromIndex);
+}
+`;
+
+const bufferProgram = `
+import { find } from "buffer-search-fixture/probe.js";
+
+const chunk = new Uint8Array([1, 2, 3, 2, 3]);
+const needle = new Uint8Array([2, 3]);
+console.log(find(chunk, needle, 0));
+console.log(find(chunk, needle, 2));
+console.log(find(chunk, new Uint8Array([9]), 0));
+`;
+
+test("Buffer.prototype.indexOf.call matches Node", async () => {
+  await matchesNode("buffer-search-fixture", bufferProbe, bufferProgram);
+});
+
+const formProbe = `
+export function build(pairs) {
+  const out = new FormData();
+  for (const pair of pairs) out.append(pair[0], pair[1]);
+  const parts = [];
+  for (const pair of out.entries()) parts.push(pair[0] + "=" + pair[1]);
+  return parts.join("&");
+}
+export function isBlob(value) {
+  return typeof Blob !== "undefined" && value instanceof Blob;
+}
+`;
+
+const formProgram = `
+import { build, isBlob } from "form-data-fixture/probe.js";
+
+console.log(build([["a", "1"], ["b", "2"]]));
+console.log(isBlob("x"));
+console.log(isBlob({ a: 1 }));
+`;
+
+test("empty FormData append and entries match Node", async () => {
+  await matchesNode("form-data-fixture", formProbe, formProgram);
+});
+
+const formIdentityProbe = `
+export function checks(value) {
+  const own = new FormData();
+  own.append("a", "1");
+  return JSON.stringify([
+    typeof FormData,
+    own instanceof FormData,
+    value instanceof FormData,
+    null instanceof FormData,
+    typeof FormData !== "undefined" && own instanceof FormData,
+  ]);
+}
+`;
+
+const formIdentityProgram = `
+import { checks } from "form-identity-fixture/probe.js";
+
+console.log(checks("x"));
+console.log(checks({ a: 1 }));
+`;
+
+test("FormData identity matches Node", async () => {
+  await matchesNode("form-identity-fixture", formIdentityProbe, formIdentityProgram);
+});
+
+const promptMaxProbe = `
+export function Int(options) {
+  const opts = {
+    min: -Infinity,
+    max: Infinity,
+    ...options,
+  };
+  return opts.max;
+}
+export function count(metadata) {
+  let reads = 0;
+  const source = {
+    get max() {
+      reads++;
+      return metadata.max;
+    },
+  };
+  const result = Int({
+    message: "count",
+    default: 0,
+    min: 0,
+    ...(metadata.hasMax ? { max: source.max } : {}),
+  });
+  return result + ":" + reads;
+}
+`;
+
+const promptMaxProgram = `
+import { count } from "prompt-max-fixture/probe.js";
+
+console.log(count({ hasMax: true, max: 3 }));
+console.log(count({ hasMax: false, max: 9 }));
+`;
+
+test("a conditional spread omits an optional any field", async () => {
+  await matchesNode("prompt-max-fixture", promptMaxProbe, promptMaxProgram);
+});
+
+const shorthandCaptureProbe = `
+export function formatObj(value, options) {
+  return String(value) + ":" + String(options.space);
+}
+export function run(n) {
+  const format = (quoteValue, space) => (value) => {
+    const formatUnknown = (v) => typeof v === "string" ? v : formatObj(v, { space });
+    return formatUnknown(value) + quoteValue("q");
+  };
+  return format((s) => "[" + s + "]", n)(1);
+}
+`;
+
+const shorthandCaptureProgram = `
+import { run } from "shorthand-capture-fixture/probe.js";
+
+console.log(run("-"));
+`;
+
+test("a shorthand property captures an outer parameter", async () => {
+  await matchesNode("shorthand-capture-fixture", shorthandCaptureProbe, shorthandCaptureProgram);
+});
+
+const searchProgram = `
+console.log("a.b".search("."));
+console.log("abc".search("b"));
+console.log("abc".search(/b/));
+let bad = "no";
+try {
+  "a".search("[");
+} catch (e) {
+  bad = e instanceof SyntaxError ? "syntax" : "other";
+}
+console.log(bad);
+`;
+
+test("String.prototype.search compiles a string pattern as a RegExp", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-string-search-"));
+  const entry = join(directory, "main.ts");
+  const binary = join(directory, "main");
+  writeFileSync(entry, searchProgram);
+  try {
+    const coverage = analyze(entry);
+    const fences = [...coverage.coverage.diagnostics, ...(coverage.coverage.runtimeFences ?? [])];
+    expect(fences, JSON.stringify(fences)).toEqual([]);
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, ["--experimental-strip-types", entry], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+const headerSearchProbe = `
+export function dot(value) {
+  return value.search(".");
+}
+export function hit(self, key) {
+  const found = [];
+  const modify = (key) => {
+    if (typeof key === "string") {
+      if (key in self) found.push("s:" + key);
+    } else {
+      for (const name of Object.keys(self)) {
+        if (name.search(key) !== -1) found.push("r:" + name);
+      }
+    }
+  };
+  if (Array.isArray(key)) {
+    for (let i = 0; i < key.length; i++) modify(key[i]);
+  } else modify(key);
+  return found.join(",");
+}
+`;
+
+const headerSearchProgram = `
+import { dot, hit } from "header-search-fixture/probe.js";
+
+const headers = { authorization: "1", "content-type": "2" };
+console.log(dot("a.b"));
+console.log(dot("abc"));
+console.log(hit(headers, /auth/));
+console.log(hit(headers, "content-type"));
+console.log(hit(headers, ["content-type", /auth/]));
+console.log(hit(headers, /nope/));
+`;
+
+test("header name search matches Node for strings and regular expressions", async () => {
+  await matchesNode("header-search-fixture", headerSearchProbe, headerSearchProgram);
+});
+
+const cookieProbe = `
+export function attribute(part) {
+  const equalIndex = part.indexOf("=");
+  const key = equalIndex === -1 ? part : part.slice(0, equalIndex);
+  const value = equalIndex === -1 ? undefined : part.slice(equalIndex + 1).trim();
+  if (value === undefined) return key.toLowerCase() + ":missing";
+  return key.toLowerCase() + ":" + value.trim().replace(/^\\./, "").toLowerCase();
+}
+export function maybeTrim(flag, text) {
+  const value = flag ? text : undefined;
+  return value.trim();
+}
+`;
+
+const cookieProgram = `
+import { attribute, maybeTrim } from "cookie-trim-fixture/probe.js";
+
+console.log(attribute("Domain=.Example.COM"));
+console.log(attribute("Secure"));
+console.log(attribute("SameSite=Lax"));
+console.log(maybeTrim(true, " Ab "));
+let threw = "no";
+try {
+  maybeTrim(false, "x");
+} catch (e) {
+  threw = e instanceof Error ? e.message : "other";
+}
+console.log(threw);
+`;
+
+test("nullable string trim and toLowerCase match Node", async () => {
+  await matchesNode("cookie-trim-fixture", cookieProbe, cookieProgram);
+});
+
+const tryProbe = `
+function isFunction(input) {
+  return typeof input === "function";
+}
+export function attempt(evaluate) {
+  if (isFunction(evaluate)) {
+    try {
+      return "fn:" + evaluate();
+    } catch (e) {
+      return "fn-threw";
+    }
+  }
+  try {
+    return "obj:" + evaluate.try();
+  } catch (e) {
+    return "obj:" + evaluate.catch(e);
+  }
+}
+`;
+
+const tryProgram = `
+import { attempt } from "try-predicate-fixture/probe.js";
+
+console.log(attempt(() => "direct"));
+console.log(attempt({ try: () => "https://example.com", catch: (error: unknown) => String(error) }));
+console.log(attempt({ try: () => { throw new Error("bad"); }, catch: (error: unknown) => error instanceof Error ? error.message : "other" }));
+`;
+
+test("isFunction folds so object and function attempts both match Node", async () => {
+  await matchesNode("try-predicate-fixture", tryProbe, tryProgram);
+});
+
+const cookieDateProbe = `
+const Proto = { kind: "cookie" };
+export function stamp(name, when) {
+  const options = { expires: when, path: "/" };
+  const cookie = Object.assign(Object.create(Proto), {
+    name,
+    options: options ? options : undefined,
+  });
+  return cookie;
+}
+`;
+
+const cookieDateProgram = `
+import { stamp } from "cookie-date-fixture/probe.js";
+
+const cookie = stamp("id", new Date(0));
+console.log(cookie.kind);
+console.log(cookie.name);
+console.log(cookie.options.path);
+console.log(cookie.options.expires.toISOString());
+console.log(cookie.options.expires.getTime());
+`;
+
+test("Object.assign copies a record that holds a Date", async () => {
+  await matchesNode("cookie-date-fixture", cookieDateProbe, cookieDateProgram);
+});
+
+const literalProbe = `
+export function Literal(literal) {
+  const out = {
+    literal,
+    transform(to) {
+      return out.literal + ":" + String(to) + ":" + Literal(to).literal;
+    },
+  };
+  return out;
+}
+`;
+
+const literalProgram = `
+import { Literal } from "literal-capture-fixture/probe.js";
+
+console.log(Literal("a").transform("b"));
+`;
+
+test("a nested method can capture the const it initializes, including a recursive call", async () => {
+  await matchesNode("literal-capture-fixture", literalProbe, literalProgram);
+});
+
+const fileProbe = `
+export async function described(bytes) {
+  const file = new globalThis.File([bytes], "note.txt", { type: "text/plain", lastModified: 5 });
+  const copy = new Uint8Array(await file.arrayBuffer());
+  return [file.name, file.type, String(file.lastModified), String(file.size), String(copy.length), String(copy[0])].join(" ");
+}
+`;
+
+const fileProgram = `
+import { described } from "file-fixture/probe.js";
+
+console.log(await described(new Uint8Array([1, 2, 3])));
+`;
+
+test("new File records the name, type, time, and byte length", async () => {
+  await matchesNode("file-fixture", fileProbe, fileProgram);
+});
+
+const replaceProbe = `
+export function words(input) {
+  const patterns = [/([a-z0-9])([A-Z])/g, /([A-Z])([A-Z][a-z])/g];
+  let result = input;
+  for (const regexp of patterns) result = result.replace(regexp, "$1 $2");
+  return result;
+}
+export function expand(text, parsed) {
+  return String(text).replace(parsed.token, () => parsed.value);
+}
+`;
+
+const replaceProgram = `
+import { expand, words } from "replace-fixture/probe.js";
+
+console.log(words("camelCase"));
+console.log(words("HTTPResponse"));
+console.log(expand("hello NAME", { token: "NAME", value: "world" }));
+console.log(expand("a.b", { token: ".", value: "X" }));
+console.log(expand("a.b", { token: /a\\.b/, value: "z" }));
+console.log(expand("n", { token: "n", value: 7 }));
+`;
+
+test("string replace accepts a RegExp search and a callback replacement", async () => {
+  await matchesNode("replace-fixture", replaceProbe, replaceProgram);
+});
+
+const arrayExportProbe = `
+export const Array = globalThis.Array;
+`;
+
+const arrayExportProgram = `
+import * as Arrays from "array-export-fixture/probe.js";
+
+console.log(Arrays.Array === globalThis.Array);
+console.log(new Arrays.Array(1, 2).join(","));
+`;
+
+test("an exported Array constructor matches globalThis.Array", async () => {
+  await matchesNode("array-export-fixture", arrayExportProbe, arrayExportProgram);
+});
+
+const cwdProbe = `
+export function here() {
+  let cwd = undefined;
+  const process = globalThis.process;
+  if (
+    cwd === undefined &&
+    "process" in globalThis &&
+    typeof process === "object" &&
+    process !== null &&
+    typeof process.cwd === "function"
+  ) {
+    cwd = process.cwd();
+  }
+  return cwd;
+}
+`;
+
+const cwdProgram = `
+import { here } from "cwd-fixture/probe.js";
+
+console.log(here() === process.cwd());
+`;
+
+test("a guarded process.cwd call matches Node", async () => {
+  await matchesNode("cwd-fixture", cwdProbe, cwdProgram);
+});
+
+const pendingProbe = `
+export function makeParser() {
+  let pending;
+  function reset() {
+    pending = [];
+  }
+  function feed(chunk) {
+    pending.push(chunk.slice(0, 1));
+    const line = pending.length > 0 ? pending.join("") : "";
+    pending = [];
+    return line;
+  }
+  reset();
+  return { feed };
+}
+`;
+
+const pendingProgram = `
+import { makeParser } from "pending-fixture/probe.js";
+
+console.log(makeParser().feed("ab"));
+`;
+
+test("a let array assigned in a nested function accepts push and join", async () => {
+  await matchesNode("pending-fixture", pendingProbe, pendingProgram);
+});
+
+const classSpreadProbe = `
+export function formatInstance(identifier, value) {
+  const methods = {
+    toString() {
+      return identifier + "(" + JSON.stringify({ ...this }) + ")";
+    },
+  };
+  return methods.toString.call(value);
+}
+`;
+
+const classSpreadProgram = `
+import { formatInstance } from "class-spread-fixture/probe.js";
+
+console.log(formatInstance("Person", { name: "Alice", age: 30 }));
+`;
+
+test("spreading a class instance omits prototype toString", async () => {
+  await matchesNode("class-spread-fixture", classSpreadProbe, classSpreadProgram);
+});
+
+const namedLoopProbe = `
+export function firstPositive(pulls) {
+  let i = 0;
+  return (function loop() {
+    const step = (value) => (value < 0 ? loop() : value);
+    return step(pulls[i++]);
+  })();
+}
+export function countdown(n) {
+  const run = (body) => body(n);
+  return run(function loop(left) {
+    return left <= 0 ? "done" : loop(left - 1);
+  });
+}
+`;
+
+const namedLoopProgram = `
+import { countdown, firstPositive } from "named-loop-fixture/probe.js";
+
+console.log(firstPositive([-1, -2, 4]));
+console.log(countdown(3));
+`;
+
+test("a named function expression can call itself from a nested function", async () => {
+  await matchesNode("named-loop-fixture", namedLoopProbe, namedLoopProgram);
+});
+
+const pushSpreadProbe = `
+export function joinParts(parts) {
+  const segments = ["a"];
+  segments.push(...parts);
+  return segments.join(",");
+}
+export function joinApply(parts) {
+  const segments = ["a"];
+  segments.push.apply(segments, parts);
+  return segments.join(",");
+}
+export function joinEmpty(parts) {
+  const segments = [];
+  segments.push.apply(segments, parts);
+  return segments.join(",");
+}
+`;
+
+const pushSpreadProgram = `
+import { joinApply, joinEmpty, joinParts } from "push-spread-fixture/probe.js";
+
+const parts: unknown = ["b", "c"];
+const one: unknown = ["d"];
+console.log(joinParts(parts));
+console.log(joinApply(one));
+console.log(joinEmpty(parts));
+`;
+
+test("pushing a spread of unknown values checks them into the array", async () => {
+  await matchesNode("push-spread-fixture", pushSpreadProbe, pushSpreadProgram);
+});
+
+const savepointProbe = `
+export function wrap(options, conn, id) {
+  let effect = "base";
+  const finish = (exit) => {
+    if (id > 0 && options.releaseSavepoint) {
+      effect = effect + ":" + options.releaseSavepoint(conn, id);
+    }
+    return effect + ":" + exit;
+  };
+  return finish("ok");
+}
+`;
+
+const savepointProgram = `
+import { wrap } from "savepoint-fixture/probe.js";
+
+const optional: {
+  releaseSavepoint?: (name: string, n: number) => string;
+} = {};
+console.log(wrap({}, "c", 1));
+console.log(wrap(optional, "c", 2));
+optional.releaseSavepoint = (name: string, n: number) => name + n;
+console.log(wrap(optional, "c", 2));
+console.log(wrap(optional, "c", 0));
+`;
+
+test("an optional callback runs only after a truthy check", async () => {
+  await matchesNode("savepoint-fixture", savepointProbe, savepointProgram);
+});
+
+const mathSpreadProbe = `
+export function widest(rows) {
+  return Math.max(...rows.map((row) => row.width));
+}
+export function narrowest(rows) {
+  return Math.min(...rows);
+}
+`;
+
+const mathSpreadProgram = `
+import { narrowest, widest } from "math-spread-fixture/probe.js";
+
+console.log(widest([{ width: 1 }, { width: 8 }, { width: 3 }]));
+console.log(widest([]));
+console.log(narrowest(["2", "10", "4"]));
+console.log(narrowest("12"));
+`;
+
+test("Math.max and Math.min spread unknown iterables", async () => {
+  await matchesNode("math-spread-fixture", mathSpreadProbe, mathSpreadProgram);
+});
+
+const codePointProbe = `
+export function escapeControl(text) {
+  return text.replace(/[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]/g, (character) => {
+    return "\\\\x" + character.charCodeAt(0).toString(16).padStart(2, "0");
+  });
+}
+`;
+
+const codePointProgram = `
+import { escapeControl } from "code-point-fixture/probe.js";
+
+console.log(escapeControl("A\\n\\tB"));
+console.log(escapeControl("ok"));
+`;
+
+test("a code point formats in hex and pads", async () => {
+  await matchesNode("code-point-fixture", codePointProbe, codePointProgram);
+});
+
+const codeHexProbe = `
+export function quoteUnit(text) {
+  const parts = [];
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    parts.push(code.toString(16).toUpperCase().padStart(4, "0"));
+  }
+  return parts.join(" ");
+}
+`;
+
+const codeHexProgram = `
+import { quoteUnit } from "code-hex-fixture/probe.js";
+
+console.log(quoteUnit("A\\n"));
+console.log(quoteUnit("ok"));
+`;
+
+test("a stored code unit formats in hex", async () => {
+  await matchesNode("code-hex-fixture", codeHexProbe, codeHexProgram);
+});
+
+const parseIntProbe = `
+export function hour(value) {
+  return Number.parseInt(value.slice(-2));
+}
+export function prefixed(text) {
+  return globalThis.Number.parseInt(text);
+}
+`;
+
+const parseIntProgram = `
+import { hour, prefixed } from "parse-int-fixture/probe.js";
+
+console.log(hour("2026-10-13T12"));
+console.log(prefixed("0x10"));
+console.log(prefixed("08"));
+console.log(prefixed("zz"));
+console.log(prefixed("  -12px"));
+`;
+
+test("Number.parseInt omits the radix the way the global does", async () => {
+  await matchesNode("parse-int-fixture", parseIntProbe, parseIntProgram);
+});
+
+const parseFloatProbe = `
+export function fromUnknown(value) {
+  return globalThis.Number.parseFloat(value);
+}
+export function joined(state, input) {
+  return globalThis.Number.parseFloat(state.value + input);
+}
+`;
+
+const parseFloatProgram = `
+import { fromUnknown, joined } from "parse-float-fixture/probe.js";
+
+const values: unknown[] = [
+  "1.5px",
+  2,
+  null,
+  undefined,
+  true,
+  { toString() { return "4.25x"; } },
+];
+for (const value of values) console.log(fromUnknown(value));
+const states: unknown[] = [{ value: "" }, { value: "1" }, { value: "-" }];
+const inputs = [".", "2px", "3"];
+for (let i = 0; i < states.length; i++) console.log(joined(states[i], inputs[i]!));
+`;
+
+test("Number.parseFloat stringifies an unknown argument", async () => {
+  await matchesNode("parse-float-fixture", parseFloatProbe, parseFloatProgram);
+});
+
+const flatMapUnionProbe = `
+export class Filter {
+  constructor(name) {
+    this.name = name;
+    this.kind = "f";
+  }
+}
+export class Group {
+  constructor(name) {
+    this.name = name;
+    this.kind = "g";
+  }
+}
+/**
+ * @param {{ _tag: string, name: string }} check
+ * @returns {Filter[] | Group[]}
+ */
+export function compilerCheck(check) {
+  if (check._tag === "Filter") return [new Filter(check.name)];
+  return [new Group(check.name)];
+}
+export function run(checks) {
+  return checks.flatMap(compilerCheck).map((item) => item.kind + item.name).join(",");
+}
+`;
+
+const flatMapUnionProgram = `
+import { run } from "flatmap-union-fixture/probe.js";
+
+const checks: unknown = [
+  { _tag: "Filter", name: "a" },
+  { _tag: "Other", name: "b" },
+];
+const empty: unknown = [];
+console.log(run(checks));
+console.log(run(empty));
+`;
+
+test("flatMap concatenates a union of array returns", async () => {
+  await matchesNode("flatmap-union-fixture", flatMapUnionProbe, flatMapUnionProgram);
+});
+
+const varyProbe = `
+export function varyWith(headers, dimension) {
+  const vary = headers["vary"];
+  if (vary === undefined) return dimension;
+  const members = vary.split(",").map((member) => member.trim().toLowerCase());
+  return members.includes("*") || members.includes(dimension.toLowerCase())
+    ? vary
+    : vary + ", " + dimension;
+}
+`;
+
+const varyProgram = `
+import { varyWith } from "vary-fixture/probe.js";
+
+console.log(varyWith({}, "accept-encoding"));
+console.log(varyWith({ vary: "Accept-Encoding" }, "origin"));
+console.log(varyWith({ vary: "*" }, "origin"));
+console.log(varyWith({ vary: "origin, *" }, "accept-encoding"));
+`;
+
+test("an untyped header list includes the star token", async () => {
+  await matchesNode("vary-fixture", varyProbe, varyProgram);
+});
+
+const processProbe = `
+export function loggerMode() {
+  const process = globalThis.process;
+  const hasProcessStdout = typeof process?.stdout === "object" && process.stdout !== null;
+  const processStdoutIsTTY = hasProcessStdout && process.stdout.isTTY === true;
+  const processIsBun = process?.isBun === true;
+  return [hasProcessStdout, processStdoutIsTTY, processIsBun];
+}
+`;
+
+const processProgram = `
+import { loggerMode } from "process-probe-fixture/probe.js";
+
+console.log(JSON.stringify(loggerMode()));
+`;
+
+test("a process alias probes stdout and isBun", async () => {
+  await matchesNode("process-probe-fixture", processProbe, processProgram);
+});
+
+const messageProbe = `
+class WithReason extends Error {
+  constructor(reason) {
+    super();
+    this.reason = reason;
+  }
+}
+class Boom extends WithReason {
+  message = this.reason.message;
+}
+export function text(reason) {
+  return new Boom(reason).message;
+}
+`;
+
+const messageProgram = `
+import { text } from "message-field-fixture/probe.js";
+
+console.log(text({ message: "boom" }));
+console.log(text({ message: "socket closed" }));
+`;
+
+test("an Error subclass resets message from an unknown reason", async () => {
+  await matchesNode("message-field-fixture", messageProbe, messageProgram);
+});
+
+const remainderProbe = `
+function toScientificInteger(n) {
+  if (globalThis.Number.isInteger(n)) return [BigInt(n), 0];
+  const scientific = Math.abs(n).toExponential();
+  const eIndex = scientific.indexOf("e");
+  const digits = scientific.slice(0, eIndex).replace(".", "");
+  const coefficient = BigInt(digits) * (n < 0 ? -BigInt(1) : BigInt(1));
+  return [coefficient, globalThis.Number(scientific.slice(eIndex + 1)) - digits.length + 1];
+}
+export function remainder(self, divisor) {
+  if (!globalThis.Number.isFinite(self) || !globalThis.Number.isFinite(divisor) || divisor === 0) {
+    return NaN;
+  }
+  if (globalThis.Number.isInteger(self) && globalThis.Number.isInteger(divisor)) {
+    return self % divisor;
+  }
+  const [selfCoefficient, selfExponent] = toScientificInteger(self);
+  const [divisorCoefficient, divisorExponent] = toScientificInteger(divisor);
+  const exponent = Math.min(selfExponent, divisorExponent);
+  const selfInteger = selfCoefficient * BigInt(10) ** BigInt(selfExponent - exponent);
+  const divisorInteger = divisorCoefficient * BigInt(10) ** BigInt(divisorExponent - exponent);
+  const out = selfInteger % divisorInteger;
+  if (out === BigInt(0)) return self < 0 || Object.is(self, -0) ? -0 : 0;
+  const value = globalThis.Number(String(out) + "e" + exponent);
+  return value === 0 ? Math.sign(self) * globalThis.Number.MIN_VALUE : value;
+}
+export function show(n) {
+  return Object.is(n, -0) ? "-0" : String(n);
+}
+`;
+
+const remainderProgram = `
+import { remainder, show } from "remainder-fixture/probe.js";
+
+for (const [self, divisor] of [[2, 2], [3, 2], [-4, 2], [1.5, 0.2], [0.3, 0.1], [-1.25, 0.5]]) {
+  console.log(show(remainder(self, divisor)));
+}
+`;
+
+test("a scientific remainder subtracts number-or-bigint exponents", async () => {
+  await matchesNode("remainder-fixture", remainderProbe, remainderProgram);
+});
+
+const quantityProbe = `
+const units = new Map([["kB", { factor: BigInt(1000), symbol: "kB" }]]);
+function fromQuantity(quantity, unit) {
+  if (typeof quantity === "bigint") {
+    if (quantity < BigInt(0)) return "bad";
+    return String(quantity * unit.factor);
+  }
+  const value = quantity * globalThis.Number(unit.factor);
+  if (!globalThis.Number.isSafeInteger(value) || value < 0) return "bad";
+  return String(BigInt(value));
+}
+export function of(symbol, quantity) {
+  return fromQuantity(quantity, units.get(symbol));
+}
+`;
+
+const quantityProgram = `
+import { of } from "quantity-fixture/probe.js";
+
+console.log(of("kB", 2));
+console.log(of("kB", 2n));
+console.log(of("kB", 0));
+`;
+
+test("a byte quantity multiplies a bigint factor", async () => {
+  await matchesNode("quantity-fixture", quantityProbe, quantityProgram);
+});
+
+const recursiveDeclProbe = `
+export function mergeLeaves(shift, left, right) {
+  if (shift > 2 || left === right) return left;
+  const child = mergeLeaves(shift + 1, left.slice(1), right.slice(1));
+  return left[0] + child + right[0];
+}
+`;
+
+const recursiveDeclProgram = `
+import { mergeLeaves } from "recursive-decl-fixture/probe.js";
+
+console.log(mergeLeaves(0, "ab", "cd"));
+console.log(mergeLeaves(0, "aa", "aa"));
+`;
+
+test("a function declaration can call itself", async () => {
+  await matchesNode("recursive-decl-fixture", recursiveDeclProbe, recursiveDeclProgram);
+});
+
+const varintProbe = `
+export function encodeVarint(value) {
+  const bytes = [];
+  let n = typeof value === "bigint" ? value : BigInt(value);
+  if (n < BigInt(0)) n = BigInt.asUintN(64, n);
+  while (n > BigInt(127)) {
+    bytes.push(Number(n & BigInt(127)) | 0x80);
+    n >>= BigInt(7);
+  }
+  bytes.push(Number(n));
+  return bytes.join(",");
+}
+export function zigzag(n) {
+  const zero = BigInt(0);
+  const one = BigInt(1);
+  const encoded = n >= zero ? n << one : (-n << one) - one;
+  let value = zero;
+  let shift = zero;
+  while (true) {
+    const byte = Number(encoded & BigInt(127));
+    value |= BigInt(byte) << shift;
+    if (byte < 128) break;
+    shift += BigInt(7);
+  }
+  return value.toString();
+}
+`;
+
+const varintProgram = `
+import { encodeVarint, zigzag } from "varint-fixture/probe.js";
+
+for (const sample of [0, 127, 128, 300, 0n, -1n, 300n] as unknown[]) {
+  console.log(encodeVarint(sample));
+}
+for (const sample of [0n, 1n, -1n, -2n, 300n] as unknown[]) {
+  console.log(zigzag(sample));
+}
+`;
+
+test("varint updates and zigzag negation keep bigint kinds", async () => {
+  await matchesNode("varint-fixture", varintProbe, varintProgram);
+});
+
+const readerVarintProbe = `
+const BIGINT_ZERO = BigInt(0);
+const BIGINT_ONE = BigInt(1);
+const BIGINT_SEVEN = BigInt(7);
+
+class Reader {
+  buf;
+  pos = 0;
+  end = 0;
+  constructor(bytes) {
+    this.buf = bytes;
+    this.end = bytes.length;
+  }
+  byte() {
+    if (this.pos >= this.end) throw new Error("complete value");
+    return this.buf[this.pos++];
+  }
+  uvarintBig() {
+    let value = BIGINT_ZERO;
+    let shift = BIGINT_ZERO;
+    while (true) {
+      const b = this.byte();
+      value |= BigInt(b & 0x7F) << shift;
+      if ((b & 0x80) === 0) return value;
+      shift += BIGINT_SEVEN;
+    }
+  }
+  numberVarint() {
+    const code = this.uvarintBig();
+    const magnitude = Number(code >> BIGINT_ONE);
+    return (code & BIGINT_ONE) === BIGINT_ONE ? -magnitude : magnitude;
+  }
+  zigzag() {
+    const u = this.uvarintBig();
+    return (u & BIGINT_ONE) === BIGINT_ONE ? -(u + BIGINT_ONE >> BIGINT_ONE) : u >> BIGINT_ONE;
+  }
+}
+
+export function decode(bytes) {
+  const numberReader = new Reader(Uint8Array.from(bytes));
+  const zigzagReader = new Reader(Uint8Array.from(bytes));
+  return numberReader.numberVarint() + "," + zigzagReader.zigzag().toString();
+}
+`;
+
+const readerVarintProgram = `
+import { decode } from "reader-varint-fixture/probe.js";
+
+for (const bytes of [[0x05], [0x80, 0x01], [0x01], [0xff, 0x01]]) {
+  console.log(decode(bytes));
+}
+`;
+
+test("a while-true bigint decoder keeps its return kind", async () => {
+  await matchesNode("reader-varint-fixture", readerVarintProbe, readerVarintProgram);
+});
+
+const locationProbe = `
+export function baseUrl() {
+  if ("location" in globalThis && globalThis.location !== undefined && globalThis.location.origin !== undefined && globalThis.location.pathname !== undefined) {
+    return location.origin + location.pathname;
+  }
+  return undefined;
+}
+export function readLocation() {
+  try {
+    return String(location);
+  } catch (error) {
+    return error.name + ":" + error.message;
+  }
+}
+`;
+
+const locationProgram = `
+import { baseUrl, readLocation } from "location-fixture/probe.js";
+
+console.log(String(baseUrl()));
+console.log(readLocation());
+`;
+
+test("a guarded bare location matches Node", async () => {
+  await matchesNode("location-fixture", locationProbe, locationProgram);
+});
+
+const routerSplitProbe = `
+class RouteNode {
+  constructor(prefix) {
+    this.prefix = prefix;
+  }
+  prefix;
+  split(parent, length) {
+    const parentPrefix = this.prefix.slice(0, length);
+    const childPrefix = this.prefix.slice(length);
+    this.prefix = childPrefix;
+    const created = new RouteNode(parentPrefix);
+    created.child = this;
+    parent.kids[parentPrefix.charAt(0)] = created;
+    return created;
+  }
+}
+export class RouteParent {
+  constructor() {
+    this.kids = Object.create(null);
+  }
+  kids;
+  add(path) {
+    let child = this.kids[path.charAt(0)];
+    if (child) {
+      let index = 1;
+      for (; index < child.prefix.length; index++) {
+        if (path.charCodeAt(index) !== child.prefix.charCodeAt(index)) {
+          child = child.split(this, index);
+          break;
+        }
+      }
+      return child.prefix + ":" + String(index) + ":" + child.child.prefix;
+    }
+    this.kids[path.charAt(0)] = new RouteNode(path);
+    return "new:" + path;
+  }
+}
+export function cut(value) {
+  return value.split(",")[0];
+}
+`;
+
+const routerSplitProgram = `
+import { RouteParent, cut } from "router-split-fixture/probe.js";
+
+const parent = new RouteParent();
+console.log(parent.add("items"));
+console.log(parent.add("index"));
+console.log(cut("alpha,beta"));
+`;
+
+test("a dictionary node split is the instance method", async () => {
+  await matchesNode("router-split-fixture", routerSplitProbe, routerSplitProgram);
+});
+
+test("uncalled WebSocket and CompressionStream constructors stay static", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-web-ctor-"));
+  const types = join(directory, "node_modules", "@types");
+  mkdirSync(types, { recursive: true });
+  symlinkSync(join(import.meta.dirname, "../../../node_modules/@types/node"), join(types, "node"));
+  writeFileSync(
+    join(directory, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        target: "ES2025",
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        strict: true,
+        types: ["node"],
+      },
+    }),
+  );
+  const entry = join(directory, "main.js");
+  const binary = join(directory, "main");
+  writeFileSync(
+    entry,
+    `
+function hold(fn) {
+  return typeof fn;
+}
+console.log(hold((url) => new WebSocket(url)));
+console.log(hold((format) => new CompressionStream(format)));
+`,
+  );
+  try {
+    const coverage = analyze(entry, {});
+    const fences = [...coverage.coverage.diagnostics, ...(coverage.coverage.runtimeFences ?? [])];
+    expect(fences, JSON.stringify(fences)).toEqual([]);
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, ["--experimental-strip-types", entry], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an undefined ReadableStream strategy uses the default stream", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-stream-strategy-"));
+  const types = join(directory, "node_modules", "@types");
+  mkdirSync(types, { recursive: true });
+  symlinkSync(join(import.meta.dirname, "../../../node_modules/@types/node"), join(types, "node"));
+  writeFileSync(
+    join(directory, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        target: "ES2025",
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        strict: true,
+        types: ["node"],
+      },
+    }),
+  );
+  const entry = join(directory, "main.js");
+  const binary = join(directory, "main");
+  writeFileSync(
+    entry,
+    `
+function make(strategy) {
+  let seen = "no";
+  const stream = new ReadableStream({
+    start() {
+      seen = "yes";
+    },
+  }, strategy);
+  return seen + ":" + String(stream !== undefined);
+}
+console.log(make(undefined));
+`,
+  );
+  try {
+    const coverage = analyze(entry, {});
+    const fences = [...coverage.coverage.diagnostics, ...(coverage.coverage.runtimeFences ?? [])];
+    expect(fences, JSON.stringify(fences)).toEqual([]);
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, ["--experimental-strip-types", entry], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a registration array calls match on each element", async () => {
+  await matchesNode(
+    "mcp-match",
+    `
+export function make() {
+  const regs = [];
+  const register = registration => {
+    regs.push(registration);
+  };
+  const read = uri => {
+    for (const template of regs) {
+      const params = template.match(uri);
+      if (params !== undefined && template.isVisible()) return template.read(uri, params);
+    }
+    return undefined;
+  };
+  const scan = value => value.match(/id/);
+  return { register, read, scan };
+}
+`,
+    `
+import { make } from "mcp-match/probe.js";
+const core = make();
+core.register({
+  match: (uri: string) => (uri === "/a" ? ["id"] : undefined),
+  isVisible: () => true,
+  read: (_uri: string, params: string[]) => params.join(","),
+});
+console.log(String(core.read("/a")));
+console.log(String(core.read("/b")));
+console.log(JSON.stringify(core.scan("id-1")));
+console.log(JSON.stringify(core.scan("none")));
+`,
+  );
+});
+
+test("metric keys sort entry names with localeCompare", async () => {
+  await matchesNode(
+    "metric-key",
+    `
+export function makeMetricKey(id, attributes) {
+  if (attributes === undefined || Object.keys(attributes).length === 0) return id;
+  const sortedEntries = Object.entries(attributes).sort((a, b) => a[0].localeCompare(b[0]));
+  return id + ":" + JSON.stringify(sortedEntries);
+}
+`,
+    `
+import { makeMetricKey } from "metric-key/probe.js";
+console.log(makeMetricKey("fixed_counter", undefined));
+console.log(makeMetricKey("fixed_counter", {}));
+console.log(makeMetricKey("fixed_counter", { unit: "ms", name: "fixed" }));
+console.log(makeMetricKey("fixed_counter", { z: "1", a: "2", count: 3 }));
+`,
+  );
+});
+
+test("Symbol.iterator in a plain record takes Object.entries", async () => {
+  await matchesNode(
+    "headers-in",
+    `
+export function fromInput(input) {
+  if (input === undefined) return { empty: "yes" };
+  if (Symbol.iterator in input) {
+    const out = Object.create(null);
+    for (const [k, v] of input) out[k.toLowerCase()] = v;
+    return out;
+  }
+  const out = Object.create(null);
+  for (const [k, v] of Object.entries(input)) {
+    if (Array.isArray(v)) out[k.toLowerCase()] = v.join(", ");
+    else if (v !== undefined) out[k.toLowerCase()] = v;
+  }
+  return out;
+}
+`,
+    `
+import { fromInput } from "headers-in/probe.js";
+console.log(JSON.stringify(fromInput({ "X-Fixture": "first", "content-type": "text/plain" })));
+console.log(JSON.stringify(fromInput({ "Content-Range": "bytes 0-1/2" })));
+console.log(JSON.stringify(fromInput(undefined)));
+`,
+  );
+});
+
+test("a one-shot Headers keys iterator matches Node", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "scriptc-headers-keys-"));
+  const types = join(directory, "node_modules", "@types");
+  mkdirSync(types, { recursive: true });
+  symlinkSync(join(import.meta.dirname, "../../../node_modules/@types/node"), join(types, "node"));
+  writeFileSync(
+    join(directory, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        target: "ES2025",
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        strict: true,
+        types: ["node"],
+      },
+    }),
+  );
+  const entry = join(directory, "main.js");
+  const binary = join(directory, "main");
+  writeFileSync(
+    entry,
+    `
+const none = new globalThis.Headers();
+const some = new globalThis.Headers();
+some.append("b", "2");
+some.append("a", "1");
+const cookies = new globalThis.Headers();
+cookies.append("Set-Cookie", "a=1");
+cookies.append("Set-Cookie", "b=2");
+const noneStep = none.keys().next();
+const someStep = some.keys().next();
+const cookieStep = cookies.keys().next();
+console.log(String(noneStep.done) + ":" + String(noneStep.value));
+console.log(String(someStep.done) + ":" + String(someStep.value));
+console.log(String(cookieStep.done) + ":" + String(cookieStep.value));
+console.log(String(some.keys().next().done) + ":" + String(some.keys().next().value));
+console.log(none.keys().next().done ? "raw" : "copy");
+console.log(some.keys().next().done ? "raw" : "copy");
+`,
+  );
+  try {
+    const coverage = analyze(entry, {});
+    const fences = [...coverage.coverage.diagnostics, ...(coverage.coverage.runtimeFences ?? [])];
+    expect(fences, JSON.stringify(fences)).toEqual([]);
+    const result = await compile(entry, {
+      outDir: directory,
+      outPath: binary,
+      outputKind: "exe",
+      optimization: "dev",
+    });
+    expect(result.ok, result.ok ? "" : JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    const run = spawnSync(result.binaryPath, [], { encoding: "utf8", timeout: 30_000 });
+    const oracle = spawnSync(process.execPath, ["--experimental-strip-types", entry], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(oracle.status, oracle.stderr).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe(oracle.stdout);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

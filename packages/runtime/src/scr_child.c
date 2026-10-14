@@ -28,6 +28,9 @@ static void scr_ipc_release(ScrIpc *ipc);
 static void scr_ipc_service(void);
 static bool scr_ipc_pending(void);
 static bool scr_ipc_close_ready(const ScrIpc *ipc);
+static bool scr_ipc_close_dropped(const ScrIpc *ipc);
+static void scr_ipc_deliver(void);
+static void scr_ipc_settle(ScrIpc *ipc);
 static void scr_child_fire_spawn(ScrChild *c);
 static void scr_child_drop_spawn_listeners(ScrChild *c);
 
@@ -848,6 +851,8 @@ static void scr_win_run_sync(ScrStr *cmd, ScrArr *args, const ScrStr *input,
   bool out_open = out_parent != NULL, err_open = err_parent != NULL;
   bool in_open = in_parent != NULL;
   size_t in_at = 0;
+  char *input_owned = NULL;
+  const char *input_bytes = in_open ? scr_str_utf8(input, &input_owned) : NULL;
   bool exited = false;
   double deadline = timeout_ms > 0 ? scr_now_ms() + timeout_ms : 0;
   for (;;) {
@@ -862,7 +867,7 @@ static void scr_win_run_sync(ScrStr *cmd, ScrArr *args, const ScrStr *input,
       if (want == 0) {
         CloseHandle(in_parent);
         in_open = false;
-      } else if (WriteFile(in_parent, input->data + in_at, want, &wrote, NULL)) {
+      } else if (WriteFile(in_parent, input_bytes + in_at, want, &wrote, NULL)) {
         if (wrote > 0) {
           in_at += wrote;
           progress = true;
@@ -889,6 +894,7 @@ static void scr_win_run_sync(ScrStr *cmd, ScrArr *args, const ScrStr *input,
     if (exited && !out_open && !err_open) break;
   }
   if (in_open) CloseHandle(in_parent);
+  scr_str_utf8_end(input_owned);
   (void)GetExitCodeProcess(sp.proc, &res->exit_code);
   CloseHandle(sp.proc);
 }
@@ -1904,7 +1910,11 @@ static bool scr_child_writer_write(ScrChildWriter *w, const void *data,
 }
 
 bool scr_child_writer_write_string(ScrChildWriter *w, const ScrStr *data) {
-  return scr_child_writer_write(w, data->data, data->len);
+  char *owned;
+  const char *bytes = scr_str_utf8(data, &owned);
+  bool r = scr_child_writer_write(w, bytes, data->len);
+  scr_str_utf8_end(owned);
+  return r;
 }
 
 bool scr_child_writer_write_bytes(ScrChildWriter *w, const ScrBytes *data) {
@@ -2054,6 +2064,11 @@ static void scr_child_writer_fire_error(ScrChildWriter *w) {
 static bool scr_child_writer_pending(const ScrChildWriter *w) {
   return w->write_pending || scr_child_writer_queued(w) > 0 ||
          w->drain_pending || w->finish_pending || w->error_pending;
+}
+
+/* Every queued byte reached the pipe; only listener events may remain. */
+static bool scr_child_writer_flushed(const ScrChildWriter *w) {
+  return !w->write_pending && scr_child_writer_queued(w) == 0 && !w->error_pending;
 }
 
 static bool scr_child_writers_pending(void) {
@@ -2495,7 +2510,11 @@ static void scr_child_fire_close(ScrChild *c) {
   double code = c->state == SCR_CHILD_SPAWN_FAILED
       ? (double)c->spawn_uv_errno
       : c->code;
-  for (size_t i = 0; i < c->n_close; i++) {
+  /* Node counts the channel toward 'close' only through its EOF read; a
+   * channel disconnected from this side never reports one, so 'close'
+   * never fires. */
+  size_t n = scr_ipc_close_dropped(c->ipc) ? 0 : c->n_close;
+  for (size_t i = 0; i < n; i++) {
     c->close_cbs[i].fn(c->close_cbs[i].cb, has_code, code, c->exit_signal);
     if (scr_exc_pending()) break;
   }
@@ -2557,6 +2576,7 @@ static void scr_child_settle(ScrChild *c) {
   if (c->state == SCR_CHILD_EXITED) {
     scr_child_stream_drain_now(c->out_stream);
     if (!scr_exc_pending()) scr_child_stream_drain_now(c->err_stream);
+    if (!scr_exc_pending()) scr_ipc_settle(c->ipc);
   }
   if (!scr_exc_pending()) {
     scr_child_writer_child_settled(c->in_stream);
@@ -2614,7 +2634,14 @@ void scr_children_poll(void) {
   if (scr_exc_pending()) return;
   scr_child_streams_service();
   if (scr_exc_pending()) return;
+  /* Node's IPC read callback emits the messages it parsed, then on EOF
+   * emits 'close' at once for a child that already exited, and defers
+   * 'disconnect' to the next tick — all before this pass reaps. */
+  scr_ipc_deliver();
+  if (scr_exc_pending()) return;
   scr_children_closing_poll();
+  if (scr_exc_pending()) return;
+  scr_ipc_service();
   if (scr_exc_pending()) return;
   ScrChild **link = &scr_children;
   while (*link) {
@@ -2792,17 +2819,31 @@ ScrError *scr_spawn_res_error(ScrSpawnRes *r) {
 /* Builds a NULL-terminated argv from the command + one string[] — the
  * strings are BORROWED from their containers (alive for the whole spawn;
  * the +1 from scr_arr_get_ref is dropped immediately because the array
- * keeps its own reference). Free with free() (the vector only). */
+ * keeps its own reference). A string holding a lone surrogate is copied
+ * into the same block as UTF-8 (U+FFFD for each), as Node encodes it.
+ * Free with free() (one block). */
 char **scr_child_argv(ScrStr *cmd, ScrArr *args) {
   size_t start = scr_child_arg_start(cmd, args);
   size_t n = (size_t)scr_arr_len(args) - start;
-  char **argv = malloc((n + 2) * sizeof(char *));
-  if (!argv) scr_child_oom();
-  argv[0] = cmd->data;
+  size_t extra = scr_str_has_surrogate(cmd) ? cmd->len + 1 : 0;
   for (size_t i = 0; i < n; i++) {
     ScrStr *s = (ScrStr *)scr_arr_get_ref(args, (double)(i + start));
-    argv[i + 1] = s->data;
+    if (scr_str_has_surrogate(s)) extra += s->len + 1;
     scr_str_release(s); /* borrow: the array's reference keeps it alive */
+  }
+  char **argv = malloc((n + 2) * sizeof(char *) + extra);
+  if (!argv) scr_child_oom();
+  char *copies = (char *)(argv + n + 2);
+  for (size_t i = 0; i <= n; i++) {
+    ScrStr *s = i ? (ScrStr *)scr_arr_get_ref(args, (double)(i - 1 + start)) : scr_str_retain(cmd);
+    argv[i] = s->data;
+    if (scr_str_has_surrogate(s)) {
+      memcpy(copies, s->data, s->len + 1);
+      scr_wtf8_to_utf8(copies, s->len);
+      argv[i] = copies;
+      copies += s->len + 1;
+    }
+    scr_str_release(s);
   }
   argv[n + 1] = NULL;
   return argv;
@@ -3124,6 +3165,7 @@ static char **scr_exec_envp(ScrArr *pairs) {
     memcpy(kv, k->data, k->len);
     kv[k->len] = '=';
     memcpy(kv + k->len + 1, v->data, v->len + 1);
+    if (!k->ascii || !v->ascii) scr_wtf8_to_utf8(kv, k->len + 1 + v->len);
     envp[i] = kv;
     scr_str_release(k);
     scr_str_release(v);
@@ -3249,6 +3291,8 @@ ScrStr *scr_exec_sync_core(ScrStr *cmd, ScrArr *args, const ScrExecOpts *o) {
   scr_cap_init(&err);
   bool out_open = cap_out, err_open = cap_err, in_open = has_input;
   size_t in_at = 0;
+  char *input_owned = NULL;
+  const char *input = has_input ? scr_str_utf8(o->input, &input_owned) : NULL;
   bool timed_out = false;
   double deadline = o->timeout_ms > 0 ? scr_now_ms() + o->timeout_ms : 0;
   while (out_open || err_open || in_open) {
@@ -3285,7 +3329,7 @@ ScrStr *scr_exec_sync_core(ScrStr *cmd, ScrArr *args, const ScrExecOpts *o) {
           close(infd[1]);
           in_open = false; /* child closed stdin early: fine, like Node */
         } else if (fds[i].revents & POLLOUT) {
-          ssize_t wrote = write(infd[1], o->input->data + in_at, o->input->len - in_at);
+          ssize_t wrote = write(infd[1], input + in_at, o->input->len - in_at);
           if (wrote > 0) in_at += (size_t)wrote;
           else if (wrote < 0 && errno != EINTR && errno != EAGAIN) {
             close(infd[1]);
@@ -3302,6 +3346,7 @@ ScrStr *scr_exec_sync_core(ScrStr *cmd, ScrArr *args, const ScrExecOpts *o) {
   if (cap_out) close(outfd[0]);
   if (cap_err) close(errfd[0]);
   if (in_open) close(infd[1]);
+  scr_str_utf8_end(input_owned);
 
   /* Reap. A live deadline still applies here: a child that closed its
    * stdio but keeps running (the pipes-drained daemon shape) must still be
@@ -3511,6 +3556,8 @@ struct ScrChildStream {
   size_t capture_len, capture_cap;
   bool armed;     /* EVFILT_READ registered on the child kqueue */
   bool uncounted; /* counted into scr_children_unwatched (arm failure) */
+  bool short_read_yields; /* a short read ends this pass's reads */
+  unsigned long short_read_pass;
   ScrChildStreamDataL *data_ls;
   size_t n_data, cap_data;
   ScrChildStreamEndL *end_ls;
@@ -3592,6 +3639,7 @@ struct ScrChild {
 static SCR_TL ScrChild *scr_children = NULL; /* unsettled children (registry +1) */
 static SCR_TL ScrChild *scr_children_closing = NULL; /* exited, waiting for stdio EOF */
 static SCR_TL size_t scr_children_reffed_n = 0; /* unsettled AND reffed (liveness) */
+static SCR_TL unsigned long scr_children_pass = 0; /* reap passes run */
 
 /* Children the kqueue can NOT wake the loop for (spawn failures awaiting
  * their first-pass settle, exit-filter registration failures, every child
@@ -4001,6 +4049,7 @@ static void scr_child_stream_finish(ScrChildStream *s, bool fire_end) {
  * meaningfully reachable, treated as EOF like the stdin slice's
  * no-listener path): the caller finishes and unlinks it. */
 static bool scr_child_stream_pump(ScrChildStream *s) {
+  if (s->short_read_yields && s->short_read_pass == scr_children_pass) return false;
   while (scr_child_stream_watching(s)) {
     char buf[65536];
     ssize_t n = read(s->fd, buf, sizeof buf);
@@ -4024,6 +4073,10 @@ static bool scr_child_stream_pump(ScrChildStream *s) {
     scr_str_release(text);
     scr_bytes_release(chunk);
     if (scr_exc_pending()) return false;
+    if (s->short_read_yields && (size_t)n < sizeof buf) {
+      s->short_read_pass = scr_children_pass;
+      return false;
+    }
   }
   return false;
 }
@@ -4429,7 +4482,11 @@ static bool scr_child_writer_write(ScrChildWriter *w, const void *data,
 }
 
 bool scr_child_writer_write_string(ScrChildWriter *w, const ScrStr *data) {
-  return scr_child_writer_write(w, data->data, data->len);
+  char *owned;
+  const char *bytes = scr_str_utf8(data, &owned);
+  bool r = scr_child_writer_write(w, bytes, data->len);
+  scr_str_utf8_end(owned);
+  return r;
 }
 
 bool scr_child_writer_write_bytes(ScrChildWriter *w, const ScrBytes *data) {
@@ -4579,6 +4636,11 @@ static void scr_child_writer_fire_error(ScrChildWriter *w) {
 static bool scr_child_writer_pending(const ScrChildWriter *w) {
   return scr_child_writer_queued(w) > 0 || w->drain_pending ||
          w->finish_pending || w->error_pending;
+}
+
+/* Every queued byte reached the pipe; only listener events may remain. */
+static bool scr_child_writer_flushed(const ScrChildWriter *w) {
+  return scr_child_writer_queued(w) == 0 && !w->error_pending;
 }
 
 static bool scr_child_writers_pending(void) {
@@ -4793,8 +4855,16 @@ ScrChild *scr_fork(double target, ScrArr *args, double in_mode,
   close(parent_to_child[0]);
   close(child_to_parent[1]);
   if (child->state == SCR_CHILD_RUNNING) {
-    child->ipc = scr_ipc_new(scr_child_stream_new(child_to_parent[0]),
-                             scr_child_writer_new(parent_to_child[1]));
+    ScrChildStream *reader = scr_child_stream_new(child_to_parent[0]);
+#ifdef SCR_HAVE_KQUEUE
+    /* libuv's kqueue backend reports no hangup with a read event, so a
+     * short read ends Node's read callback and the EOF behind it waits
+     * for the next loop iteration, after that iteration reaps the
+     * child. A child that writes its last message, closes the channel,
+     * and exits therefore reaches 'exit' before 'disconnect'. */
+    reader->short_read_yields = true;
+#endif
+    child->ipc = scr_ipc_new(reader, scr_child_writer_new(parent_to_child[1]));
   } else {
     close(child_to_parent[0]);
     close(parent_to_child[1]);
@@ -5139,7 +5209,11 @@ static void scr_child_fire_close(ScrChild *c) {
   double code = c->state == SCR_CHILD_SPAWN_FAILED
       ? -(double)c->spawn_errno
       : c->code;
-  for (size_t i = 0; i < c->n_close; i++) {
+  /* Node counts the channel toward 'close' only through its EOF read; a
+   * channel disconnected from this side never reports one, so 'close'
+   * never fires. */
+  size_t n = scr_ipc_close_dropped(c->ipc) ? 0 : c->n_close;
+  for (size_t i = 0; i < n; i++) {
     c->close_cbs[i].fn(c->close_cbs[i].cb, has_code, code, c->exit_signal);
     if (scr_exc_pending()) break;
   }
@@ -5183,6 +5257,7 @@ static void scr_child_settle(ScrChild *c) {
   if (c->state == SCR_CHILD_EXITED) {
     scr_child_stream_drain_now(c->out_stream);
     if (!scr_exc_pending()) scr_child_stream_drain_now(c->err_stream);
+    if (!scr_exc_pending()) scr_ipc_settle(c->ipc);
   }
   if (!scr_exc_pending()) {
     scr_child_writer_child_settled(c->in_stream);
@@ -5242,6 +5317,7 @@ static void scr_child_settle(ScrChild *c) {
  * callbacks — a throw stops the pass and leaves the exception pending
  * for the loop. */
 void scr_children_poll(void) {
+  scr_children_pass++;
   for (ScrChild *c = scr_children; c; c = c->next) {
     if (c->state == SCR_CHILD_RUNNING && !c->spawn_done) scr_child_fire_spawn(c);
     if (scr_exc_pending()) return;
@@ -5252,7 +5328,14 @@ void scr_children_poll(void) {
   if (scr_exc_pending()) return;
   scr_child_streams_service();
   if (scr_exc_pending()) return;
+  /* Node's IPC read callback emits the messages it parsed, then on EOF
+   * emits 'close' at once for a child that already exited, and defers
+   * 'disconnect' to the next tick — all before this pass reaps. */
+  scr_ipc_deliver();
+  if (scr_exc_pending()) return;
   scr_children_closing_poll();
+  if (scr_exc_pending()) return;
+  scr_ipc_service();
   if (scr_exc_pending()) return;
   ScrChild **link = &scr_children;
   while (*link) {
@@ -5541,6 +5624,9 @@ struct ScrIpc {
   bool local_closing;
   bool disconnect_pending;
   bool disconnect_emitted;
+  bool eof_pending;    /* the reader hit EOF behind undelivered messages */
+  bool eof;            /* the remote end's close was observed */
+  bool closed_locally; /* disconnect() closed the reader before any EOF */
   bool registered;
   ScrChildStream *reader;
   ScrChildWriter *writer;
@@ -5687,7 +5773,7 @@ static void scr_ipc_mark_disconnected(ScrIpc *ipc, bool write_failed,
 
 static void scr_ipc_stream_end(ScrClosure *closure) {
   ScrIpc *ipc = scr_ipc_from_closure(closure);
-  scr_ipc_mark_disconnected(ipc, scr_child_writer_pending(ipc->writer), NULL);
+  ipc->eof_pending = true;
   scr_ipc_release(ipc);
 }
 
@@ -5892,20 +5978,39 @@ static void scr_ipc_fire_disconnect(ScrIpc *ipc) {
   ipc->n_pending = 0;
 }
 
+/* Node handles a read's EOF after emitting the messages that read
+ * parsed: those handlers still see the channel connected, and one that
+ * calls disconnect() closes the channel before the EOF is observed. */
+static void scr_ipc_finish_eof(ScrIpc *ipc) {
+  if (!ipc->eof_pending || (ipc->n_pending > 0 && ipc->n_message > 0)) return;
+  ipc->eof_pending = false;
+  if (ipc->local_closing || ipc->closed_locally) return;
+  ipc->eof = true;
+  scr_ipc_mark_disconnected(ipc, scr_child_writer_pending(ipc->writer), NULL);
+}
+
+static void scr_ipc_service_one(ScrIpc *ipc) {
+  scr_ipc_fire_send_callbacks(ipc);
+  if (!scr_exc_pending()) scr_ipc_fire_messages(ipc);
+  if (!scr_exc_pending()) scr_ipc_finish_eof(ipc);
+  /* Node's disconnect() closes the channel on the next tick; the written
+   * messages are already in the pipe by then. */
+  if (!scr_exc_pending() && ipc->local_closing &&
+      scr_child_writer_flushed(ipc->writer)) {
+    ipc->local_closing = false;
+    scr_ipc_drop_writer_error(ipc);
+    if (!ipc->eof) ipc->closed_locally = true;
+    scr_child_stream_finish(ipc->reader, false);
+    ipc->disconnect_pending = true;
+  }
+  if (!scr_exc_pending()) scr_ipc_fire_disconnect(ipc);
+}
+
 static void scr_ipc_service(void) {
   ScrIpc **link = &scr_ipcs;
   while (*link) {
     ScrIpc *ipc = *link;
-    scr_ipc_fire_send_callbacks(ipc);
-    if (!scr_exc_pending()) scr_ipc_fire_messages(ipc);
-    if (!scr_exc_pending() && ipc->local_closing &&
-        !scr_child_writer_pending(ipc->writer)) {
-      ipc->local_closing = false;
-      scr_ipc_drop_writer_error(ipc);
-      scr_child_stream_finish(ipc->reader, false);
-      ipc->disconnect_pending = true;
-    }
-    if (!scr_exc_pending()) scr_ipc_fire_disconnect(ipc);
+    scr_ipc_service_one(ipc);
     if (ipc->disconnect_emitted && ipc->n_send == 0) {
       *link = ipc->next;
       ipc->next = NULL;
@@ -5921,27 +6026,53 @@ static void scr_ipc_service(void) {
 static bool scr_ipc_pending(void) {
   for (ScrIpc *ipc = scr_ipcs; ipc != NULL; ipc = ipc->next) {
     if (ipc->n_send > 0 || ipc->disconnect_pending || ipc->local_closing ||
-        (ipc->n_pending > 0 && ipc->n_message > 0)) {
+        ipc->eof_pending || (ipc->n_pending > 0 && ipc->n_message > 0)) {
       return true;
     }
   }
   return false;
 }
 
+/* Messages parsed by this pass's reads, delivered before anything else
+ * the pass observes (Node emits them from the read callback itself). */
+static void scr_ipc_deliver(void) {
+  for (ScrIpc *ipc = scr_ipcs; ipc != NULL && !scr_exc_pending(); ipc = ipc->next) {
+    scr_ipc_fire_messages(ipc);
+    if (!scr_exc_pending()) scr_ipc_finish_eof(ipc);
+  }
+}
+
+/* The reaped child's channel: everything it wrote before exiting is
+ * readable now, so read it and deliver its messages, and the
+ * 'disconnect' an EOF read schedules, before 'exit'. */
+static void scr_ipc_settle(ScrIpc *ipc) {
+  if (ipc == NULL || !ipc->armed) return;
+  scr_child_stream_drain_now(ipc->reader);
+  if (!scr_exc_pending()) scr_ipc_service_one(ipc);
+}
+
+/* Node's 'close' waits for the channel's EOF read, not for 'disconnect':
+ * a child that exited first gets 'close' from the EOF read itself, a tick
+ * before 'disconnect'. */
 static bool scr_ipc_close_ready(const ScrIpc *ipc) {
-  return ipc == NULL || !ipc->armed || ipc->disconnect_emitted;
+  return ipc == NULL || !ipc->armed || ipc->eof || ipc->closed_locally;
+}
+
+static bool scr_ipc_close_dropped(const ScrIpc *ipc) {
+  return ipc != NULL && (ipc->closed_locally || ipc->local_closing);
 }
 
 bool scr_children_ready(void) {
   for (ScrIpc *ipc = scr_ipcs; ipc != NULL; ipc = ipc->next) {
-    if (ipc->disconnect_pending || (ipc->n_pending > 0 && ipc->n_message > 0)) {
+    if (ipc->disconnect_pending || ipc->eof_pending ||
+        (ipc->n_pending > 0 && ipc->n_message > 0)) {
       return true;
     }
     bool writer_pending = scr_child_writer_pending(ipc->writer);
     if (ipc->n_send > 0 && (ipc->send_error != NULL || !writer_pending)) {
       return true;
     }
-    if (ipc->local_closing && !writer_pending) return true;
+    if (ipc->local_closing && scr_child_writer_flushed(ipc->writer)) return true;
   }
   return false;
 }

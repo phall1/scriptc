@@ -402,7 +402,7 @@ async function build() {
       package: packageManifest.name,
       version: packageManifest.version,
       target: matrix.target,
-      runtime_abi: { version: 15, marker: "scr_runtime_abi_v15" },
+      runtime_abi: { version: 20, marker: "scr_runtime_abi_v20" },
       compiler: {
         command: compiler,
         identity: compilerVersion,

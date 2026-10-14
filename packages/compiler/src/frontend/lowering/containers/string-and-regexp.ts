@@ -7,6 +7,7 @@ import {
   type IrExpr,
   type IrStmt,
   type IrType,
+  NULL_T,
   STRING,
   type SrcLoc,
   UNDEFINED_T,
@@ -20,6 +21,8 @@ import type { Lowerer } from "../lowerer.js";
 import { own } from "../lowerer.js";
 import { isRequireMainFilename } from "../expressions/optional-chains.js";
 import { STRING_INDEX_METHODS, STRING_REPLACE_METHODS, STR_METHODS } from "../surfaces.js";
+import { dynStringReceiver } from "./dynamic-receivers.js";
+import { execResultCaptureMask } from "./exec-result-uses.js";
 import { lowerStringReplacement } from "./string-replacement.js";
 import {
   coerceStringSearchValue,
@@ -30,6 +33,65 @@ import {
   lowerStringSearchArgument,
   positionNumber,
 } from "../optional-arguments.js";
+
+/** String.prototype.search accepts a RegExp, or any value RegExpCreate can
+ * compile: a string is the pattern, and other primitives are ToString'd.
+ * Objects with a custom @@search stay fenced. */
+function searchPatternType(lowerer: Lowerer, type: IrType): boolean {
+  switch (type.kind) {
+    case "regex":
+    case "string":
+    case "dyn":
+    case "f64":
+    case "bool":
+    case "bigint":
+    case "nullT":
+    case "undefinedT":
+      return true;
+    case "union": {
+      const arms = lowerer.unions.get(type.unionId)?.arms ?? [];
+      return arms.length > 0 && arms.every((arm) => searchPatternType(lowerer, arm));
+    }
+    default:
+      return false;
+  }
+}
+
+/** Checker `any` hides a specialized local. Prefer that stored type, then
+ * the checker type, so `name.search(key)` sees a RegExp or a string. */
+function predictedSearchPattern(lowerer: Lowerer, arg: ts.Expression): boolean {
+  const stored = ts.isIdentifier(arg)
+    ? (lowerer.peekLocal(arg)?.type ?? lowerer.globalOf(arg)?.type)
+    : undefined;
+  if (stored && searchPatternType(lowerer, stored)) return true;
+  const mapped = lowerer.mapTypeOf(lowerer.typeOf(arg));
+  return mapped !== null && mapped !== undefined && searchPatternType(lowerer, mapped);
+}
+
+/** Build the RegExp String.prototype.search will execute. A string uses
+ * `regex.new` with empty flags; every other accepted value goes through
+ * `regex.newChecked`, which copies a native RegExp and ToStrings the rest.
+ * Undefined becomes the empty pattern, matching RegExpCreate. */
+function compileSearchPattern(lowerer: Lowerer, value: IrExpr, loc: SrcLoc): IrExpr {
+  if (value.type.kind === "regex") return value;
+  if (value.type.kind === "string") {
+    return {
+      kind: "libCall",
+      fn: "regex.new",
+      args: [value, strLit("", loc)],
+      type: { kind: "regex" },
+      loc,
+    };
+  }
+  const boxed = value.type.kind === "dyn" ? value : lowerer.coerceToExpected(value, DYN);
+  return {
+    kind: "libCall",
+    fn: "regex.newChecked",
+    args: [boxed, dynUndefinedExpr(loc)],
+    type: { kind: "regex" },
+    loc,
+  };
+}
 
 function lowerSplitLimitArg(
   lowerer: Lowerer,
@@ -290,7 +352,107 @@ function lowerMethodReceiver(
   const optional = lowerer.runtimeOptionalPropertyReceiver(node, lowered, expected, member);
   if (optional) return optional;
   if (typeEquals(lowered.type, expected)) return lowered;
+  if (expected.kind === "string") {
+    const extracted = lowerNullableStringReceiver(lowerer, lowered, member, lowered.loc);
+    if (extracted) return extracted;
+  }
   return lowerer.coerceInto(node, lowered, expected);
+}
+
+/** String.prototype member of the string arm of a nullable-string union.
+ * The union itself has no property symbol, so isStdlibMember declines it. */
+function nullableStringStdlibMember(
+  lowerer: Lowerer,
+  access: ts.PropertyAccessExpression,
+): boolean {
+  const type = lowerer.typeOf(access.expression);
+  if (!type.isUnionType()) return false;
+  const stringPart = ts
+    .constituentTypes(type)
+    .find((part) => (part.flags & ts.TypeFlags.StringLike) !== 0);
+  if (!stringPart) return false;
+  const prop = lowerer.checker.getPropertyOfType(stringPart, access.name.text);
+  return lowerer.isStdlibSymbol(prop);
+}
+
+/** `string | null | undefined` receiver of a string method. Nullish arms
+ * throw Node's property-read TypeError before the call; the string arm is
+ * what the intrinsic sees. */
+export function lowerNullableStringReceiver(
+  lowerer: Lowerer,
+  value: IrExpr,
+  member: string,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (value.type.kind !== "union") return null;
+  const unionId = value.type.unionId;
+  const arms = lowerer.unions.get(unionId)?.arms ?? [];
+  if (
+    !arms.some((arm) => arm.kind === "string") ||
+    !arms.every((arm) => arm.kind === "string" || isUnitType(arm))
+  ) {
+    return null;
+  }
+  const stringTag = lowerer.armTag(unionId, STRING);
+  if (stringTag < 0) return null;
+  // A throw cannot sit in a seqExpr. The helper returns the string arm or
+  // throws the nullish property-read TypeError.
+  const key = `nullableStr:${unionId}:${member}`;
+  let helper = lowerer.valueHelpers.get(key);
+  if (!helper) {
+    helper = `%nullable.str.${lowerer.valueHelpers.size}`;
+    lowerer.valueHelpers.set(key, helper);
+    const receiver = varRef("v.0", value.type, loc);
+    const body: IrStmt[] = [];
+    for (const [unit, unitType] of [
+      ["undefined", UNDEFINED_T],
+      ["null", NULL_T],
+    ] as const) {
+      const tag = lowerer.armTag(unionId, unitType);
+      if (tag < 0) continue;
+      body.push({
+        kind: "if",
+        cond: {
+          kind: "unionIsTag",
+          unionId,
+          tag,
+          negated: false,
+          value: receiver,
+          type: BOOL,
+          loc,
+        },
+        then: [
+          {
+            kind: "throw",
+            value: nodeThrowExpr(
+              1,
+              "",
+              `Cannot read properties of ${unit} (reading '${member}')`,
+              STRING,
+              loc,
+            ),
+            loc,
+          },
+        ],
+        else_: null,
+        loc,
+      });
+    }
+    body.push({
+      kind: "return",
+      value: { kind: "unionNarrow", unionId, tag: stringTag, value: receiver, type: STRING, loc },
+      loc,
+    });
+    lowerer.liftedFns.push({
+      name: helper,
+      params: [{ localId: "v.0", name: "v", type: value.type }],
+      returnType: STRING,
+      locals: [{ id: "v.0", name: "v", type: value.type, mutable: false }],
+      body,
+      loc,
+    });
+  }
+  return { kind: "call", callee: helper, args: [value], type: STRING, loc };
 }
 
 /** Relative string indexing and code-point decoding over the UTF-16 intrinsics. */
@@ -767,17 +929,24 @@ export function lowerRegexMethodCall(
       kind: "union",
       unionId: lowerer.unions.intern([arrayOf(STRING), { kind: "nullT" }]),
     };
+    // A result read only through null tests and constant indices skips
+    // the captures and properties no reader uses.
+    const mask = execResultCaptureMask(lowerer, call);
+    if (mask !== null) lowerer.regexGroupResults = true;
+    const execCall = (regex: IrExpr): IrExpr => ({
+      kind: "regexIntrinsic",
+      method: mask === null ? "exec" : "execGroups",
+      receiver: subject,
+      args: mask === null ? [regex] : [regex, numLit(mask, loc)],
+      type: resultT,
+      loc,
+    });
+    // A literal receiver has no evaluation to order against the subject.
+    if (re.kind === "regexLit") return execCall(re);
     // The shared match intrinsic takes the string first; preserve exec's
     // receiver-before-subject evaluation order before swapping operands.
     const saved = lowerer.declareHiddenLocal("%execReceiver", re.type);
-    const result: IrExpr = {
-      kind: "regexIntrinsic",
-      method: "exec",
-      receiver: subject,
-      args: [varRef(saved.id, re.type, loc)],
-      type: resultT,
-      loc,
-    };
+    const result = execCall(varRef(saved.id, re.type, loc));
     return {
       kind: "seqExpr",
       stmts: [{ kind: "varDecl", localId: saved.id, init: re, loc }],
@@ -828,6 +997,20 @@ export function lowerRegexMethodCall(
     };
     const mapped = lowerer.mapTypeOf(lowerer.typeOf(call));
     const resultT: IrType = mapped && typeEquals(mapped, exactT) ? mapped : exactT;
+    // A result read like execGroups' skips the same captures when the
+    // regex is not global (a global regex still answers every match).
+    const mask = execResultCaptureMask(lowerer, call);
+    if (mask !== null) {
+      lowerer.regexGroupResults = true;
+      return {
+        kind: "regexIntrinsic",
+        method: "matchGroups",
+        receiver,
+        args: [re, numLit(mask, loc), numLit(0, loc)],
+        type: resultT,
+        loc,
+      };
+    }
     return { kind: "regexIntrinsic", method: "match", receiver, args: [re], type: resultT, loc };
   }
   // `s.matchAll(re)` — the every-match iterator drained EAGERLY into a
@@ -857,14 +1040,20 @@ export function lowerRegexMethodCall(
   // `s.search(re)` — the first match's UTF-16 index, or -1. No g/y fence
   // (unlike test/match): Symbol.search neither reads nor writes lastIndex
   // — a fresh exec from position 0, so /g is irrelevant and /y anchors at
-  // 0, exactly Node. Never throws.
+  // 0, exactly Node. A string pattern is compiled as `new RegExp(pattern)`
+  // (so "." matches any character); a RegExp argument is used as-is.
+  // Never throws on a match, but an invalid pattern throws SyntaxError.
   if (receiverKind === "string" && name === "search") {
     const arg0 = call.arguments[0];
-    if (!arg0 || lowerer.mapTypeOf(lowerer.typeOf(arg0))?.kind !== "regex") return null; // string-pattern form: the SC2020 fence
-    if (call.arguments.length !== 1) return null;
+    if (!arg0 || call.arguments.length !== 1 || ts.isSpreadElement(arg0)) return null;
+    if (!predictedSearchPattern(lowerer, arg0)) return null;
     const receiver = lowerReceiver();
-    const re = lowerer.lowerExprExpecting(arg0, { kind: "regex" });
+    const re = compileSearchPattern(lowerer, lowerer.lowerExpr(arg0), loc);
     return { kind: "regexIntrinsic", method: "search", receiver, args: [re], type: F64, loc };
+  }
+  if (receiverKind === "string" && (name === "replace" || name === "replaceAll")) {
+    const chain = lowerReplaceCharChain(lowerer, call);
+    if (chain) return chain;
   }
   if (
     receiverKind === "string" &&
@@ -940,6 +1129,77 @@ export function lowerRegexMethodCall(
   return null;
 }
 
+/** `s.replace(/&/g, "&amp;").replace(/</g, "&lt;")…`: consecutive global
+ * replacements of one literal character by plain text (no `$`), where no
+ * replacement text contains a character a later step replaces. Replacing
+ * every character in one scan is then exactly the steps in turn, and the
+ * inline regex objects (fresh per evaluation) leave no lastIndex to
+ * observe, so one str.replaceChars call stands for the chain. Null for
+ * anything else, including a single step. */
+function lowerReplaceCharChain(lowerer: Lowerer, call: ts.CallExpression): IrExpr | null {
+  const steps: { char: string; text: string }[] = [];
+  let node: ts.Expression = call;
+  while (ts.isCallExpression(node) && node.questionDotToken === undefined) {
+    const callee: ts.Expression = node.expression;
+    if (
+      !ts.isPropertyAccessExpression(callee) ||
+      callee.questionDotToken !== undefined ||
+      (callee.name.text !== "replace" && callee.name.text !== "replaceAll") ||
+      node.arguments.length !== 2
+    )
+      break;
+    const [pattern, replacement] = node.arguments;
+    if (
+      !pattern ||
+      !ts.isRegularExpressionLiteral(pattern) ||
+      !replacement ||
+      !(ts.isStringLiteral(replacement) || ts.isNoSubstitutionTemplateLiteral(replacement)) ||
+      replacement.text.includes("$") ||
+      replacement.text.includes("\0") ||
+      lowerer.mapTypeOf(lowerer.typeOf(callee.expression))?.kind !== "string" ||
+      !lowerer.isStdlibMember(callee)
+    )
+      break;
+    const char = globalCharPattern(pattern.text);
+    if (char === null) break;
+    steps.push({ char, text: replacement.text });
+    node = callee.expression;
+  }
+  if (steps.length < 2 || steps.length > 16) return null;
+  steps.reverse();
+  for (let i = 0; i < steps.length; i++) {
+    for (let j = i + 1; j < steps.length; j++) {
+      if (steps[j]!.char === steps[i]!.char || steps[i]!.text.includes(steps[j]!.char)) return null;
+    }
+  }
+  const loc = locOf(call);
+  return {
+    kind: "libCall",
+    fn: "str.replaceChars",
+    args: [
+      lowerer.lowerExprExpecting(node, STRING),
+      strLit(steps.map((step) => step.char).join(""), loc),
+      strLit(steps.map((step) => step.text).join("\0"), loc),
+    ],
+    type: STRING,
+    loc,
+  };
+}
+
+/** The character a `/c/g` literal matches, for one printable ASCII
+ * character or an escaped syntax character; null otherwise. */
+function globalCharPattern(text: string): string | null {
+  if (!text.endsWith("/g")) return null;
+  const body = text.slice(1, -2);
+  const syntax = "\\^$.|?*+()[]{}/-";
+  if (body.length === 1) {
+    const code = body.charCodeAt(0);
+    return code >= 0x20 && code < 0x7f && !syntax.includes(body) ? body : null;
+  }
+  if (body.length === 2 && body[0] === "\\" && syntax.includes(body[1]!)) return body[1]!;
+  return null;
+}
+
 /** `s.slice(1, 4)` and friends → strIntrinsic. Null when this isn't an
  * ambient string method call (caller keeps its generic rejection).
  * Complete position defaults and conversions here before code generation. */
@@ -986,7 +1246,14 @@ export function lowerStringMethodCall(
       !isRequireMainFilename(lowerer, access.expression)
     )
       return null;
-    if (!lowerer.isStdlibMember(access)) return null;
+    // A `string | undefined` receiver has no startsWith symbol of its own
+    // (undefined doesn't). The string arm's stdlib method is the one the
+    // call names; nullish arms throw in lowerNullableStringReceiver.
+    if (
+      !lowerer.isStdlibMember(access) &&
+      !(nullableString && nullableStringStdlibMember(lowerer, access))
+    )
+      return null;
   }
   // The lib declares optional parameters beyond some lowered forms; fence
   // those arities instead of passing arguments the runtime doesn't take.
@@ -1260,16 +1527,26 @@ export function lowerStringMethodCall(
  * root-locale collation (scr_str_locale_compare): Node's ICU order for
  * Latin-script text — letters before case and accents ("a" < "B", "ä" <
  * "z") — and code-point order for other scripts, the documented limit.
- * Null when the receiver isn't a stdlib string (caller keeps its generic
- * rejection). */
+ * A dynamic receiver is checked to be a string at runtime. That is the
+ * HashMap key shape, where inference leaves both sides `any`.
+ * Null when the receiver isn't a string or dynamic (caller keeps its
+ * generic rejection). */
 function lowerLocaleCompareCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
   access: ts.PropertyAccessExpression,
 ): IrExpr | null {
-  const receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
-  if (receiverIr?.kind !== "string") return null;
-  if (!lowerer.isStdlibMember(access)) return null;
+  const receiverTs = lowerer.typeOf(access.expression);
+  const receiverIr = lowerer.mapTypeOf(receiverTs);
+  // Checker `any` stays unmapped, but a TypeScript `any` binding is stored
+  // as dyn. HashMap's inferred keys are that binding.
+  const anyBacked =
+    receiverIr == null &&
+    (receiverTs.flags & ts.TypeFlags.Any) !== 0 &&
+    lowerer.irTypeOf(access.expression).kind === "dyn";
+  const dynamic = receiverIr?.kind === "dyn" || anyBacked;
+  if (receiverIr?.kind !== "string" && !dynamic) return null;
+  if (!dynamic && !lowerer.isStdlibMember(access)) return null;
   const loc = locOf(call);
   if (call.arguments.length !== 1) {
     lowerer.noLowering(
@@ -1279,9 +1556,19 @@ function lowerLocaleCompareCall(
         "pass exactly the comparison string",
     );
   }
-  const receiver = lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text);
-  const arg = lowerer.lowerExpr(call.arguments[0]!);
-  if (arg.type.kind !== "string")
-    lowerer.badType(call.arguments[0]!, lowerer.typeOf(call.arguments[0]!));
-  return { kind: "libCall", fn: "str.localeCompare", args: [receiver, arg], type: F64, loc };
+  const receiver = dynamic
+    ? dynStringReceiver(lowerer, lowerer.lowerExpr(access.expression), access)
+    : lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text);
+  const argument = call.arguments[0]!;
+  const lowered = lowerer.lowerExpr(argument);
+  // An index read keeps a hole arm after the checker has typed the
+  // element as string (`entries[i][0]`). localeCompare applies ToString,
+  // so that arm converts instead of failing the string type.
+  const checkerArg = lowerer.mapTypeOf(lowerer.typeOf(argument));
+  if (!dynamic && lowered.type.kind !== "string" && checkerArg?.kind !== "string") {
+    lowerer.badType(argument, lowerer.typeOf(argument));
+  }
+  const compared =
+    lowered.type.kind === "string" ? lowered : lowerer.ensureString(lowered, argument);
+  return { kind: "libCall", fn: "str.localeCompare", args: [receiver, compared], type: F64, loc };
 }

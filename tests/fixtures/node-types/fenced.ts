@@ -34,10 +34,10 @@ ReadableStream.from(new Set([1, 2]));
  * typecheck under @types/node and fence with the module-qualified name —
  * calls and value reads alike. */
 import { watchFile } from "fs";
-import { cpus } from "node:os";
+import { setPriority } from "node:os";
 import { win32 } from "path";
 watchFile("x", () => {});
-console.log(cpus().length);
+setPriority(0);
 console.log(win32.sep);
 /* URL getters and serialization lower under @types/node, but object-URL
  * registry operations still fence by member name with the supported
@@ -89,4 +89,9 @@ async function inspectReadableStream(url: string): Promise<void> {
   const bracketTee = body["tee"];
 }
 void inspectReadableStream;
+/* The one- and zero-argument util.callbackify overloads type the
+ * callback's error as non-null, but Node calls back with null. */
+import { callbackify } from "node:util";
+const callbackified = callbackify(async (n: number) => n);
+void callbackified;
 // End of the declared-but-not-lowered surface.

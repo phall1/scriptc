@@ -2,17 +2,20 @@ import * as ts from "../ts7/adapter.js";
 import { bodyReadsArguments } from "../arguments-usage.js";
 import type { Lowerer } from "./lowerer.js";
 import {
+  DATE_T,
   DYN,
   type IrExpr,
   type IrFunction,
   type IrParam,
   type IrStmt,
   type IrType,
+  type SrcLoc,
   isUnitType,
   typeEquals,
 } from "../../ir/ir.js";
 import { isJsSourceFile, locOf } from "../program.js";
 import { typeKey } from "../type-mapper.js";
+import type { FnCtx } from "./function-context.js";
 import { PoisonError, dynFallbackType, neverTaintedJsType, newFnCtx } from "./lowerer.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
 import { findGenericMethodOn, type ClassInfo } from "./lower-classes.js";
@@ -34,13 +37,23 @@ import {
   appendImplicitUndefinedReturn,
   hasExplicitJsDocReturn,
   promiseCarriesDyn,
+  stdlibTextCodecType,
 } from "./function-returns.js";
-import { bindingNeverReassigned, stripValueWrappers } from "./binding-analysis.js";
+import {
+  bindingNeverReassigned,
+  jsFunctionReceivesProperties,
+  stripValueWrappers,
+} from "./binding-analysis.js";
 import {
   extendInstantiationPath,
   MAX_INSTANTIATION_RECURSION,
   type InstantiationPath,
 } from "./instantiation-path.js";
+import {
+  builtinConstructorIdentityOf,
+  builtinConstructorScope,
+  type BuiltinConstructorIdentity,
+} from "./builtin-constructor-identity.js";
 
 /** A generic function-like declaration, collected instead of an FnSig —
  * top-level generic function declarations, class GENERIC METHODS (own type
@@ -119,6 +132,8 @@ export interface GenericInstance {
    * checker type, consulted by the Lowerer's typeOf while this instance's
    * body lowers (the implicit twin of `bindings`). */
   implicitArgTypes?: Map<ts.Symbol, ts.Type>;
+  /** Proven immutable constructor snapshots; ABI types alone cannot distinguish their brands. */
+  builtinConstructors?: Map<ts.Symbol, BuiltinConstructorIdentity>;
   /** Implicit instances only: eager-lowering lifecycle. "lowering" while
    * the body builds (a re-demand is same-key recursion: the caller uses
    * the PINNED fallback returnType and returnPinned locks it); "done" once
@@ -132,6 +147,8 @@ export interface GenericInstance {
    * any-params poisoned it) — the body lowers in return-INFERENCE mode
    * (returnType holds the DYN recursion pin until the post-pass settles). */
   implicitInferReturn?: true;
+  /** Argument index whose date scalar this instance returns after a UTC setter. */
+  dateWritebackParam?: number;
 }
 
 /** Defaults bind during inference; collection only resolves symbols in
@@ -238,7 +255,26 @@ export function lowerGenericCall(
     ? implicitCallInstance(lowerer, expr, info)
     : genericCallInstance(lowerer, expr, info);
   const args = lowerer.completeArgs(expr.arguments, instance.params, loc, expr);
-  return { kind: "call", callee: instance.name, args, type: instance.returnType, loc };
+  const call: IrExpr = { kind: "call", callee: instance.name, args, type: instance.returnType, loc };
+  return dateWritebackCall(lowerer, instance, call, loc);
+}
+
+/** A void function that assigned a date parameter returns that scalar, and
+ * the call writes it back onto the argument local. */
+function dateWritebackCall(
+  lowerer: Lowerer,
+  instance: GenericInstance,
+  call: IrExpr,
+  loc: SrcLoc,
+): IrExpr {
+  const index = instance.dateWritebackParam;
+  if (index === undefined || call.kind !== "call" || call.type.kind !== "date") return call;
+  const arg = call.args[index];
+  if (arg?.kind !== "varRef" || arg.type.kind !== "date") return call;
+  const local = lowerer.ctx.locals.find((item) => item.id === arg.localId);
+  if (!local || local.type.kind !== "date") return call;
+  local.mutable = true;
+  return { kind: "assignExpr", localId: local.id, value: call, type: DATE_T, loc };
 }
 
 /** The instance a CALL of a generic function-like names: resolved
@@ -643,6 +679,37 @@ function unifySignatureBindings(
  * mapType call via typeParamResolver — the checker keeps reporting the
  * unsubstituted `T`s inside the body). Coverage stats count a base
  * function's statements once: only the FIRST instance contributes. */
+/** A function whose body only mutates a date parameter returns that scalar
+ * so the caller can store it. A body that already returns the date just
+ * records the argument index. */
+function settleDateWriteback(
+  inst: GenericInstance,
+  fnCtx: FnCtx,
+  body: IrStmt[],
+  bodyReturn: IrType,
+  loc: SrcLoc,
+): IrType {
+  const writeback = fnCtx.dateWriteback;
+  if (!writeback || inst.returnPinned) return bodyReturn;
+  if (bodyReturn.kind === "date") {
+    inst.dateWritebackParam = writeback.index;
+    return bodyReturn;
+  }
+  if (bodyReturn.kind !== "dyn" && bodyReturn.kind !== "void") return bodyReturn;
+  const valued = fnCtx.inferReturn?.entries.some(
+    (entry) => entry.stmt.kind === "return" && entry.stmt.value != null,
+  );
+  if (valued) return bodyReturn;
+  inst.dateWritebackParam = writeback.index;
+  inst.returnType = DATE_T;
+  body.push({
+    kind: "return",
+    value: { kind: "varRef", localId: writeback.localId, type: DATE_T, loc },
+    loc,
+  });
+  return DATE_T;
+}
+
 export function lowerGenericInstance(
   lowerer: Lowerer,
   info: GenericFnInfo,
@@ -656,6 +723,7 @@ export function lowerGenericInstance(
   const prevSuppress = lowerer.suppressStats;
   const prevClass = lowerer.currentClass;
   const prevImplicit = lowerer.implicitParamTypes;
+  const prevConstructors = lowerer.implicitBuiltinConstructors;
   // A generic METHOD of a generic-class INSTANTIATION lowers under BOTH
   // binding sets: the receiver instantiation's class type parameters
   // underneath, the method instantiation's own on top (disjoint symbol
@@ -703,7 +771,20 @@ export function lowerGenericInstance(
   let bodyReturn = isGenerator
     ? lowerer.genBodyReturnType(inst.returnType)
     : lowerer.bodyReturnType(isAsync, inst.returnType);
-  const fnCtx = newFnCtx(false, null, null, bodyReturn);
+  // `Effect.suspend(function loop() { return loop() })`: the inner name is
+  // in scope for the body. Generic instances are plain functions, so the
+  // name denotes this instance directly.
+  const selfName =
+    (ts.isFunctionExpression(decl) || ts.isFunctionDeclaration(decl)) &&
+    decl.name !== undefined &&
+    ts.isIdentifier(decl.name)
+      ? decl.name
+      : null;
+  const selfSymbol = selfName ? (lowerer.checker.getSymbolAtLocation(selfName) ?? null) : null;
+  const selfType = selfSymbol ? funcTypeFromParamShapes(inst.params, inst.returnType) : null;
+  const fnCtx = newFnCtx(false, selfSymbol, selfType, bodyReturn);
+  if (selfSymbol && selfType) fnCtx.plainSelfName = inst.name;
+  fnCtx.bodyDecl = decl;
   fnCtx.isAsync = isAsync;
   // Implicit-any instances whose declared return did not map lower in
   // return-INFERENCE mode: `return` statements record here bare, and the
@@ -717,6 +798,11 @@ export function lowerGenericInstance(
   lowerer.localClassInstantiations.push({ owner: decl, name: inst.name });
   lowerer.genericInstantiationPath = inst.path;
   try {
+    lowerer.implicitBuiltinConstructors = builtinConstructorScope(
+      prevConstructors,
+      inst.builtinConstructors,
+      info.implicitParams,
+    );
     // Static specializations bind lexical this only when the caller
     // proved its exact receiver. Other instances retain the fence;
     // super remains unsupported. Arrows inherit the lexical receiver.
@@ -756,6 +842,7 @@ export function lowerGenericInstance(
         bodyReturn = resolveInferredReturn(lowerer, inst, fnCtx.inferReturn, body, decl);
         inst.returnType = bodyReturn;
       }
+      bodyReturn = settleDateWriteback(inst, fnCtx, body, bodyReturn, locOf(decl));
       appendImplicitUndefinedReturn(lowerer, body, bodyReturn, locOf(decl));
     } else if (ts.isArrowFunction(decl) && decl.body !== undefined && !ts.isBlock(decl.body)) {
       // A concise arrow body: the expression IS the return value —
@@ -768,6 +855,7 @@ export function lowerGenericInstance(
           body.push({ kind: "exprStmt", expr: value, loc: locOf(decl.body) });
           bodyReturn = resolveInferredReturn(lowerer, inst, fnCtx.inferReturn, body, decl);
           inst.returnType = bodyReturn;
+          bodyReturn = settleDateWriteback(inst, fnCtx, body, bodyReturn, locOf(decl));
           appendImplicitUndefinedReturn(lowerer, body, bodyReturn, locOf(decl));
         } else {
           const stmt: IrStmt = { kind: "return", value, loc: locOf(decl.body) };
@@ -775,6 +863,7 @@ export function lowerGenericInstance(
           body.push(stmt);
           bodyReturn = resolveInferredReturn(lowerer, inst, fnCtx.inferReturn, body, decl);
           inst.returnType = bodyReturn;
+          bodyReturn = settleDateWriteback(inst, fnCtx, body, bodyReturn, locOf(decl));
         }
       } else {
         const value = lowerer.lowerExprExpecting(decl.body, bodyReturn);
@@ -783,6 +872,7 @@ export function lowerGenericInstance(
         } else {
           body.push({ kind: "return", value, loc: locOf(decl.body) });
         }
+        bodyReturn = settleDateWriteback(inst, fnCtx, body, bodyReturn, locOf(decl));
       }
     } else {
       lowerer.unsupported(
@@ -815,6 +905,7 @@ export function lowerGenericInstance(
     lowerer.typeParamBindings = prevBindings;
     lowerer.typeParamTsBindings = prevTsBindings;
     lowerer.implicitParamTypes = prevImplicit;
+    lowerer.implicitBuiltinConstructors = prevConstructors;
     lowerer.instantiationContext = prevContext;
     lowerer.localClassInstantiations.pop();
     lowerer.suppressStats = prevSuppress;
@@ -1009,9 +1100,9 @@ export function implicitMonoFile(sf: ts.SourceFile): boolean {
   return isJsSourceFile(sf) && npmStaticPackageOfPath(sf.fileName) !== null;
 }
 
-/** True when the body (or a nested function capturing it) ever WRITES the
- * parameter symbol — assignment, compound assignment, ++/--, a
- * destructuring-assignment target, or a for-in/of cursor. A written
+/** True when defaults, the body, or a nested function ever WRITES the
+ * parameter symbol — assignment, redeclaration initialization, hoisted
+ * function replacement, ++/--, destructuring, or a for-in/of cursor. A written
  * param's binding could lie after the write, so it stays dyn. */
 function paramWrittenInBody(
   lowerer: Lowerer,
@@ -1049,35 +1140,68 @@ function paramWrittenInBody(
     }
     return false;
   };
-  const walk = (n: ts.Node): void => {
+  const declarationRebinds = (node: ts.Node): boolean => {
+    if (ts.isFunctionDeclaration(node)) {
+      if (!node.name) return false;
+      if (lowerer.checker.getSymbolAtLocation(node.name) === sym) return true;
+      // The checker can split a parameter and a same-body function's
+      // symbols even though JavaScript replaces the parameter binding.
+      return node.name.text === name && ts.isFunctionLike(body) && node.parent === body.body;
+    }
+    if (!ts.isVariableDeclaration(node) || !node.initializer) return false;
+    let found = false;
+    const scan = (binding: ts.Node): void => {
+      if (ts.isIdentifier(binding) && lowerer.checker.getSymbolAtLocation(binding) === sym)
+        found = true;
+      binding.forEachChild(scan);
+    };
+    scan(node.name);
+    return found;
+  };
+  const assignmentRebinds = (node: ts.Node): boolean => {
+    if (!ts.isBinaryExpression(node)) return false;
+    const operator = node.operatorToken.kind;
+    if (operator < ts.SyntaxKind.FirstAssignment || operator > ts.SyntaxKind.LastAssignment)
+      return false;
+    return targetsSym(node.left);
+  };
+  const incrementRebinds = (node: ts.Node): boolean => {
+    if (!ts.isPrefixUnaryExpression(node) && !ts.isPostfixUnaryExpression(node)) return false;
+    if (
+      node.operator !== ts.SyntaxKind.PlusPlusToken &&
+      node.operator !== ts.SyntaxKind.MinusMinusToken
+    )
+      return false;
+    return targetsSym(node.operand);
+  };
+  const cursorRebinds = (node: ts.Node): boolean => {
+    if (!ts.isForInStatement(node) && !ts.isForOfStatement(node)) return false;
+    if (ts.isVariableDeclarationList(node.initializer)) {
+      let found = false;
+      const scan = (binding: ts.Node): void => {
+        if (ts.isIdentifier(binding) && lowerer.checker.getSymbolAtLocation(binding) === sym)
+          found = true;
+        binding.forEachChild(scan);
+      };
+      for (const declaration of node.initializer.declarations) scan(declaration.name);
+      return found;
+    }
+    if (!ts.isExpression(node.initializer)) return false;
+    return targetsSym(node.initializer);
+  };
+  const nodeRebinds = (node: ts.Node): boolean => {
+    if (declarationRebinds(node)) return true;
+    if (assignmentRebinds(node)) return true;
+    if (incrementRebinds(node)) return true;
+    return cursorRebinds(node);
+  };
+  const walk = (node: ts.Node): void => {
     if (written) return;
-    if (ts.isBinaryExpression(n)) {
-      const k = n.operatorToken.kind;
-      const isAssign = k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment;
-      if (isAssign && targetsSym(n.left)) {
-        written = true;
-        return;
-      }
-    }
-    if (
-      (ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) &&
-      (n.operator === ts.SyntaxKind.PlusPlusToken ||
-        n.operator === ts.SyntaxKind.MinusMinusToken) &&
-      targetsSym(n.operand)
-    ) {
+    if (nodeRebinds(node)) {
       written = true;
       return;
     }
-    if (
-      (ts.isForInStatement(n) || ts.isForOfStatement(n)) &&
-      !ts.isVariableDeclarationList(n.initializer) &&
-      ts.isExpression(n.initializer) &&
-      targetsSym(n.initializer)
-    ) {
-      written = true;
-      return;
-    }
-    n.forEachChild(walk);
+    node.forEachChild(walk);
   };
   walk(body);
   return written;
@@ -1138,11 +1262,84 @@ export function implicitAnyParamSymbolsOf(
       return null;
     const sym = lowerer.checker.getSymbolAtLocation(param.name);
     if (!sym) return null;
-    if (paramWrittenInBody(lowerer, decl.body!, sym, param.name.text)) return null;
+    if (paramWrittenInBody(lowerer, decl, sym, param.name.text)) return null;
     hasImplicitParams = true;
     return sym;
   });
   return hasImplicitParams ? out : null;
+}
+
+function decoratedFunctionDecl(lowerer: Lowerer, expr: ts.Expression): boolean {
+  let node = expr;
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  if (!ts.isIdentifier(node)) return false;
+  const symbol = lowerer.resolveValueSymbol(node);
+  const decl = symbol ? lowerer.checker.valueDeclarationOf(symbol) : undefined;
+  return (
+    decl !== undefined && ts.isFunctionDeclaration(decl) && jsFunctionReceivesProperties(lowerer, decl)
+  );
+}
+
+function writtenFunction(
+  decl: ts.Node,
+): ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | null {
+  if (ts.isFunctionDeclaration(decl) || ts.isFunctionExpression(decl) || ts.isArrowFunction(decl)) {
+    return decl.body !== undefined ? decl : null;
+  }
+  return null;
+}
+
+function callableWithBody(
+  decl: ts.Node | undefined,
+): ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | null {
+  if (!decl) return null;
+  const direct = writtenFunction(decl);
+  if (direct) return direct;
+  if (!ts.isVariableDeclaration(decl) || decl.initializer === undefined) return null;
+  let init: ts.Expression = decl.initializer;
+  while (ts.isParenthesizedExpression(init)) init = init.expression;
+  return writtenFunction(init);
+}
+
+function callReturnsDecorated(lowerer: Lowerer, expr: ts.Expression, depth: number): boolean {
+  let node = expr;
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  if (!ts.isCallExpression(node) || depth > 2) return false;
+  let callee = node.expression;
+  while (ts.isParenthesizedExpression(callee)) callee = callee.expression;
+  if (!ts.isIdentifier(callee)) return false;
+  const symbol = lowerer.resolveValueSymbol(callee);
+  const body = callableWithBody(symbol ? lowerer.checker.valueDeclarationOf(symbol) : undefined);
+  if (!body) return false;
+  return returnsDecoratedFunction(lowerer, body, depth + 1);
+}
+
+/** `return Workflow` or `return makeProto(...)` where that helper returns
+ * a function properties were assigned onto. The checker still says
+ * `() => void`; the body has to settle the real value. */
+function returnsDecoratedFunction(lowerer: Lowerer, decl: ts.Node, depth: number): boolean {
+  const fn =
+    writtenFunction(decl) ??
+    (ts.isMethodDeclaration(decl) && decl.body !== undefined ? decl : null);
+  if (depth > 2 || !fn || fn.body === undefined) return false;
+  // A concise arrow's body is the return value. `make = () => makeProto(...)`
+  // has no return statement.
+  if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) {
+    return (
+      decoratedFunctionDecl(lowerer, fn.body) || callReturnsDecorated(lowerer, fn.body, depth)
+    );
+  }
+  const body = fn.body;
+  let found = false;
+  ts.walkPreorder(body, (node) => {
+    if (found) return undefined;
+    if (node !== body && ts.isFunctionLike(node)) return "skip";
+    if (!ts.isReturnStatement(node) || node.expression === undefined) return undefined;
+    if (decoratedFunctionDecl(lowerer, node.expression)) found = true;
+    else if (callReturnsDecorated(lowerer, node.expression, depth)) found = true;
+    return undefined;
+  });
+  return found;
 }
 
 /** The checker-fallback return type an implicit instance PROMISES before
@@ -1224,6 +1421,9 @@ function implicitDeclaredReturn(lowerer: Lowerer, info: GenericFnInfo): IrType |
       if (elem && (elem.flags & ts.TypeFlags.Any) !== 0) return null;
     }
     const mapped = lowerer.mapTypeOf(retTs);
+    // A TextDecoder/TextEncoder result is the codec record, not an
+    // evolving object. Pin it so `.decode` sees the encoding slot.
+    if (mapped?.kind === "record" && stdlibTextCodecType(lowerer, retTs)) return mapped;
     // Mixed inferred results can select a closure or a class instance.
     // Their callable ABI is settled by the lowered body, including native
     // classes whose reflected calls return checked values.
@@ -1284,6 +1484,8 @@ function implicitDeclaredReturn(lowerer: Lowerer, info: GenericFnInfo): IrType |
       return null;
     if (mapped !== null && promiseCarriesDyn(lowerer, mapped) && !hasExplicitJsDocReturn(info.decl))
       return null;
+    if (!hasExplicitJsDocReturn(info.decl) && returnsDecoratedFunction(lowerer, info.decl, 0))
+      return null;
     return mapped;
   } catch (e) {
     if (!(e instanceof PoisonError)) throw e;
@@ -1323,6 +1525,35 @@ function bindableImplicitIr(t: IrType | null): t is IrType {
   );
 }
 
+/** `...(c ? { k: v } : {})` where `k` is optional any/unknown on the
+ * literal's own type. `any` absorbs undefined, so the record field has no
+ * absent state. */
+function optionalAnyConditionalSpread(lowerer: Lowerer, arg: ts.ObjectLiteralExpression): boolean {
+  const objectType = lowerer.typeOf(arg);
+  for (const property of arg.properties) {
+    if (!ts.isSpreadAssignment(property)) continue;
+    let expr: ts.Expression = property.expression;
+    while (ts.isParenthesizedExpression(expr)) expr = expr.expression;
+    if (!ts.isConditionalExpression(expr)) continue;
+    for (const arm of [expr.whenTrue, expr.whenFalse]) {
+      let inner: ts.Expression = arm;
+      while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+      if (!ts.isObjectLiteralExpression(inner)) continue;
+      for (const carrier of inner.properties) {
+        if (!ts.isPropertyAssignment(carrier) && !ts.isShorthandPropertyAssignment(carrier))
+          continue;
+        const name = carrier.name;
+        if (!ts.isIdentifier(name) && !ts.isStringLiteral(name)) continue;
+        const prop = lowerer.checker.getPropertyOfType(objectType, name.text);
+        if (!prop || (prop.flags & ts.SymbolFlags.Optional) === 0) continue;
+        const mapped = lowerer.mapTypeOf(lowerer.checker.getTypeOfSymbol(prop));
+        if (mapped === null || mapped.kind === "dyn") return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** A represented binding or direct callable result can be wider than the
  * checker's inferred shape. Preserve that boundary when specializing JS. */
 function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrType | null {
@@ -1349,10 +1580,14 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
     const awaited = storedImplicitArgumentType(lowerer, arg.expression);
     return awaited?.kind === "promise" ? awaited.inner : awaited;
   }
-  if (
-    ts.isObjectLiteralExpression(arg) &&
-    isJsSourceFile(arg.getSourceFile()) &&
-    (arg.properties.length === 0 ||
+  if (ts.isObjectLiteralExpression(arg) && isJsSourceFile(arg.getSourceFile())) {
+    // `...(c ? { max: v } : {})` on `max?: any`. The checker types the field
+    // as any, so a record slot cannot tell an omitted key from undefined.
+    // Prompt.Int spreads the argument over defaults; undefined would replace
+    // +Infinity. Keep the value checked-dynamic so the empty arm copies nothing.
+    if (optionalAnyConditionalSpread(lowerer, arg)) return DYN;
+    if (
+      arg.properties.length === 0 ||
       arg.properties.some(
         (property) =>
           ts.isMethodDeclaration(property) ||
@@ -1360,11 +1595,30 @@ function storedImplicitArgumentType(lowerer: Lowerer, arg: ts.Expression): IrTyp
           (!ts.isSpreadAssignment(property) &&
             property.name !== undefined &&
             ts.isComputedPropertyName(property.name)),
-      ))
-  )
-    return DYN;
+      )
+    )
+      return DYN;
+  }
   if (ts.isIdentifier(arg))
     return lowerer.peekLocal(arg)?.type ?? lowerer.globalOf(arg)?.type ?? null;
+  // `[workflow]` is inferred as `(() => void)[]` after Workflow.make assigns
+  // execute/resume onto the function. The element is already checked-dynamic.
+  // Specializing the array to the empty function drops those properties.
+  if (ts.isArrayLiteralExpression(arg)) {
+    const mapped = lowerer.mapTypeOf(lowerer.typeOf(arg));
+    const elem = mapped?.kind === "array" ? mapped.elem : null;
+    if (
+      elem?.kind === "func" &&
+      elem.rest !== true &&
+      elem.params.length === 0 &&
+      elem.ret.kind === "void"
+    ) {
+      for (const element of arg.elements) {
+        if (ts.isSpreadElement(element)) continue;
+        if (storedImplicitArgumentType(lowerer, element)?.kind === "dyn") return DYN;
+      }
+    }
+  }
   if (
     isJsSourceFile(arg.getSourceFile()) &&
     (ts.isPropertyAccessExpression(arg) || ts.isElementAccessExpression(arg))
@@ -1413,6 +1667,7 @@ export function implicitCallInstance(
 ): GenericInstance {
   const shapes: ParamShape[] = [];
   const argTypes = new Map<ts.Symbol, ts.Type>();
+  const constructors = new Map<ts.Symbol, BuiltinConstructorIdentity>();
   info.decl.parameters.forEach((param, i) => {
     const sym = info.implicitParams![i];
     if (!sym) {
@@ -1425,6 +1680,16 @@ export function implicitCallInstance(
     const arg = call.arguments[i];
     if (arg && !ts.isSpreadElement(arg)) {
       const stored = storedImplicitArgumentType(lowerer, arg);
+      const constructor = builtinConstructorIdentityOf(lowerer, arg);
+      const constructorType = constructor
+        ? (stored ?? tryLowerExpression(lowerer, arg)?.type)
+        : null;
+      if (constructor && constructorType) {
+        constructors.set(sym, constructor);
+        argTypes.set(sym, lowerer.checker.getUnknownType());
+        shapes.push({ type: constructorType, mode: "required" });
+        return;
+      }
       if (stored?.kind === "dyn") {
         bound = DYN;
         argTypes.set(sym, lowerer.checker.getUnknownType());
@@ -1540,7 +1805,7 @@ export function implicitCallInstance(
     }
     shapes.push({ type: bound, mode: "required" });
   });
-  return internImplicitInstance(lowerer, call, info, shapes, argTypes);
+  return internImplicitInstance(lowerer, call, info, shapes, argTypes, constructors);
 }
 
 /** The all-dyn DEFAULT instance — today's compiled body exactly: what a
@@ -1567,14 +1832,28 @@ export function implicitDefaultInstance(
   return internImplicitInstance(lowerer, blame, info, shapes, argTypes);
 }
 
+function implicitInstanceKey(
+  info: GenericFnInfo,
+  shapes: ParamShape[],
+  constructors: Map<ts.Symbol, BuiltinConstructorIdentity>,
+): string {
+  const types = shapes.map((shape) => typeKey(shape.type)).join(",");
+  if (constructors.size === 0) return types;
+  const identities = info
+    .implicitParams!.map((symbol) => (symbol ? (constructors.get(symbol) ?? "") : ""))
+    .join(",");
+  return `${types};constructors:${identities}`;
+}
+
 function internImplicitInstance(
   lowerer: Lowerer,
   blame: ts.Node,
   info: GenericFnInfo,
   shapes: ParamShape[],
   argTypes: Map<ts.Symbol, ts.Type>,
+  constructors = new Map<ts.Symbol, BuiltinConstructorIdentity>(),
 ): GenericInstance {
-  const key = shapes.map((s) => typeKey(s.type)).join(",");
+  const key = implicitInstanceKey(info, shapes, constructors);
   let inst = info.instances.get(key);
   if (inst?.implicitState === "failed")
     lowerer.unsupported("SC1090", blame, `the failed specialization of '${info.baseName}'`);
@@ -1614,6 +1893,7 @@ function internImplicitInstance(
     bindings: new Map(),
     typeArgsText: `(${rendered.length > 80 ? rendered.slice(0, 77) + "..." : rendered})`,
     implicitArgTypes: argTypes,
+    builtinConstructors: constructors,
     implicitState: "lowering",
     ...(declared === null ? { implicitInferReturn: true as const } : {}),
   };
@@ -1709,7 +1989,13 @@ export function implicitLocalFnNodeOf(
         return;
       }
       if (ts.isIdentifier(n)) {
-        const s = lowerer.checker.getSymbolAtLocation(n);
+        // `{ space }` names the property. The value binding is the captured
+        // parameter; the property symbol's declaration sits inside this
+        // initializer and would hide the capture.
+        let s = lowerer.checker.getSymbolAtLocation(n);
+        if (n.parent && ts.isShorthandPropertyAssignment(n.parent) && n.parent.name === n) {
+          s = lowerer.checker.getShorthandAssignmentValueSymbol(n.parent) ?? s;
+        }
         const d = s ? lowerer.checker.valueDeclarationOf(s) : undefined;
         if (
           d &&

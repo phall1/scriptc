@@ -1,4 +1,5 @@
 import { THREADS_MODULE } from "../threads-import.js";
+import { EXPERIMENTAL_MODULE } from "../experimental-import.js";
 import { dynUndefinedExpr } from "../../ir/build.js";
 import { everyStmtList, everyTypeChild } from "../../ir/traverse.js";
 import { InternalCompilerError } from "../../errors.js";
@@ -29,7 +30,11 @@ import {
   resolveNpmImport,
 } from "../program.js";
 import type { CycleEdge } from "../program.js";
-import { markCycleEarlyBindings, withCycleInitFlags } from "./cycle-initialization.js";
+import {
+  markCycleEarlyBindings,
+  withClassInitFlag,
+  withCycleInitFlags,
+} from "./cycle-initialization.js";
 import {
   invalidJsonModuleDiag,
   unsupportedPackageImportDiag,
@@ -89,7 +94,9 @@ import {
 } from "./binding-analysis.js";
 import { funcTypeFromParamShapes, registerOverloadedCallableAlias } from "./call-signatures.js";
 import {
+  inferredEvolvingLetType,
   jsBindingHasOpenWrites,
+  ambientFetchAnnotation,
   hasJsTypeAnnotation,
   isVarDeclared,
   numericIteratorSourceOf,
@@ -571,9 +578,10 @@ export function collectNpmImports(lowerer: Lowerer, parts: FileParts[]): void {
         if (dep !== null && entryPackageFile(dep.fileName) && lowerer.fileTag.has(dep)) continue;
       }
       if (!npm && !relIsJs) continue;
-      // scriptc's own @scriptc/threads: its exports lower to intrinsics at
-      // their use sites (threads-import.ts); its Node.js body never runs.
-      if (npm?.packageName === THREADS_MODULE) continue;
+      // scriptc's own @scriptc/threads and @scriptc/experimental: their
+      // exports lower at their use sites (threads-import.ts,
+      // experimental-import.ts); their Node.js bodies never run.
+      if (npm?.packageName === THREADS_MODULE || npm?.packageName === EXPERIMENTAL_MODULE) continue;
       // An edge Node's RUNTIME resolution refuses at startup (types
       // resolved, but the exports target ships no JS — the types-only
       // package shape): preflight registered Node's startup crash for
@@ -1188,6 +1196,12 @@ function jsDynHoldableInitializer(lowerer: Lowerer, init: ts.Expression | undefi
       return true;
   }
   return false;
+}
+
+function lexicalPointerTdz(codec: boolean, type: IrType, decl: ts.VariableDeclaration): boolean {
+  if (isVarDeclared(decl)) return false;
+  if (codec || type.kind === "func") return true;
+  return type.kind === "string" && decl.initializer !== undefined;
 }
 
 export function collectGlobals(
@@ -1998,11 +2012,16 @@ export function collectGlobals(
             dynFallbackType(lowerer, nameNode, lowerer.typeOf(nameNode))?.kind === "dyn"
           ) {
             const symbol = lowerer.checker.getSymbolAtLocation(nameNode);
+            // An evolving `let` whose only writes are one concrete value
+            // (`sharedTextDecoder ??= new TextDecoder()`) keeps that
+            // value. A checked-dynamic slot would refuse the codec record.
+            const evolved =
+              isLet && !decl.initializer ? inferredEvolvingLetType(lowerer, decl) : null;
             if (symbol && !lowerer.globalsBySymbol.has(symbol)) {
               const g: IrGlobal = {
                 id: `%g.${tag}${nsPrefix}${nameNode.text}`,
                 name: nameNode.text,
-                type: DYN,
+                type: evolved ?? DYN,
                 mutable: isLet,
                 source: bindingSource(nameNode),
               };
@@ -2011,8 +2030,9 @@ export function collectGlobals(
               // Mutable dyn globals hold the dyn undefined from module
               // entry (the main path's rule below): a closure called
               // above the declaration reads undefined instead of
-              // faulting on NULL.
-              if (g.mutable) noteVarGlobalEntryInit(lowerer, sf, g);
+              // faulting on NULL. A recovered union initializes when its
+              // `let` statement runs.
+              if (g.mutable && g.type.kind === "dyn") noteVarGlobalEntryInit(lowerer, sf, g);
             }
             continue;
           }
@@ -2122,7 +2142,24 @@ export function collectGlobals(
             !lowerer.mapTypeOf(lowerer.typeOf(nameNode))
           )
             continue;
-          let type = handleT ?? factoryType ?? (inferredJsCall ? DYN : lowerer.irTypeOf(nameNode));
+          // File-scope collection types the binding before its initializer
+          // lowers. `typeof fetch` has no static layout; the user's function
+          // is the value, same as the declaration rule in lowerVarDecl.
+          const fetchInit = decl.initializer;
+          const fetchFn =
+            !isLet &&
+            fetchInit !== undefined &&
+            (ts.isArrowFunction(fetchInit) || ts.isFunctionExpression(fetchInit)) &&
+            ts.isIdentifier(decl.name) &&
+            nameNode === decl.name &&
+            ambientFetchAnnotation(lowerer, decl)
+              ? lowerer.lambdaSignature(fetchInit).funcType
+              : null;
+          let type =
+            handleT ??
+            factoryType ??
+            fetchFn ??
+            (inferredJsCall ? DYN : lowerer.irTypeOf(nameNode));
           if (
             isJsSourceFile(sf) &&
             !decl.type &&
@@ -2296,6 +2333,23 @@ export function collectGlobals(
             type = unitOnlyUnion(lowerer.unions);
           }
           if (type.kind === "void") lowerer.badType(nameNode, lowerer.typeOf(nameNode));
+          // `let sharedTextDecoder;` at module scope is an evolving any.
+          // A later `??= new TextDecoder()` is the only write, and the
+          // nullish assignment exists because the slot may still be empty.
+          // Keep the codec record (with an undefined arm) so the write is
+          // not a typed value entering an unknown slot.
+          if (
+            isJsSourceFile(sf) &&
+            isLet &&
+            !decl.initializer &&
+            !decl.type &&
+            !hasJsTypeAnnotation(decl) &&
+            type.kind === "dyn" &&
+            ts.isIdentifier(decl.name) &&
+            nameNode === decl.name
+          ) {
+            type = inferredEvolvingLetType(lowerer, decl) ?? type;
+          }
           // A JS file-scope FUNCTION binding whose unannotated return
           // infers a record (`const wrapped = function () { return
           // expectedResult; }`): the closure VALUE lowers with a dyn
@@ -2361,12 +2415,9 @@ export function collectGlobals(
             type,
             mutable: isLet,
             source: bindingSource(nameNode),
-            // A function pointer must not be dereferenced before a lexical
-            // declaration assigns it. The shared pointer TDZ guard handles
-            // these bindings like stored codec records.
-            ...((codec || type.kind === "func") && !isVarDeclared(decl)
-              ? { tdz: true as const }
-              : {}),
+            // String and function pointers must not be dereferenced before
+            // initialization. Reuse the stored-codec pointer TDZ guard.
+            ...(lexicalPointerTdz(codec, type, decl) ? { tdz: true as const } : {}),
           };
           lowerer.globalsBySymbol.set(symbol, g);
           lowerer.globalsList.push(g);
@@ -2400,12 +2451,14 @@ export function collectGlobals(
  * direct early reads, and closure reads share let's documented
  * zero/NULL divergence window. */
 function noteVarGlobalEntryInit(lowerer: Lowerer, sf: ts.SourceFile, g: IrGlobal): void {
-  // 'any' globals need the entry init exactly like undefined-armed
-  // unions: tsc never guards `any` reads, so `var x: any;` is readable
-  // before any assignment and its slot must hold native undefined
-  // rather than a C-level NULL (an op or validated exit on NULL is
-  // memory-unsafe, not a TypeError).
-  if (g.type.kind !== "union" && g.type.kind !== "dyn") return;
+  // Every var global is noted: the runtime-optional analysis may still
+  // widen its type to an undefined-armed union (a var read before its
+  // first store), and the module entry stores undefined for the types
+  // that hold it once that settled. 'any' globals need the entry init
+  // exactly like undefined-armed unions: tsc never guards `any` reads,
+  // so `var x: any;` is readable before any assignment and its slot must
+  // hold native undefined rather than a C-level NULL (an op or validated
+  // exit on NULL is memory-unsafe, not a TypeError).
   const inits = lowerer.varGlobalEntryInits.get(sf) ?? [];
   inits.push(g);
   lowerer.varGlobalEntryInits.set(sf, inits);
@@ -2718,6 +2771,7 @@ export function lowerFileInit(
     // Node); checked-dynamic var globals hold the dyn undefined the same
     // way. After the guard: a cache-hit revisit must not reset them.
     for (const g of lowerer.varGlobalEntryInits.get(sf) ?? []) {
+      if (g.type.kind !== "union" && g.type.kind !== "dyn") continue;
       const wrapped =
         g.type.kind === "dyn" ? dynUndefinedExpr(loc0) : lowerer.unassignedSlotInit(g.type, loc0);
       if (wrapped) {
@@ -2743,7 +2797,8 @@ export function lowerFileInit(
           ts.isClassDeclaration(c.decl) &&
           !c.mixinInstance &&
           c.decl.getSourceFile() === sf &&
-          (c.callableBase !== undefined ||
+          (lowerer.classInitFlags.has(c.def.name) ||
+            c.callableBase !== undefined ||
             c.def.baseValueGlobal !== undefined ||
             c.runtimeStatics !== undefined ||
             c.staticFields.length > 0 ||
@@ -2771,7 +2826,13 @@ export function lowerFileInit(
       // declarations never share a kept statement's start, so `<=`
       // changes nothing for them.
       while (at < statics.length && statics[at]!.pos <= stmt.getStart()) {
-        body.push(...lowerer.lowerStaticFieldInits(statics[at]!.info));
+        body.push(
+          ...withClassInitFlag(
+            lowerer,
+            statics[at]!.info,
+            lowerer.lowerStaticFieldInits(statics[at]!.info),
+          ),
+        );
         at++;
       }
       // A cycle binding's declaration stays at its position: its
@@ -2790,7 +2851,13 @@ export function lowerFileInit(
       body.push(...lowerer.pendingClassExprInits.splice(0), ...stmtIr);
     }
     while (at < statics.length) {
-      body.push(...lowerer.lowerStaticFieldInits(statics[at]!.info));
+      body.push(
+        ...withClassInitFlag(
+          lowerer,
+          statics[at]!.info,
+          lowerer.lowerStaticFieldInits(statics[at]!.info),
+        ),
+      );
       at++;
     }
     const moduleRef = cjsModuleRef(lowerer, sf);

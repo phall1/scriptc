@@ -1,7 +1,7 @@
 import { lowerArrayIteratorValue } from "../iterator-adapters.js";
 import { identityPreservingWidening } from "../coercions/identity.js";
 import { arrayConcatHelper } from "./array-concat.js";
-import { boolLit, countedFor, numLit, strLit, varRef } from "../../../ir/build.js";
+import { boolLit, countedFor, dynUndefinedExpr, numLit, strLit, varRef } from "../../../ir/build.js";
 import { InternalCompilerError } from "../../../errors.js";
 import * as ts from "../../ts7/adapter.js";
 import type { Lowerer } from "../lowerer.js";
@@ -280,6 +280,208 @@ function lowerArrayJoinSeparator(
  * direct call of a synthetic loop function (see lowerArrayHofCall and
  * friends). Null when this isn't an ambient array method call. tsc has
  * already checked arity and argument types against ambient/scriptc.d.ts. */
+/** `unknown[]` / `any[]` map to dyn, not to an array type. The value is
+ * still an array; array methods the runtime dispatches run on it. */
+function anyArrayDynMethod(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
+  if (!lowerer.checkerAnyArray(access.expression)) return null;
+  const receiver = lowerer.lowerExpr(access.expression);
+  if (receiver.type.kind !== "dyn") return null;
+  return lowerDynDispatchMethodCall(lowerer, call, access, receiver, true);
+}
+
+/** `dynArray.push.apply(dynArray, items)` appends each item through the
+ * checked-dynamic push. The result is the array's length, as apply returns. */
+export function lowerDynInvokePushApply(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  items: IrExpr,
+  loc: SrcLoc,
+): IrExpr {
+  const recvLocal = lowerer.declareHiddenLocal("%applyRecv", DYN);
+  const recv = varRef(recvLocal.id, DYN, loc);
+  const push = (arg: IrExpr): IrStmt => ({
+    kind: "exprStmt",
+    expr: {
+      kind: "dynInvoke",
+      recv,
+      method: "push",
+      calleeName: "push",
+      args: [arg.type.kind === "dyn" ? arg : { kind: "dynFrom", value: arg, type: DYN, loc }],
+      type: DYN,
+      loc,
+    },
+    loc,
+  });
+  const stmts: IrStmt[] = [{ kind: "varDecl", localId: recvLocal.id, init: receiver, loc }];
+  if (items.type.kind === "array") {
+    const srcLocal = lowerer.declareHiddenLocal("%applySrc", items.type);
+    const src = varRef(srcLocal.id, items.type, loc);
+    const len: IrExpr = { kind: "arrIntrinsic", method: "length", receiver: src, args: [], type: F64, loc };
+    const indexLocal = lowerer.declareHiddenLocal("%applyIndex", F64);
+    indexLocal.mutable = true;
+    const index = varRef(indexLocal.id, F64, loc);
+    stmts.push({ kind: "varDecl", localId: srcLocal.id, init: items, loc });
+    stmts.push({
+      kind: "for",
+      init: { kind: "varDecl", localId: indexLocal.id, init: numLit(0, loc), loc },
+      cond: { kind: "bin", op: "<", left: index, right: len, type: BOOL, loc },
+      update: {
+        kind: "assign",
+        localId: indexLocal.id,
+        value: { kind: "bin", op: "+", left: index, right: numLit(1, loc), type: F64, loc },
+        loc,
+      },
+      body: [push(arrayValueRead(lowerer, src, index, items.type.elem, loc))],
+      loc,
+    });
+  } else {
+    const srcLocal = lowerer.declareHiddenLocal("%applySrc", DYN);
+    const src = varRef(srcLocal.id, DYN, loc);
+    const lenLocal = lowerer.declareHiddenLocal("%applyLen", F64);
+    const indexLocal = lowerer.declareHiddenLocal("%applyIndex", F64);
+    indexLocal.mutable = true;
+    const index = varRef(indexLocal.id, F64, loc);
+    const len = varRef(lenLocal.id, F64, loc);
+    const coerced = lowerer.coerceToExpected(items, DYN);
+    stmts.push({ kind: "varDecl", localId: srcLocal.id, init: coerced, loc });
+    stmts.push({
+      kind: "varDecl",
+      localId: lenLocal.id,
+      init: {
+        kind: "dynCheck",
+        value: { kind: "dynKeyGet", value: src, key: strLit("length", loc), type: DYN, loc },
+        type: F64,
+        loc,
+      },
+      loc,
+    });
+    stmts.push({
+      kind: "for",
+      init: { kind: "varDecl", localId: indexLocal.id, init: numLit(0, loc), loc },
+      cond: { kind: "bin", op: "<", left: index, right: len, type: BOOL, loc },
+      update: {
+        kind: "assign",
+        localId: indexLocal.id,
+        value: { kind: "bin", op: "+", left: index, right: numLit(1, loc), type: F64, loc },
+        loc,
+      },
+      body: [
+        push({
+          kind: "dynKeyGet",
+          value: src,
+          key: { kind: "toString", operand: index, type: STRING, loc },
+          type: DYN,
+          loc,
+        }),
+      ],
+      loc,
+    });
+  }
+  return {
+    kind: "seqExpr",
+    stmts,
+    result: {
+      kind: "dynCheck",
+      value: { kind: "dynKeyGet", value: recv, key: strLit("length", loc), type: DYN, loc },
+      type: F64,
+      loc,
+    },
+    type: F64,
+    loc,
+  };
+}
+
+/** `array.push(...unknown)` copies numeric indexes after checking each
+ * element into the destination. A non-array source fails the length check
+ * the same way a spread of a non-iterable throws. */
+export function lowerDynPushSpread(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  source: IrExpr,
+  elem: IrType,
+  loc: SrcLoc,
+): IrExpr {
+  const recvLocal = lowerer.declareHiddenLocal("%spreadRecv", receiver.type);
+  const srcLocal = lowerer.declareHiddenLocal("%spreadSrc", DYN);
+  const lenLocal = lowerer.declareHiddenLocal("%spreadLen", F64);
+  const indexLocal = lowerer.declareHiddenLocal("%spreadIndex", F64);
+  indexLocal.mutable = true;
+  const recv = varRef(recvLocal.id, receiver.type, loc);
+  const src = varRef(srcLocal.id, DYN, loc);
+  const len = varRef(lenLocal.id, F64, loc);
+  const index = varRef(indexLocal.id, F64, loc);
+  const element: IrExpr = {
+    kind: "dynCheck",
+    value: {
+      kind: "dynKeyGet",
+      value: src,
+      key: { kind: "toString", operand: index, type: STRING, loc },
+      type: DYN,
+      loc,
+    },
+    type: elem,
+    loc,
+  };
+  const loop: IrStmt = {
+    kind: "for",
+    init: { kind: "varDecl", localId: indexLocal.id, init: numLit(0, loc), loc },
+    cond: { kind: "bin", op: "<", left: index, right: len, type: BOOL, loc },
+    update: {
+      kind: "assign",
+      localId: indexLocal.id,
+      value: { kind: "bin", op: "+", left: index, right: numLit(1, loc), type: F64, loc },
+      loc,
+    },
+    body: [
+      {
+        kind: "exprStmt",
+        expr: {
+          kind: "arrIntrinsic",
+          method: "push",
+          receiver: recv,
+          args: [element],
+          type: F64,
+          loc,
+        },
+        loc,
+      },
+    ],
+    loc,
+  };
+  return {
+    kind: "seqExpr",
+    stmts: [
+      { kind: "varDecl", localId: recvLocal.id, init: receiver, loc },
+      { kind: "varDecl", localId: srcLocal.id, init: source, loc },
+      {
+        kind: "varDecl",
+        localId: lenLocal.id,
+        init: {
+          kind: "dynCheck",
+          value: {
+            kind: "dynKeyGet",
+            value: src,
+            key: strLit("length", loc),
+            type: DYN,
+            loc,
+          },
+          type: F64,
+          loc,
+        },
+        loc,
+      },
+      loop,
+    ],
+    result: { kind: "arrIntrinsic", method: "length", receiver: recv, args: [], type: F64, loc },
+    type: F64,
+    loc,
+  };
+}
+
 export function lowerArrayMethodCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -334,7 +536,7 @@ export function lowerArrayMethodCall(
     const unionHof = lowerArrayUnionHofCall(lowerer, call, access, receiverIr);
     if (unionHof) return unionHof;
   }
-  if (receiverIr?.kind !== "array") return null;
+  if (receiverIr?.kind !== "array") return anyArrayDynMethod(lowerer, call, access);
   if (!probedUntyped && !lowerer.isStdlibMember(access)) return null;
   let elem = receiverIr.elem;
   const loc = locOf(call);
@@ -731,6 +933,15 @@ export function lowerArrayMethodCall(
           type: F64,
           loc,
         };
+      }
+      if (
+        src.type.kind === "dyn" &&
+        name === "push" &&
+        isJsSourceFile(call.getSourceFile())
+      ) {
+        // `segments.push(...arg.segments)` where the fragment's list is
+        // unknown. Copy by index and check each element into the array.
+        return lowerDynPushSpread(lowerer, receiver, src, elem, loc);
       }
       if (!typeEquals(src.type, receiverIr)) {
         lowerer.unsupported(
@@ -1298,6 +1509,30 @@ function lowerArraySearchCall(
   const receiver = lowerer.lowerExpr(access.expression);
   if (call.arguments.some(ts.isSpreadElement))
     lowerer.noLowering(`.${method} with spread arguments`, call);
+  // `unknown[]` stores checked values. SameValueZero has to see the
+  // needle as a checked value too — a fresh string box is not pointer-
+  // equal to the element — so the search goes through the dyn array
+  // method. `members.includes("*")` after splitting an untyped header.
+  if (elem.kind === "dyn") {
+    const args: IrExpr[] = [
+      call.arguments[0]
+        ? lowerer.lowerExprExpecting(call.arguments[0], DYN)
+        : dynUndefinedExpr(loc),
+    ];
+    if (call.arguments[1]) args.push(lowerer.lowerExprExpecting(call.arguments[1], DYN));
+    return lowerer.coerceToExpected(
+      {
+        kind: "dynInvoke",
+        recv: lowerer.coerceToExpected(receiver, DYN),
+        method,
+        calleeName: access.getText(),
+        args,
+        type: DYN,
+        loc,
+      },
+      method === "includes" ? BOOL : F64,
+    );
+  }
   const needle: IrExpr = call.arguments[0]
     ? lowerer.lowerExpr(call.arguments[0])
     : { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc };

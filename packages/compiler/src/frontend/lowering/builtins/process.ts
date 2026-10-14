@@ -327,6 +327,18 @@ export function lowerProcessProperty(
   if (member === "versions") {
     return { kind: "libCall", fn: "process.versions", args: [], type: DYN, loc };
   }
+  // process.noDeprecation / process.throwDeprecation: the values the
+  // program assigned (undefined before that — no Node flags reach a
+  // compiled binary).
+  if (member === "noDeprecation" || member === "throwDeprecation") {
+    return {
+      kind: "libCall",
+      fn: "process.deprecationFlag",
+      args: [numLit(member === "noDeprecation" ? 0 : 1, loc)],
+      type: DYN,
+      loc,
+    };
+  }
   if (member === "version") {
     // Node's own version string for the compatibility target, the same
     // release process.versions.node names (the runtime's
@@ -389,6 +401,11 @@ export function lowerProcessProperty(
       expr,
       "process.env as a value of this type (read one variable: process.env.NAME or process.env[name])",
     );
+  }
+  // Effect's pretty logger probes `process?.isBun`. Node has no such
+  // property; the read is undefined and the comparison is false.
+  if (member === "isBun") {
+    return { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc: locOf(expr) };
   }
   if (member === "exit" || member === "cwd" || member === "getuid" || member === "kill") {
     lowerer.unsupported("SC1090", expr, `process methods as values (call '${member}' directly)`);
@@ -920,9 +937,9 @@ export function lowerProcessMethodCall(
             : "process.onRejectionHandled";
       return { kind: "libCall", fn, args: isOff ? [cb] : [cb, onceArg], type: VOID, loc };
     }
-    // 'warning': the listener crosses as a dyn function; emitWarning
-    // and the runtime deprecation sites dispatch synchronously
-    // (SEMANTICS.md). off/removeListener remove by closure identity.
+    // 'warning': the listener crosses as a dyn function; emitWarning and
+    // util.deprecate dispatch on the next tick. off/removeListener remove
+    // by closure identity.
     if (event === "warning" && (member === "on" || isOff)) {
       if (!ts.isExpressionStatement(call.parent)) {
         lowerer.unsupported(

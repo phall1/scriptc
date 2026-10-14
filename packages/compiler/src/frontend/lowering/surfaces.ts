@@ -573,8 +573,7 @@ export const STR_METHODS: Record<
   // regexIntrinsic). The optional limit is completed to 2^32-1 by the
   // lowering so the IR/runtime always see the spec's effective value.
   // Empty separator splits per UTF-16 code unit —
-  // astral halves become U+FFFD (SEMANTICS.md divergence 2, the same
-
+  // astral halves become lone surrogates.
   split: { method: "split", result: arrayOf(STRING), minArgs: 0, maxArgs: 2 },
   // Padding completes omitted lengths and fill strings in its lowering.
   padStart: { method: "padStart", result: STRING, minArgs: 0, maxArgs: 2 },
@@ -583,10 +582,8 @@ export const STR_METHODS: Record<
   toLowerCase: { method: "toLowerCase", result: STRING, minArgs: 0, maxArgs: 0 },
   toUpperCase: { method: "toUpperCase", result: STRING, minArgs: 0, maxArgs: 0 },
   normalize: { method: "normalize", result: STRING, minArgs: 0, maxArgs: 1 },
-  // The ES2024 well-formedness pair — no-ops over the runtime's
-  // well-formed storage (constant true / the identity, per spec on
-  // well-formed input; where Node would answer false the program already
-  // diverged at the string's creation, SEMANTICS.md 2).
+  // The ES2024 well-formedness pair: whether the string holds a lone
+  // surrogate, and the copy with each one replaced by U+FFFD.
   isWellFormed: { method: "isWellFormed", result: BOOL, minArgs: 0, maxArgs: 0 },
   toWellFormed: { method: "toWellFormed", result: STRING, minArgs: 0, maxArgs: 0 },
 };
@@ -921,6 +918,17 @@ const PATH_MODULE_FNS: Record<string, BuiltinModuleFn | undefined> = {
     result: STRING,
     valueParams: [{ mode: "required", type: STRING }],
   },
+  matchesGlob: {
+    fn: "path.matchesGlob",
+    params: [STRING, STRING],
+    result: BOOL,
+    valueParams: exactValueParams(STRING, STRING),
+  },
+  // Special-cased (lowerPathParseCall / lowerPathFormatCall): the
+  // ParsedPath record and the pathObject argument follow the call site's
+  // mapped shapes.
+  parse: { fn: "path.parse", params: [STRING], result: VOID },
+  format: { fn: "path.format", params: [], result: STRING },
 };
 
 /** The win32 twins (scr_path.c's Node-v24 path.win32 port, byte-for-byte):
@@ -990,6 +998,17 @@ const PATH_WIN32_MODULE_FNS: Record<string, BuiltinModuleFn | undefined> = {
     result: STRING,
     valueParams: [{ mode: "required", type: STRING }],
   },
+  matchesGlob: {
+    fn: "path.win32MatchesGlob",
+    params: [STRING, STRING],
+    result: BOOL,
+    valueParams: exactValueParams(STRING, STRING),
+  },
+  // Special-cased (lowerPathParseCall / lowerPathFormatCall): the
+  // ParsedPath record and the pathObject argument follow the call site's
+  // mapped shapes.
+  parse: { fn: "path.win32Parse", params: [STRING], result: VOID },
+  format: { fn: "path.win32Format", params: [], result: STRING },
 };
 
 export const BUILTIN_MODULE_FNS: Record<
@@ -1273,6 +1292,28 @@ export const BUILTIN_MODULE_FNS: Record<
       result: F64,
       valueParams: [],
     },
+    // os.arch() IS process.arch, like platform().
+    arch: { fn: "process.arch", params: [], result: STRING, valueParams: [] },
+    hostname: { fn: "os.hostname", params: [], result: STRING, valueParams: [] },
+    // uv_os_uname's machine and version fields, read once at module load
+    // in Node (they never change while a process runs).
+    machine: { fn: "os.machine", params: [], result: STRING, valueParams: [] },
+    version: { fn: "os.version", params: [], result: STRING, valueParams: [] },
+    endianness: { fn: "os.endianness", params: [], result: STRING, valueParams: [] },
+    freemem: { fn: "os.freemem", params: [], result: F64, valueParams: [] },
+    uptime: { fn: "os.uptime", params: [], result: F64, valueParams: [] },
+    loadavg: { fn: "os.loadavg", params: [], result: arrayOf(F64), valueParams: [] },
+    // An omitted (or undefined) pid is 0, the current process
+    // (lowerOsGetPriorityCall completes it).
+    getPriority: {
+      fn: "os.getPriority",
+      params: [F64],
+      result: F64,
+      valueParams: [{ mode: "optional", type: F64, defaultValue: 0 }],
+    },
+    // Special-cased (lowerOsCpusCall): the call site's CpuInfo[] assembles
+    // from one uv_cpu_info snapshot.
+    cpus: { fn: "os.cpusTake", params: [], result: VOID },
     // Entirely special-cased (lowerOsNetworkInterfacesCall): the result is
     // the call site's mapped Dict<NetworkInterfaceInfo[]> shape, verified
     // structurally there — this entry only routes the dispatch.
@@ -1442,6 +1483,53 @@ export const BUILTIN_MODULE_FNS: Record<
       result: STRING,
       valueParams: exactValueParams(DYN),
     },
+    // The function helpers take checked-dynamic arguments and answer native
+    // dyn functions, which a static function slot checks when it receives
+    // one (lowerUtilCallableCall in the util spoke).
+    inherits: {
+      fn: "util.inherits",
+      params: [DYN, DYN],
+      result: VOID,
+      valueParams: [
+        { mode: "required", type: DYN },
+        { mode: "required", type: DYN },
+      ],
+    },
+    deprecate: {
+      fn: "util.deprecate",
+      params: [DYN, DYN, DYN, DYN],
+      result: DYN,
+      valueParams: [
+        { mode: "required", type: DYN },
+        { mode: "required", type: DYN },
+        { mode: "optional", type: DYN, defaultValue: undefined },
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
+    callbackify: {
+      fn: "util.callbackify",
+      params: [DYN],
+      result: DYN,
+      valueParams: [{ mode: "required", type: DYN }],
+    },
+    debuglog: {
+      fn: "util.debuglog",
+      params: [DYN, DYN],
+      result: DYN,
+      valueParams: [
+        { mode: "required", type: DYN },
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
+    debug: {
+      fn: "util.debuglog",
+      params: [DYN, DYN],
+      result: DYN,
+      valueParams: [
+        { mode: "required", type: DYN },
+        { mode: "optional", type: DYN, defaultValue: undefined },
+      ],
+    },
   },
   // The util/types spoke supplies the probe name to the shared brand check.
   "util/types": {
@@ -1572,9 +1660,9 @@ export const BUILTIN_MODULE_FNS: Record<
   // exists so unlowered members fence module-qualified.
   "stream/promises": {},
   // node:stream/consumers rides the stream spoke as well (text/json/
-  // buffer special-case their stream argument); arrayBuffer and blob
-  // fence module-qualified with the pointed hints below — neither value
-  // has a representation in a compiled binary.
+  // buffer/arrayBuffer special-case their stream argument); blob fences
+  // module-qualified with the pointed hint below — Blob has no
+  // representation in a compiled binary.
   "stream/consumers": {},
   // node:timers/promises — the delay-only setTimeout and bare setImmediate
   // (void promises the shared timer heap settles). The arity completion
@@ -1616,7 +1704,7 @@ export const BUILTIN_MODULE_CONSTS: Record<
   path: { sep: "/", delimiter: ":" },
   "path/posix": { sep: "/", delimiter: ":" },
   "path/win32": { sep: "\\", delimiter: ";" },
-  os: { EOL: "\n" },
+  os: { EOL: "\n", devNull: "/dev/null" },
   worker_threads: { isMainThread: true, threadId: 0 },
   cluster: { isPrimary: true, isMaster: true, isWorker: false },
 };
@@ -1695,6 +1783,8 @@ export const BUILTIN_MODULE_FN_ALIASES: Record<
   os: {
     // lowerOsUserInfoCall assembles the record from scalar libCalls.
     userInfo: ["os.userHomedir", "os.userShell"],
+    // lowerOsCpusCall reads the cpusTake snapshot through its accessors.
+    cpus: ["os.cpusModel", "os.cpusField"],
   },
 };
 
@@ -1803,6 +1893,20 @@ export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
     name: "Date.prototype.toISOString",
     fns: ["date.toISOString", "date.toISOStringValue"],
     note: "UTC ISO formatting over constructed and stored Date values",
+  },
+  {
+    id: "stdlib.date.toUTCString",
+    kind: "stdlib",
+    name: "Date.prototype.toUTCString",
+    fns: ["date.toUTCStringValue"],
+    note: "RFC 7231 UTC formatting; invalid dates answer Invalid Date",
+  },
+  {
+    id: "stdlib.date.toJSON",
+    kind: "stdlib",
+    name: "Date.prototype.toJSON",
+    fns: ["date.getTime", "date.toISOStringValue", "number.isFinite"],
+    note: "ignores its key; null when the time is not finite, otherwise the same UTC text as toISOString()",
   },
   {
     id: "stdlib.date.getFullYear",
@@ -2109,6 +2213,15 @@ export const AMBIENT_SURFACE_FNS: readonly AmbientSurfaceRow[] = [
     fns: ["tlsca.set"],
     note: "replaces the default set and the client trust anchors for the rest of the process",
   },
+  // os.constants is a VALUE read (lowerNamespaceBuiltinProperty and the
+  // named-import path): the platform's null-prototype constants object.
+  {
+    id: "node-builtin.os.constants",
+    kind: "node-builtin",
+    name: "os.constants",
+    fns: ["os.constants"],
+    note: "the platform's dlopen, errno, signals and priority groups; members a platform lacks read as undefined",
+  },
 ];
 
 /** The win32-target overrides of the bare modules' constants: path's
@@ -2119,7 +2232,7 @@ const WIN32_TARGET_CONSTS: Record<
   Record<string, string | number | boolean | undefined> | undefined
 > = {
   path: BUILTIN_MODULE_CONSTS["path/win32"],
-  os: { EOL: "\r\n" },
+  os: { EOL: "\r\n", devNull: "\\\\.\\nul" },
 };
 
 /** BUILTIN_MODULE_FNS with the platform-conditional modules bound per
@@ -2365,10 +2478,6 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<
   string,
   Record<string, string | undefined> | undefined
 > = {
-  console: {
-    Console:
-      "custom Console instances are not supported yet; direct node:console log/info/debug/error/warn calls use the process output streams",
-  },
   assert: ASSERT_MODULE_HINTS,
   // The strict module's equal/notEqual/deepEqual/notDeepEqual ARE the
   // strict comparisons (aliased in the spoke) — only the members with no
@@ -2384,9 +2493,6 @@ export const BUILTIN_MODULE_FENCE_HINTS: Record<
       "the lowered shapes are const bindings over child_process.execFile and fs.readFile; call the bound function directly",
   },
   "stream/consumers": {
-    arrayBuffer:
-      "collecting a stream directly into an ArrayBuffer has no native lowering yet; " +
-      "buffer(stream) collects the same bytes as a Buffer",
     blob:
       "Blob values have no representation in a compiled binary — " +
       "buffer(stream) collects the same bytes as a Buffer, text(stream) the decoded text",
@@ -2568,9 +2674,11 @@ export function stdlibMemberFence(lowerer: Lowerer, access: ts.PropertyAccessExp
       "the stdout/stderr stream objects have no lowering";
   } else if (container === "console") {
     hint =
-      "console.log/info/debug (stdout) and console.error/warn (stderr) are the supported " +
-      "console surface (arguments render with Node's console semantics: strings verbatim, " +
-      "everything else through the static util.inspect)";
+      "console.log/info/debug (stdout), console.error/warn (stderr), assert, count, " +
+      "countReset, dir, dirxml, group, groupCollapsed, groupEnd, table, time, timeEnd, " +
+      "timeLog, clear, profile, profileEnd, and timeStamp are the supported console surface " +
+      "(arguments render with Node's console semantics: strings verbatim, everything else " +
+      "through the static util.inspect)";
   } else if (container === "TextEncoder") {
     hint =
       "TextEncoder instances can be stored, passed, and captured; encode(), encodeInto(string, Uint8Array), and encoding compile";
@@ -2587,10 +2695,11 @@ export function stdlibMemberFence(lowerer: Lowerer, access: ts.PropertyAccessExp
     hint =
       "call the function directly — plain and arrow functions here never read `this`, so " +
       "f.call(thisArg, ...args) is f(...args), and bind's partial application is an arrow: (...rest) => f(a, ...rest)";
-  } else if (
-    recvIr?.kind === "string" &&
-    (member === "match" || member === "matchAll" || member === "search")
-  ) {
+  } else if (recvIr?.kind === "string" && member === "search") {
+    hint =
+      "string and RegExp arguments lower (a string is compiled as a RegExp, so '.' matches " +
+      "any character); an object with a custom @@search method has no lowering";
+  } else if (recvIr?.kind === "string" && (member === "match" || member === "matchAll")) {
     hint =
       "the regex-LITERAL argument forms lower (s.match(/re/)); a string pattern constructs " +
       "a RegExp at runtime, which has no lowering";

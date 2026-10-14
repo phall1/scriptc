@@ -144,6 +144,10 @@ export function computeMayThrow(
             sawDynFuncAdapter = true;
           }
           break;
+        case "arrayHas":
+          // String-key membership may walk a user-supplied prototype Proxy.
+          if (rec.index.type.kind === "string") f.throws = true;
+          break;
         case "mapIntrinsic":
         case "setIntrinsic": {
           const receiver = rec.receiver.type;
@@ -205,8 +209,9 @@ export function computeMayThrow(
         case "genResume":
           // A body exception (or the injected .throw payload on a
           // non-suspended generator) propagates into the resumer; the
-          // reentrancy TypeError throws here too.
-          f.throws = true;
+          // reentrancy TypeError throws here too. Taking the yielded value
+          // after a step only moves it out.
+          if (rec.mode !== "value") f.throws = true;
           break;
         case "recordKeySet": {
           // A dynamic-keyed write can collide with a DECLARED field, where
@@ -620,6 +625,7 @@ const ERROR_KIND_NAMES: readonly string[] = [
   "ReferenceError",
   "EvalError",
   "URIError",
+  "AggregateError",
 ];
 
 /** A short description of a node that seeds the may-throw fixpoint. */
@@ -834,8 +840,9 @@ function boundedNode(rec: IrExpr | IrStmt): boolean {
     case "arrIntrinsic":
       return !UNBOUNDED_ARR_METHODS.has(rec.method);
     case "libCall":
-      // A compiler-resolved Node error with literal arguments: it only throws.
-      if (rec.fn === "error.new" || rec.fn === "error.nodeThrow") return true;
+      // Node error constructors only throw. A typed-ref test reads one header.
+      if (rec.fn === "error.new" || rec.fn === "error.nodeThrow" || rec.fn === "dyn.isTypedRef")
+        return true;
       // `new Error(message, options)` stays bounded while its message cannot
       // reach a user toString and no options object is passed.
       if (rec.fn === "error.newOptions") return rec.args.every(primitiveDynArgument);

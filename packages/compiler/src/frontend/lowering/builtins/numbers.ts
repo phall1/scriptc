@@ -2,7 +2,8 @@ import * as ts from "../../ts7/adapter.js";
 import { type Lowerer, own } from "../lowerer.js";
 import { lowerCheckedPredicateValue } from "../lower-builtin-values.js";
 import { locOf } from "../../program.js";
-import { BOOL, F64, type IrExpr, type IrLibFn } from "../../../ir/ir.js";
+import { numLit } from "../../../ir/build.js";
+import { BOOL, F64, STRING, type IrExpr, type IrLibFn } from "../../../ir/ir.js";
 import { lowerBuiltinValuePreservingUndefined, lowerOptionalNumberPredicate } from "./arguments.js";
 import { tryLowerExpression } from "../expressions/try-lower-expression.js";
 import { lowerStaticNumberGlobal } from "../lower-calls.js";
@@ -72,21 +73,45 @@ export function lowerNumberStaticCall(
     return { kind: "libCall", fn, args: [arg], type: BOOL, loc };
   }
   if (member === "parseFloat" || member === "parseInt") {
-    const want = member === "parseFloat" ? 1 : 2;
-    if (call.arguments.length !== want) {
+    // Omitted parseInt radix is the spec default (radix 0): decimal, with
+    // a 0x prefix still read as hex. Effect's date prompts call
+    // Number.parseInt(text) in that form.
+    const max = member === "parseFloat" ? 1 : 2;
+    if (call.arguments.length < 1 || call.arguments.length > max) {
       lowerer.noLowering(
         `Number.${member} with ${call.arguments.length} argument${call.arguments.length === 1 ? "" : "s"}`,
         call,
-        member === "parseInt" ? "pass an explicit radix: Number.parseInt(s, 10)" : undefined,
       );
     }
     // Number.parseFloat/Number.parseInt ARE the global parsers: over a
     // string argument they lower to the same static parse (parseInt with
-    // its explicit radix); only the coercing argument shapes are refused.
+    // its radix, or 0 when the radix is omitted); only the coercing
+    // argument shapes are refused.
     const probed = tryLowerExpression(lowerer, call.arguments[0]!);
     if (probed !== null && isStringLike(lowerer, probed.type)) {
       const parsed = lowerStaticNumberGlobal(lowerer, member, call, call.arguments, loc);
       if (parsed !== null) return parsed;
+    }
+    // An untyped argument is still ToString'd by the spec. The value form
+    // of Number.parseInt already does this; the call form follows it so a
+    // specialized string parses instead of fencing the whole function.
+    // Number.parseFloat is the same ToString-then-parse (Effect's float
+    // prompts pass an unknown accumulator).
+    if (probed?.type.kind === "dyn" && (member === "parseInt" || member === "parseFloat")) {
+      const text: IrExpr = {
+        kind: "libCall",
+        fn: "dyn.toStringCoerce",
+        args: [probed],
+        type: STRING,
+        loc,
+      };
+      if (member === "parseFloat") {
+        return { kind: "libCall", fn: "num.parseFloat", args: [text], type: F64, loc };
+      }
+      const radix = call.arguments[1]
+        ? lowerer.lowerExprExpecting(call.arguments[1], F64)
+        : numLit(0, loc);
+      return { kind: "libCall", fn: "num.parseInt", args: [text, radix], type: F64, loc };
     }
     const argText =
       probed !== null
@@ -121,6 +146,27 @@ export function lowerNumberStaticProperty(
       predicate,
     );
   const value = own(NUMBER_CONSTANTS, member);
+  if (value === undefined) return null;
+  return { kind: "numLit", value, type: F64, loc: locOf(expr) };
+}
+
+/** The Event phase constants (Event.NONE ... Event.BUBBLING_PHASE),
+ * which CustomEvent inherits through its constructor. */
+const EVENT_PHASES: Record<string, number | undefined> = {
+  NONE: 0,
+  CAPTURING_PHASE: 1,
+  AT_TARGET: 2,
+  BUBBLING_PHASE: 3,
+};
+
+export function lowerEventStaticProperty(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression,
+): IrExpr | null {
+  const member =
+    lowerer.stdlibGlobalMember(expr, "Event") ?? lowerer.stdlibGlobalMember(expr, "CustomEvent");
+  if (member === null) return null;
+  const value = own(EVENT_PHASES, member);
   if (value === undefined) return null;
   return { kind: "numLit", value, type: F64, loc: locOf(expr) };
 }

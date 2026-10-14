@@ -14,6 +14,7 @@ import {
   mapOf,
   setOf,
   type IrExpr,
+  type IrFunction,
   type IrModule,
   type IrType,
   type IrUnionDef,
@@ -22,6 +23,27 @@ import { deserializeModule, serializeModule } from "./serialize.js";
 import { validateModule } from "./validate.js";
 
 const loc = { file: "numeric-read.ts", start: 0, end: 0 };
+
+test.each([F64, STRING])("$kind array presence keys survive IR serialization", (type) => {
+  const index: IrExpr =
+    type.kind === "string"
+      ? { kind: "strLit", value: "map", type, loc }
+      : { kind: "numLit", value: 0, type, loc };
+  const query: IrExpr = {
+    kind: "arrayHas",
+    arr: { kind: "arrayLit", elems: [], type: arrayOf(F64), loc },
+    index,
+    type: BOOL,
+    loc,
+  };
+  const mod = expressionModule(query, []);
+  expect(validateModule(deserializeModule(serializeModule(mod)))).toEqual([]);
+  const bad = expressionModule(
+    { ...query, index: { kind: "boolLit", value: true, type: BOOL, loc } },
+    [],
+  );
+  expect(validateModule(bad).some((error) => error.message.includes("arrayHas key"))).toBe(true);
+});
 
 test("static callback operations validate their complete ABI after serialization", () => {
   const mod = expressionModule({ kind: "numLit", value: 0, type: F64, loc }, []);
@@ -1362,14 +1384,49 @@ test("TDZ globals require guarded pointer storage and round-trip initialization"
   ];
   expect(validateModule(mod)).toEqual([]);
   expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+  mod.globals[0]!.type = STRING;
+  const initialization = mod.functions[0]!.body[0]!;
+  if (initialization.kind !== "assign") throw new Error("missing initializing assign");
+  initialization.value = { kind: "strLit", value: "ready", type: STRING, loc };
+  expect(validateModule(mod)).toEqual([]);
+  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
   mod.globals[0]!.type = F64;
   expect(
     validateModule(mod).some((error) =>
       error.message.includes(
-        'TDZ global "value" must have record, function, or checked-value storage',
+        'TDZ global "value" must have record, function, string, union, or checked-value storage',
       ),
     ),
   ).toBe(true);
+});
+
+test.each([0, 1])("TDZ boxed union arm %s survives validation and serialization", (tag) => {
+  const mod = tdzModule();
+  const type: IrType = { kind: "union", unionId: "optionalString" };
+  mod.unions = [{ id: "optionalString", arms: [STRING, UNDEFINED_T] }];
+  mod.globals = [{ id: "%g.value", name: "value", type, mutable: false, tdz: true }];
+  mod.functions[0]!.locals = [];
+  mod.functions[0]!.body = [
+    {
+      kind: "assign",
+      localId: "%g.value",
+      initializes: true,
+      loc,
+      value: {
+        kind: "unionWrap",
+        unionId: "optionalString",
+        tag,
+        value:
+          tag === 0
+            ? { kind: "strLit", value: "ready", type: STRING, loc }
+            : { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
+        type,
+        loc,
+      },
+    },
+  ];
+  expect(validateModule(mod)).toEqual([]);
+  expect(deserializeModule(serializeModule(mod))).toEqual(mod);
 });
 
 test("legacy const TDZ declarations remain readable", () => {
@@ -1913,6 +1970,79 @@ test("runtime comparator sort validates element kinds and the comparator shape",
       }),
       "owned flag must be a boolean literal",
     ],
+  ] as const) {
+    expect(validateModule(mod).some((error) => error.message.includes(message))).toBe(true);
+  }
+});
+
+test("runtime comparator sort validates a recognized comparator's key order", () => {
+  const row: IrType = { kind: "record", shapeId: "r0" };
+  const closure = (fnName: string, params: IrType[], ret: IrType = F64): IrExpr => ({
+    kind: "closure",
+    fnName,
+    captures: [],
+    type: funcOf(params, ret),
+    loc,
+  });
+  const order = (value: number): IrExpr => ({ kind: "numLit", value, type: F64, loc });
+  const keyedModule = (elem: IrType, keyArgs: IrExpr[], dense = false): IrModule => {
+    const receiver: IrExpr = { kind: "arrayLit", elems: [], type: arrayOf(elem), loc };
+    const cmp = closure("cmp", [elem, elem]);
+    const mod = numericReadModule(
+      dense
+        ? {
+            method: "sortDense",
+            receiver,
+            args: [cmp, { kind: "boolLit", value: false, type: BOOL, loc }, ...keyArgs],
+            type: BOOL,
+          }
+        : { method: "sortValues", receiver, args: [order(0), cmp, ...keyArgs], type: VOID },
+    );
+    mod.records = [{ id: "r0", fields: [{ name: "k", type: F64 }] }];
+    const fn = (name: string, params: IrType[], ret: IrType): IrFunction => ({
+      name,
+      params: params.map((type, index) => ({ localId: `p${index}`, name: `p${index}`, type })),
+      locals: params.map((type, index) => ({
+        id: `p${index}`,
+        name: `p${index}`,
+        type,
+        mutable: false,
+      })),
+      returnType: ret,
+      body: [
+        {
+          kind: "return",
+          value:
+            ret.kind === "f64"
+              ? { kind: "numLit", value: 0, type: F64, loc }
+              : { kind: "strLit", value: "", type: STRING, loc },
+          loc,
+        },
+      ],
+      loc,
+    });
+    mod.functions.push(
+      fn("cmp", [elem, elem], F64),
+      fn("key", [row], F64),
+      fn("text", [row], STRING),
+    );
+    return mod;
+  };
+  for (const mod of [
+    keyedModule(F64, [order(1)]),
+    keyedModule(F64, [order(-1)], true),
+    keyedModule(row, [order(1), closure("key", [row])]),
+    keyedModule(row, [order(-1), closure("key", [row])], true),
+  ]) {
+    expect(validateModule(mod)).toEqual([]);
+    expect(deserializeModule(serializeModule(mod))).toEqual(mod);
+  }
+  for (const [mod, message] of [
+    [keyedModule(F64, [order(2)]), "key order must be the literal 1 or -1"],
+    [keyedModule(F64, [order(1), closure("key", [row])]), "key order on f64"],
+    [keyedModule(STRING, [order(1)], true), "key order on string"],
+    [keyedModule(row, [order(1)]), "key reader must be (elem) => number"],
+    [keyedModule(row, [order(1), closure("text", [row], STRING)]), "key reader must be"],
   ] as const) {
     expect(validateModule(mod).some((error) => error.message.includes(message))).toBe(true);
   }

@@ -1,6 +1,7 @@
 import * as ts from "../../ts7/adapter.js";
 import {
   BOOL,
+  DYN,
   F64,
   REGEX,
   STRING,
@@ -9,12 +10,12 @@ import {
   typeEquals,
   typeKey,
   type IrExpr,
-  type IrLocal,
   type IrStmt,
   type IrType,
   type SrcLoc,
 } from "../../../ir/ir.js";
 import { numLit, strLit, varRef } from "../../../ir/build.js";
+import { InternalCompilerError } from "../../../errors.js";
 import { locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
 import {
@@ -24,7 +25,8 @@ import {
 } from "../optional-arguments.js";
 
 /** String search does not interpret regex syntax or capture substitutions.
- * The helper receives evaluated arguments and owns its chunks until join.
+ * A string replacement expands in one runtime pass; a callback runs through
+ * a helper that receives evaluated arguments and owns its chunks until join.
  * Callbacks see the original immutable subject and UTF-16 match offset. */
 export function lowerStringReplacement(
   lowerer: Lowerer,
@@ -51,6 +53,10 @@ export function lowerStringReplacement(
     if (absent) return defaultAfterUndefined(absent, strLit("undefined", loc));
     const value = lowerer.lowerExpr(node);
     if (value.type.kind === "dyn" || (callback && value.type.kind === "func")) return value;
+    // A RegExp whose checker type is `any` still lowers to a regex value.
+    // Capture substitutions ($1, $&) go through the regex runtime, not the
+    // literal string-search helper.
+    if (!callback && value.type.kind === "regex") return value;
     if (!primitive(value.type)) {
       lowerer.noLowering(
         `string .${method} with '${lowerer.fmt(value.type)}' ${callback ? "replacement" : "search"} values`,
@@ -62,12 +68,14 @@ export function lowerStringReplacement(
   };
   const search = argument(args[0], false);
   const replacement = argument(args[1], true);
+  if (search.type.kind === "regex") {
+    return lowerRegexSearchReplacement(lowerer, call, method, receiver, search, replacement, loc);
+  }
   if (search.type.kind === "dyn" || replacement.type.kind === "dyn") {
-    if (replacement.type.kind === "func") {
-      lowerer.noLowering(`string .${method} with checked search values and callbacks`, call);
-    }
     // Evaluate all inputs once before choosing the search protocol. Regexes
     // retain their native pattern; plain values use the string-search helper.
+    // A dynamic replacement may be a callback, so the regex arm asks the
+    // runtime; a known function always does.
     const values = [receiver, search, replacement];
     const locals = values.map((value) => lowerer.declareHiddenLocal("%replaceArg", value.type));
     const refs = locals.map((local) => varRef(local.id, local.type, loc));
@@ -84,19 +92,35 @@ export function lowerStringReplacement(
       plainSearch,
       checkedReplacement,
     );
+    const regexSearch = lowerer.coerceInto(args[0] ?? call, refs[1]!, REGEX);
+    const regexArm: IrExpr =
+      replacement.type.kind === "func" || replacement.type.kind === "dyn"
+        ? {
+            kind: "libCall",
+            fn: "regex.replaceCallback",
+            args: [
+              refs[0]!,
+              regexSearch,
+              lowerer.coerceToExpected(refs[2]!, DYN),
+              { kind: "boolLit", value: method === "replaceAll", type: BOOL, loc },
+            ],
+            type: STRING,
+            loc,
+          }
+        : {
+            kind: "regexIntrinsic",
+            method,
+            receiver: refs[0]!,
+            args: [regexSearch, checkedReplacement],
+            type: STRING,
+            loc,
+          };
     const result: IrExpr =
       search.type.kind === "dyn"
         ? {
             kind: "ternary",
             cond: { kind: "libCall", fn: "dyn.nativeRegexIs", args: [refs[1]!], type: BOOL, loc },
-            then: {
-              kind: "regexIntrinsic",
-              method,
-              receiver: refs[0]!,
-              args: [lowerer.coerceInto(args[0] ?? call, refs[1]!, REGEX), checkedReplacement],
-              type: STRING,
-              loc,
-            },
+            then: regexArm,
             else_: plain,
             type: STRING,
             loc,
@@ -118,6 +142,42 @@ export function lowerStringReplacement(
   return lowerStringReplacementValues(lowerer, call, method, receiver, search, replacement);
 }
 
+/** A lowered RegExp search uses the regex runtime, including $1..$99 and
+ * function replacements. The string-search helper leaves those spellings
+ * literal and rejects a non-string callback result. */
+function lowerRegexSearchReplacement(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  method: "replace" | "replaceAll",
+  receiver: IrExpr,
+  search: IrExpr,
+  replacement: IrExpr,
+  loc: SrcLoc,
+): IrExpr {
+  if (replacement.type.kind === "func" || replacement.type.kind === "dyn") {
+    return {
+      kind: "libCall",
+      fn: "regex.replaceCallback",
+      args: [
+        receiver,
+        search,
+        lowerer.coerceToExpected(replacement, DYN),
+        { kind: "boolLit", value: method === "replaceAll", type: BOOL, loc },
+      ],
+      type: STRING,
+      loc,
+    };
+  }
+  return {
+    kind: "regexIntrinsic",
+    method,
+    receiver,
+    args: [search, replacement],
+    type: STRING,
+    loc,
+  };
+}
+
 function lowerStringReplacementValues(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -127,13 +187,30 @@ function lowerStringReplacementValues(
   replacement: IrExpr,
 ): IrExpr {
   const loc = locOf(call);
-  const callback = replacement.type.kind === "func" ? replacement.type : null;
+  if (replacement.type.kind === "string") {
+    // A replacement template expands in one runtime pass over the subject.
+    return {
+      kind: "libCall",
+      fn: "str.replaceLiteral",
+      args: [
+        receiver,
+        search,
+        replacement,
+        { kind: "boolLit", value: method === "replaceAll", type: BOOL, loc },
+      ],
+      type: STRING,
+      loc,
+    };
+  }
+  const callback = replacement.type;
+  if (callback.kind !== "func") {
+    throw new InternalCompilerError(`string .${method} replacement of type ${callback.kind}`);
+  }
   const full = [STRING, F64, STRING];
   if (
-    callback &&
-    (callback.ret.kind !== "string" ||
-      callback.params.length > full.length ||
-      !callback.params.every((type, index) => typeEquals(type, full[index]!)))
+    (callback.ret.kind !== "string" && callback.ret.kind !== "dyn") ||
+    callback.params.length > full.length ||
+    !callback.params.every((type, index) => typeEquals(type, full[index]!))
   ) {
     lowerer.noLowering(
       `string .${method} callback signature`,
@@ -156,21 +233,17 @@ function lowerStringReplacementValues(
     const chunksType = arrayOf(STRING);
     const chunks = varRef("chunks.0", chunksType, loc);
     const builder = stringBuilder(loc, chunks);
-    const value: IrExpr = callback
-      ? {
-          kind: "callValue",
-          callee: replace,
-          args: [needle, match, subject].slice(0, callback.params.length),
-          type: STRING,
-          loc,
-        }
-      : {
-          kind: "call",
-          callee: replacementTemplateHelper(lowerer, loc),
-          args: [subject, needle, replace, match],
-          type: STRING,
-          loc,
-        };
+    const invoked: IrExpr = {
+      kind: "callValue",
+      callee: replace,
+      args: [needle, match, subject].slice(0, callback.params.length),
+      type: callback.ret,
+      loc,
+    };
+    const value: IrExpr =
+      invoked.type.kind === "dyn"
+        ? { kind: "libCall", fn: "dyn.toStringCoerce", args: [invoked], type: STRING, loc }
+        : invoked;
     const stop: IrStmt = { kind: "break", loc };
     const body: IrStmt[] = [
       builder.declare("chunks.0", { kind: "arrayLit", elems: [], type: chunksType, loc }),
@@ -249,121 +322,6 @@ function lowerStringReplacementValues(
     });
   }
   return { kind: "call", callee: helper, args: [receiver, search, replacement], type: STRING, loc };
-}
-
-/** GetSubstitution with no captures: $$, $&, $`, and $' expand. Numeric
- * and named capture spellings remain literal. Scan dollar signs rather
- * than individual subject characters so ordinary Unicode text is intact. */
-function replacementTemplateHelper(lowerer: Lowerer, loc: SrcLoc): string {
-  const key = "str.replacementTemplate";
-  const previous = lowerer.valueHelpers.get(key);
-  if (previous) return previous;
-  const name = `%str.template.${lowerer.valueHelpers.size}`;
-  lowerer.valueHelpers.set(key, name);
-  const subject = varRef("s.0", STRING, loc);
-  const needle = varRef("search.0", STRING, loc);
-  const template = varRef("template.0", STRING, loc);
-  const position = varRef("position.0", F64, loc);
-  const cursor = varRef("cursor.0", F64, loc);
-  const dollar = varRef("dollar.0", F64, loc);
-  const next = varRef("next.0", STRING, loc);
-  const chunksType = arrayOf(STRING);
-  const chunks = varRef("chunks.0", chunksType, loc);
-  const builder = stringBuilder(loc, chunks);
-  const expansions: [string, IrExpr][] = [
-    ["$", strLit("$", loc)],
-    ["&", needle],
-    ["`", builder.slice(subject, numLit(0, loc), position)],
-    ["'", builder.slice(subject, builder.add(position, builder.length(needle)), undefined)],
-  ];
-  let selection: IrStmt[] = [builder.append(strLit("$", loc))];
-  for (let index = expansions.length - 1; index >= 0; index--) {
-    const [token, expansion] = expansions[index]!;
-    selection = [
-      {
-        kind: "if",
-        cond: {
-          kind: "strEq",
-          negated: false,
-          left: next,
-          right: strLit(token, loc),
-          type: BOOL,
-          loc,
-        },
-        then: [
-          builder.append(expansion),
-          builder.assign("cursor.0", builder.add(cursor, numLit(1, loc))),
-        ],
-        else_: selection,
-        loc,
-      },
-    ];
-  }
-  const params = [
-    { localId: "s.0", name: "s", type: STRING },
-    { localId: "search.0", name: "search", type: STRING },
-    { localId: "template.0", name: "template", type: STRING },
-    { localId: "position.0", name: "position", type: F64 },
-  ];
-  const locals: IrLocal[] = [
-    ...params.map((param) => ({
-      id: param.localId,
-      name: param.name,
-      type: param.type,
-      mutable: false,
-    })),
-    { id: "chunks.0", name: "chunks", type: chunksType, mutable: false },
-    { id: "cursor.0", name: "cursor", type: F64, mutable: true },
-    { id: "dollar.0", name: "dollar", type: F64, mutable: false },
-    { id: "next.0", name: "next", type: STRING, mutable: false },
-  ];
-  lowerer.liftedFns.push({
-    name,
-    params,
-    returnType: STRING,
-    locals,
-    body: [
-      builder.declare("chunks.0", { kind: "arrayLit", elems: [], type: chunksType, loc }),
-      builder.declare("cursor.0", numLit(0, loc)),
-      {
-        kind: "while",
-        cond: builder.compare("<", cursor, builder.length(template)),
-        body: [
-          builder.declare("dollar.0", {
-            kind: "strIntrinsic",
-            method: "indexOf",
-            receiver: template,
-            args: [strLit("$", loc), cursor],
-            type: F64,
-            loc,
-          }),
-          {
-            kind: "if",
-            cond: builder.compare("<", dollar, numLit(0, loc)),
-            then: [{ kind: "break", loc }],
-            else_: null,
-            loc,
-          },
-          builder.append(builder.slice(template, cursor, dollar)),
-          builder.assign("cursor.0", builder.add(dollar, numLit(1, loc))),
-          builder.declare("next.0", {
-            kind: "strIntrinsic",
-            method: "charAt",
-            receiver: template,
-            args: [cursor],
-            type: STRING,
-            loc,
-          }),
-          ...selection,
-        ],
-        loc,
-      },
-      builder.append(builder.slice(template, cursor, undefined)),
-      { kind: "return", value: builder.join(), loc },
-    ],
-    loc,
-  });
-  return name;
 }
 
 function stringBuilder(loc: SrcLoc, chunks: IrExpr) {

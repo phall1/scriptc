@@ -518,16 +518,23 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
         evidence: [fixture("static")],
       }),
     ),
-    ...["json", "text", "bytes", "arrayBuffer"].map((member): FetchCompatOperation => ({
+    ...["json", "text", "bytes", "arrayBuffer", "formData"].map((member): FetchCompatOperation => ({
       id: `stdlib.response.${member}`,
       name: `Response.${member}`,
       kind: "method",
       facets: ["body-consumption", "promise-settlement", "state-machine", "error-shape"],
       evidence:
-        member === "arrayBuffer"
+        member === "arrayBuffer" || member === "formData"
           ? [fixture("static")]
           : [fixture("static"), fixture("static-stream")],
     })),
+    {
+      id: "stdlib.response.clone",
+      name: "Response.clone",
+      kind: "method",
+      facets: ["body-consumption", "state-machine", "error-shape"],
+      evidence: [fixture("static")],
+    },
   ],
   inventory: {
     interfaces: [
@@ -695,14 +702,15 @@ export const NODE24_FETCH_COMPAT_PROFILE = {
         (member) => staticEntry(`stdlib.response.${member}`, "Response", member, "prototype"),
       ),
       staticEntry("stdlib.response.arrayBuffer", "Response", "arrayBuffer", "prototype"),
-      ...["clone", "blob", "formData"].map((member) =>
-        unsupportedEntry(
-          `stdlib.response.${member}`,
-          "Response",
-          member,
-          "prototype",
-          "the native fetch runtime does not implement this Response operation",
-        ),
+      ...["clone", "formData"].map((member) =>
+        staticEntry(`stdlib.response.${member}`, "Response", member, "prototype"),
+      ),
+      unsupportedEntry(
+        "stdlib.response.blob",
+        "Response",
+        "blob",
+        "prototype",
+        "the native fetch runtime does not implement this Response operation",
       ),
       ...["text", "json"].map((member) =>
         staticEntry(`stdlib.response.${member}`, "Response", member, "prototype"),

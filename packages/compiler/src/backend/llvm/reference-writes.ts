@@ -100,6 +100,9 @@ const INERT_LIB_CALLS = new Set([
   "process.stdoutWrite",
   "process.envGet",
   "process.envPairs",
+  "regex.groupEquals",
+  "regex.groupNumber",
+  "regex.groupParseInt",
   "process.cwd",
   "process.argv",
   "process.platform",
@@ -428,14 +431,17 @@ export class ReferenceWrites {
       }
       case "arrIntrinsic":
         if (!PRESERVING_ARRAY_METHODS.has(e.method)) {
-          // The comparator sort orders a private snapshot.
+          // The comparator sort orders a private snapshot. It may call the
+          // comparator and a key reader.
           if (e.method === "sortValues" || e.method === "sortDense") {
             const comparator = e.args[e.method === "sortValues" ? 1 : 0];
-            const targets =
-              fn !== null && comparator !== undefined ? this.callTargets.of(comparator, fn) : null;
-            if (targets === null) {
-              if (!sink.call(ANY_FUNCTION, false)) sink.all();
-            } else for (const t of targets) if (!sink.call(t, false)) sink.all();
+            for (const callee of e.args[3] ? [comparator, e.args[3]] : [comparator]) {
+              const targets =
+                fn !== null && callee !== undefined ? this.callTargets.of(callee, fn) : null;
+              if (targets === null) {
+                if (!sink.call(ANY_FUNCTION, false)) sink.all();
+              } else for (const t of targets) if (!sink.call(t, false)) sink.all();
+            }
           }
           sink.add(ARRAY_KEY);
         }
@@ -727,6 +733,14 @@ export class ReferenceWrites {
     const targets = this.virtualTargets.targets(className, method);
     if (targets === null) return this.heapAll;
     return this.union(targets.map((t) => this.summary(t)));
+  }
+
+  /** Writes of the node's own operation, without its operands: for a
+   * call, what its possible targets may write. */
+  ownWrites(e: IrExpr): Writes {
+    const parts: Writes[] = [];
+    this.nodeWrites(e, this.querySink(parts), this.currentBoxed, this.current, new Set());
+    return this.union(parts);
   }
 
   /** Writes of evaluating an expression, with its operands. */

@@ -1230,7 +1230,7 @@ static ScrStreamState *scr_stream_state_new(bool has_r, bool has_w,
 static ScrStream *scr_stream_alloc(const ScrVt *vt, const char *cls, bool has_r, bool has_w,
                                     double rhwm, double whwm, bool auto_destroy,
                                     bool emit_close, bool allow_half_open) {
-  static const ScrCycType cyc_type = { &scr_stream_trace, &scr_stream_gcfree, SCR_CYC_KIND_STREAM };
+  static ScrCycType cyc_type = { &scr_stream_trace, &scr_stream_gcfree, SCR_CYC_KIND_STREAM };
   ScrStream *s = scr_cyc_alloc(sizeof *s, &cyc_type);
   s->rc = 1;
   s->vt = vt;
@@ -2227,7 +2227,7 @@ ScrPromise *scr_sp_pipeline(double n, ScrStream **streams) {
 }
 
 /* ── node:stream/consumers ────────────────────────────────────────────
- * text/json/buffer over the readable machinery: a native 'data' listener
+ * text/json/buffer/arrayBuffer over the readable machinery: a native 'data' listener
  * accumulates every chunk (Buffer chunks as-is; string chunks — an
  * encoded stream or Readable.from strings — as their utf8 bytes, the
  * Blob rule Node's consumers share for whole-stream accumulation), and
@@ -2239,7 +2239,7 @@ ScrPromise *scr_sp_pipeline(double n, ScrStream **streams) {
  * closures share the cap layout: caps[0] the pending promise, caps[1]
  * the chunk list (Buffer entries). */
 
-enum { SCR_SC_TEXT = 0, SCR_SC_JSON = 1, SCR_SC_BUFFER = 2 };
+enum { SCR_SC_TEXT = 0, SCR_SC_JSON = 1, SCR_SC_BUFFER = 2, SCR_SC_ARRAY_BUFFER = 3 };
 
 static void scr_sc_settle_ok(ScrClosure *cb, int kind) {
   ScrPromise *p = scr_box_get_ref(cb->caps[0]);  /* +1 */
@@ -2248,6 +2248,15 @@ static void scr_sc_settle_ok(ScrClosure *cb, int kind) {
   scr_arr_release(chunks);
   if (kind == SCR_SC_BUFFER) {
     scr_promise_fulfill_ref(p, all, scr_bytes_retain_v, scr_bytes_release_v, NULL);
+    scr_promise_release(p);
+    return;
+  }
+  if (kind == SCR_SC_ARRAY_BUFFER) {
+    /* The concatenation is a fresh exact-length owner, so the buffer
+     * wraps it with no second copy (Node copies into a Blob, then out). */
+    ScrDyn *ab = scr_array_buffer_from_bytes(all);
+    scr_bytes_release(all);
+    scr_promise_fulfill_ref(p, ab, scr_dyn_retain_v, scr_dyn_release_v, NULL);
     scr_promise_release(p);
     return;
   }
@@ -2309,6 +2318,10 @@ static void scr_sc_fin_buffer(ScrClosure *cb, ScrStream *s, ScrError *err) {
   (void)s;
   scr_sc_fin(cb, err, SCR_SC_BUFFER);
 }
+static void scr_sc_fin_array_buffer(ScrClosure *cb, ScrStream *s, ScrError *err) {
+  (void)s;
+  scr_sc_fin(cb, err, SCR_SC_ARRAY_BUFFER);
+}
 
 static ScrClosure *scr_sc_closure(void *fn, ScrPromise *p, ScrArr *chunks) {
   ScrClosure *c = scr_closure_new(fn, 2);
@@ -2333,7 +2346,8 @@ static ScrPromise *scr_sc_consume(ScrStream *s, int kind) {
   ScrArr *chunks = scr_arr_new_ops(&bytes_ops, 4);
   ScrStreamErrInv fin_inv = kind == SCR_SC_TEXT    ? &scr_sc_fin_text
                             : kind == SCR_SC_JSON  ? &scr_sc_fin_json
-                                                   : &scr_sc_fin_buffer;
+                            : kind == SCR_SC_BUFFER ? &scr_sc_fin_buffer
+                                                    : &scr_sc_fin_array_buffer;
   /* The terminal watcher first (it marks lifecycle errors handled); the
    * promise form exposes no unhook — the cleanup closure drops. */
   ScrClosure *cleanup = scr_stream_finished(s, scr_sc_closure((void *)fin_inv, p, chunks), fin_inv);
@@ -2353,6 +2367,92 @@ static ScrPromise *scr_sc_consume(ScrStream *s, int kind) {
 ScrPromise *scr_sc_text(ScrStream *s) { return scr_sc_consume(s, SCR_SC_TEXT); }
 ScrPromise *scr_sc_json(ScrStream *s) { return scr_sc_consume(s, SCR_SC_JSON); }
 ScrPromise *scr_sc_buffer(ScrStream *s) { return scr_sc_consume(s, SCR_SC_BUFFER); }
+ScrPromise *scr_sc_array_buffer(ScrStream *s) { return scr_sc_consume(s, SCR_SC_ARRAY_BUFFER); }
+
+/* ── node:console Console instances over writable streams ─────────────
+ * Node's kWriteToConsole: with ignoreErrors (the default) one shared noop
+ * 'error' listener brackets the write when the stream has none, and the
+ * write's completion handler re-arms it for the write's own error before
+ * that error is emitted (the handler's tick precedes the emit), so a
+ * failing console stream never crashes the program; synchronous throws
+ * out of the write are discarded. Without ignoreErrors it is a plain
+ * write. */
+
+static SCR_TL ScrClosure *scr_console_noop;
+
+static void scr_console_noop_fn(ScrClosure *cb) { (void)cb; }
+
+static void scr_console_noop_cleanup(void) {
+  scr_closure_release(scr_console_noop);
+  scr_console_noop = NULL;
+}
+
+static ScrClosure *scr_console_noop_get(void) {
+  if (!scr_console_noop) {
+    scr_console_noop = scr_closure_new((void *)&scr_console_noop_fn, 0);
+    scr_atexit(scr_console_noop_cleanup);
+  }
+  return scr_console_noop;
+}
+
+/* createWriteErrorHandler: the write failed and its error is still to be
+ * emitted with no listener to receive it — park the noop for it. */
+static void scr_console_on_written(ScrClosure *cb) {
+  ScrStream *s = scr_box_get_ref(cb->caps[0]); /* +1 */
+  ScrStreamState *st = s->st;
+  if (st->errored != NULL && !st->error_emitted) {
+    ScrStr *name = scr_str_new("error", 5);
+    if (scr_emitter_listener_count((ScrEmitter *)s, name) == 0) {
+      scr_emitter_release(scr_emitter_on((ScrEmitter *)s, name,
+                                         scr_closure_retain(scr_console_noop_get()),
+                                         scr_ee_inv_fixed0, true, false));
+    }
+    scr_str_release(name);
+  }
+  scr_stream_release(s);
+}
+
+static void scr_console_stream_write(ScrConsoleInst *inst, int which, ScrStr *line) {
+  ScrStream *s = inst->stream[which];
+  if (!inst->ignore_errors) {
+    scr_stream_write_str(s, line, NULL);
+    return;
+  }
+  ScrStr *name = scr_str_new("error", 5);
+  ScrClosure *noop = scr_console_noop_get();
+  if (scr_emitter_listener_count((ScrEmitter *)s, name) == 0) {
+    scr_emitter_release(scr_emitter_on((ScrEmitter *)s, name, scr_closure_retain(noop),
+                                       scr_ee_inv_fixed0, true, false));
+  }
+  if (!scr_exc_pending()) scr_stream_write_str(s, line, scr_closure_retain(inst->on_written[which]));
+  if (scr_exc_pending()) scr_exc_clear();
+  scr_emitter_release(scr_emitter_off((ScrEmitter *)s, name, noop));
+  if (scr_exc_pending()) scr_exc_clear();
+  scr_str_release(name);
+}
+
+static void scr_console_stream_drop(ScrConsoleInst *inst) {
+  for (int i = 0; i < 2; i++) {
+    if (inst->stream[i]) scr_stream_release(inst->stream[i]);
+    if (inst->on_written[i]) scr_closure_release(inst->on_written[i]);
+    inst->stream[i] = NULL;
+    inst->on_written[i] = NULL;
+  }
+}
+
+void scr_console_bind(ScrDyn *console, double which, ScrStream *stream) {
+  ScrConsoleInst *inst = console->v.handle.ptr;
+  int i = which != 0 ? 1 : 0;
+  if (inst->stream[i]) scr_stream_release(inst->stream[i]);
+  if (inst->on_written[i]) scr_closure_release(inst->on_written[i]);
+  inst->stream[i] = scr_stream_retain(stream);
+  ScrClosure *cb = scr_closure_new((void *)&scr_console_on_written, 1);
+  cb->caps[0] = scr_box_new_obj(scr_stream_retain_v, scr_stream_release_v, NULL);
+  scr_box_set_ref(cb->caps[0], scr_stream_retain(stream));
+  inst->on_written[i] = cb;
+  inst->stream_write = &scr_console_stream_write;
+  inst->stream_drop = &scr_console_stream_drop;
+}
 
 /* ── the readable surface ─────────────────────────────────────────────── */
 
@@ -2369,6 +2469,7 @@ bool scr_stream_push_str(ScrStream *s, ScrStr *str) {
   } else {
     b = scr_bytes_new(SCR_BYTES_U8, (double)str->len);
     memcpy(b->data, str->data, str->len);
+    if (!str->ascii) scr_wtf8_to_utf8((char *)b->data, str->len);
   }
   bool ret = scr_stream_add_chunk(s, b, false);
   scr_bytes_release(b);
@@ -2443,6 +2544,7 @@ void scr_stream_unshift(ScrStream *s, ScrBytes *chunk) {
 void scr_stream_unshift_str(ScrStream *s, ScrStr *str) {
   ScrBytes *b = scr_bytes_new(SCR_BYTES_U8, (double)str->len);
   memcpy(b->data, str->data, str->len);
+  if (!str->ascii) scr_wtf8_to_utf8((char *)b->data, str->len);
   scr_stream_unshift(s, b);
   scr_bytes_release(b);
 }
@@ -2678,6 +2780,7 @@ bool scr_stream_write_null(ScrStream *s) {
 bool scr_stream_write_str(ScrStream *s, ScrStr *str, ScrClosure *cb) {
   ScrBytes *b = scr_bytes_new(SCR_BYTES_U8, (double)str->len);
   memcpy(b->data, str->data, str->len);
+  if (!str->ascii) scr_wtf8_to_utf8((char *)b->data, str->len);
   bool ret = scr_stream_write_chunk(s, b, cb);
   scr_bytes_release(b);
   return ret;
@@ -2804,6 +2907,7 @@ void scr_stream_transform_done(ScrStream *s, ScrError *err /*moves*/, ScrBytes *
     } else if (data_str) {
       ScrBytes *b = scr_bytes_new(SCR_BYTES_U8, (double)data_str->len);
       memcpy(b->data, data_str->data, data_str->len);
+      if (!data_str->ascii) scr_wtf8_to_utf8((char *)b->data, data_str->len);
       scr_stream_add_chunk(s, b, false);
       scr_bytes_release(b);
     }
@@ -2833,6 +2937,7 @@ void scr_stream_flush_done(ScrStream *s, ScrError *err /*moves*/, ScrBytes *data
   } else if (data_str) {
     ScrBytes *b = scr_bytes_new(SCR_BYTES_U8, (double)data_str->len);
     memcpy(b->data, data_str->data, data_str->len);
+    if (!data_str->ascii) scr_wtf8_to_utf8((char *)b->data, data_str->len);
     scr_stream_add_chunk(s, b, false);
     scr_bytes_release(b);
     scr_str_release(data_str);

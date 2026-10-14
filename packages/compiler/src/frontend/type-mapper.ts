@@ -127,10 +127,16 @@ export const FETCH_AMBIENT_TYPES = [
   "ResponseInit",
   "RequestInit",
   "Event",
+  "CustomEvent",
   "EventTarget",
+  "AddEventListenerOptions",
+  "EventListenerOptions",
+  "EventInit",
+  "CustomEventInit",
   "AbortController",
   "AbortSignal",
   "Headers",
+  "FormData",
   "ReadableStream",
   "ReadableStreamDefaultReader",
   "ReadableStreamDefaultController",
@@ -139,9 +145,13 @@ export const FETCH_AMBIENT_TYPES = [
   "ReadableStreamReadDoneResult",
 ] as const;
 
-/** node:util.parseArgs's public and @types/node helper type names. Values
+/** node:util.parseArgs's public and @types/node helper type names, plus
+ * util.debuglog's DebugLogger (a native function value with an `enabled`
+ * accessor) and the DebugLoggerFunction its callback receives. Values
  * behind this surface use the checked-dynamic tree; see mapTypeInner. */
 const PARSE_ARGS_DYN_TYPES = new Set([
+  "DebugLogger",
+  "DebugLoggerFunction",
   "ParseArgsConfig",
   "ParseArgsOptionDescriptor",
   "ParseArgsOptionsConfig",
@@ -972,6 +982,9 @@ export interface TypeMapperCtx {
   isProgramFile: (sf: ts.SourceFile) => boolean;
 
   moduleNamespaceId?: (type: ts.Type) => string | null;
+  /** The LifetimeRegion instance type (@scriptc/experimental), when `decl`
+   * is that package's class declaration (lowering/lifetime-regions.ts). */
+  lifetimeRegionClass?: (decl: ts.ClassDeclaration) => IrType | null;
 }
 /** A generator type's normalized value channels (Generator<T, TReturn,
  * TNext> and the IteratorResult alias share this):
@@ -1017,9 +1030,11 @@ function genChannels(
         ? DYN
         : mapType(nextTs, ctx);
   if (!nextT || nextT.kind === "void" || nextT.kind === "nullT") return null;
+  const ownChannel = (t: IrType): boolean =>
+    t.kind === "f64" || t.kind === "bool" || t.kind === "string";
   const dynMix =
-    (yieldT.kind === "dyn" && retT.kind !== "dyn" && retT.kind !== "void") ||
-    (retT.kind === "dyn" && yieldT.kind !== "dyn" && yieldT.kind !== "void");
+    (yieldT.kind === "dyn" && retT.kind !== "dyn" && retT.kind !== "void" && !ownChannel(retT)) ||
+    (retT.kind === "dyn" && yieldT.kind !== "dyn" && yieldT.kind !== "void" && !ownChannel(yieldT));
   if (dynMix) return { yieldT: DYN, retT: DYN, nextT };
   return { yieldT, retT, nextT };
 }
@@ -1044,6 +1059,49 @@ let mapTypeDepth = 0;
  * a bump between entry and exit stays fenced (recursive generic-open types
  * stay fenced instead of interning a per-context-wrong shape). */
 let contextResolutions = 0;
+
+/** os.constants and its groups — @types/node's `namespace constants`
+ * (errno, dlopen, priority) and SignalConstants, and the fallback's twins:
+ * the runtime's checked-dynamic constants object, whose members vary by
+ * platform. */
+export function isOsConstantsType(
+  type: ts.Type,
+  ctx: Pick<TypeMapperCtx, "checker" | "isStdlibFile">,
+): boolean {
+  return (
+    isOsConstantsSymbol(type.getAliasSymbol(), ctx, true) ||
+    isOsConstantsSymbol(type.getSymbol(), ctx, true)
+  );
+}
+
+/** A symbol declared as os.constants or one of its groups (a namespace, or
+ * with `types`, the SignalConstants alias; without it, the `signals`
+ * constant). The binding-symbol form needs no type query. */
+export function isOsConstantsSymbol(
+  symbol: ts.Symbol | null | undefined,
+  ctx: Pick<TypeMapperCtx, "checker" | "isStdlibFile">,
+  types = false,
+): boolean {
+  if (!symbol) return false;
+  for (const d of ctx.checker.declarationsOf(symbol)) {
+    const alias = types && ts.isTypeAliasDeclaration(d) && d.name.text === "SignalConstants";
+    const signals =
+      !types && ts.isVariableDeclaration(d) && ts.isIdentifier(d.name) && d.name.text === "signals";
+    if (!(alias || signals || ts.isModuleDeclaration(d)) || !ctx.isStdlibFile(d.getSourceFile()))
+      continue;
+    let inConstants = ts.isModuleDeclaration(d) && d.name.text === "constants";
+    for (let n: ts.Node | undefined = d.parent; n; n = n.parent) {
+      if (!ts.isModuleDeclaration(n)) continue;
+      if (ts.isStringLiteral(n.name)) {
+        if ((n.name.text === "os" || n.name.text === "node:os") && (alias || inConstants))
+          return true;
+        break;
+      }
+      if (n.name.text === "constants") inConstants = true;
+    }
+  }
+  return false;
+}
 
 /** worker_threads' Worker and MessagePort: owned runtime handles that keep
  * their live object representation (DYN) wherever they are stored. */
@@ -1083,6 +1141,51 @@ export function isWorkerHandleType(
     handle = true;
   }
   return handle;
+}
+
+const NATIVE_CONSTRUCTOR_NAMES = new Set(["URL", "URLSearchParams", "RegExp", "RegExpConstructor"]);
+
+/** `readonly T[]` is `ReadonlyArray<T>` in the standard library. It is the
+ * same runtime array as `T[]`; the readonly modifier erases. A program
+ * interface that happens to be named ReadonlyArray is not this type. */
+function stdlibReadonlyArrayReference(
+  widened: ts.Type,
+  ctx: Pick<TypeMapperCtx, "checker" | "isStdlibFile">,
+): ts.TypeReference | null {
+  const symbol = widened.getSymbol();
+  if (symbol?.name !== "ReadonlyArray") return null;
+  const declaredInLib = ctx.checker.declarationsOf(symbol).some((decl) => {
+    return ts.isInterfaceDeclaration(decl) && ctx.isStdlibFile(decl.getSourceFile());
+  });
+  if (!declaredInLib) return null;
+  return widened as ts.TypeReference;
+}
+
+function nativeConstructorDeclaration(
+  declaration: ts.Node,
+  symbol: ts.Symbol,
+  ctx: TypeMapperCtx,
+): boolean {
+  if (!ctx.isStdlibFile(declaration.getSourceFile())) return false;
+  let node: ts.Node | undefined = declaration;
+  while (node) {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      NATIVE_CONSTRUCTOR_NAMES.has(node.name.text)
+    )
+      return true;
+    node = node.parent;
+  }
+  return NATIVE_CONSTRUCTOR_NAMES.has(symbol.name);
+}
+
+function nativeConstructorType(type: ts.Type, ctx: TypeMapperCtx): boolean {
+  const symbol = type.getSymbol();
+  if (!symbol || ctx.checker.getConstructSignatures(type).length === 0) return false;
+  return ctx.checker
+    .declarationsOf(symbol)
+    .some((declaration) => nativeConstructorDeclaration(declaration, symbol, ctx));
 }
 
 export function mapType(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
@@ -1159,6 +1262,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   ) {
     return { kind: "object", className: "%Error" };
   }
+  if (isOsConstantsType(type, ctx)) return DYN;
   // Immutable<T> (@scriptc/types) is a deep-readonly view: the value is
   // still the T it maps.
   const immutableSource = immutableSourceType(type, ctx);
@@ -1398,6 +1502,18 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
       return hasStr ? STRING : F64;
     }
   }
+  // @scriptc/experimental's LifetimeRegion: a synthetic program class,
+  // provenance-checked by the package's declaration file.
+  {
+    const regionSym = widened.getSymbol();
+    if (regionSym?.name === "LifetimeRegion") {
+      for (const d of checker.declarationsOf(regionSym)) {
+        if (!ts.isClassDeclaration(d)) continue;
+        const region = ctx.lifetimeRegionClass?.(d);
+        if (region) return region;
+      }
+    }
+  }
   // Declaration-only package types have no compiled implementation.
   // Primitive and container types retain their structural mappings; types
   // owned by the standard library or explicit host mappings are handled
@@ -1434,8 +1550,11 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // Date (scalar-backed but identity-bearing in JS) and the other opaque
   // handles stay unsupported as array elements; ordinary Date locals,
   // params, fixed record/tuple fields, and promise payloads are supported.
-  if (checker.isArrayType(widened)) {
-    const elemTs = checker.getTypeArguments(widened as ts.TypeReference)[0];
+  // `readonly T[]` is the same array; the modifier erases.
+  const readonlyArray = stdlibReadonlyArrayReference(widened, ctx);
+  if (checker.isArrayType(widened) || readonlyArray) {
+    const arrayType = (readonlyArray ?? widened) as ts.TypeReference;
+    const elemTs = checker.getTypeArguments(arrayType)[0];
     if (!elemTs) return null;
     let elem = mapType(elemTs, ctx);
     // `undefined[]` (sparse literals — `[,]` — and explicit annotations):
@@ -1712,6 +1831,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // outside stays unmapped — callers report the component fence (SC2009)
   // naming the offending half, as does the `new Map` lowering per site.
   const psym = widened.getSymbol();
+  if (nativeConstructorType(widened, ctx)) return DYN;
   const isStdlibInterface = (name: string): boolean =>
     psym?.name === name &&
     checker
@@ -1868,6 +1988,22 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
         { name: "written", type: F64 },
       ]),
     };
+  // WeakRef and FinalizationRegistry instances are checked-dynamic
+  // objects. deref returns the target while it is still live, and the
+  // registry retains its callback without running it: collection timing
+  // is not a result these probes observe.
+  if (
+    (psym?.name === "WeakRef" || psym?.name === "FinalizationRegistry") &&
+    checker
+      .declarationsOf(psym)
+      .some(
+        (d) =>
+          (ts.isInterfaceDeclaration(d) || ts.isClassDeclaration(d)) &&
+          ctx.isStdlibFile(d.getSourceFile()),
+      )
+  ) {
+    return DYN;
+  }
   // WHATWG codec instances have ordinary reference identity and ownership.
   // Their private encoding slot is omitted from enumeration and JSON.
   if (
@@ -2044,6 +2180,19 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   ) {
     return DYN;
   }
+  // The stdlib Console interface (the global console and node:console
+  // Console instances) is a native handle carried by the checked-dynamic
+  // representation and consumed by the console method lowerings. The
+  // stdlib Disposable (events.addAbortListener's result) is a checked
+  // object carrying its Symbol.dispose method.
+  if (
+    (psym?.name === "Console" || psym?.name === "Disposable") &&
+    checker
+      .declarationsOf(psym)
+      .some((d) => ts.isInterfaceDeclaration(d) && ctx.isStdlibFile(d.getSourceFile()))
+  ) {
+    return DYN;
+  }
   // ReadonlyMap/ReadonlySet are the SAME runtime values as Map/Set — the
   // readonly-ness is a checker-only view (no mutating members on the
   // interface), so both map to the identical IR kinds and the read-side
@@ -2183,6 +2332,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // record/class like any other.
   if (
     psym?.name === "URL" &&
+    checker.getConstructSignatures(widened).length === 0 &&
     checker
       .declarationsOf(psym)
       .some(
@@ -2198,6 +2348,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // URLSearchParams` in the "url" module). Provenance-checked like URL.
   if (
     psym?.name === "URLSearchParams" &&
+    checker.getConstructSignatures(widened).length === 0 &&
     checker
       .declarationsOf(psym)
       .some(
@@ -2712,7 +2863,10 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   //                    else the mapped type (`.next(v)` requires its
   //                    argument — fenced at the call).
   // Mixed dyn/concrete value channels share checked storage, so either
-  // branch of the result record has the same representation.
+  // branch of the result record has the same representation. A number,
+  // boolean or string channel keeps its own type beside a dyn one (the
+  // `Generator<number>` defaults): its values ride OUT typed and box only
+  // when the result record is built.
   if (
     isStdlibInterface("Generator") ||
     isStdlibInterface("AsyncGenerator") ||
@@ -2752,13 +2906,11 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     }
   }
   // PromiseSettledResult<T>'s parts: the lib's PromiseFulfilledResult<T> /
-  // PromiseRejectedResult interfaces map to the documented HONEST SUBSET
-  // record { status: string }. The manual-allSettled pattern this
-  // mapping exists for (pMap) discards them. Construction literals still
-  // EVALUATE a dropped initializer for its effects — the awaited mapper —
-  // via the object-literal lowering's drop path. Both interfaces intern
-  // the SAME shape, so the settled union collapses to one record arm and
-  // status keeps its string reads/comparisons. SEMANTICS.md 46.
+  // PromiseRejectedResult interfaces map to the records { status, value }
+  // and { status, reason } (the reason is `any`, a dyn slot), interned
+  // explicitly. The settled union is a two-record union discriminated by
+  // the `status` literals, so `r.status === "fulfilled"` narrows to the
+  // arm that reads `value`.
   // net/dgram AddressInfo and dgram RemoteInfo: stdlib interfaces over
   // data properties, interned EXPLICITLY (the record path's provenance
   // fence keeps .d.ts shapes out of the structural walk — the
@@ -2960,6 +3112,66 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // string arm. Key order is Node's runtime insertion order (node_os.cc
   // builds uid, gid, username, homedir, shell), so Object.keys over the
   // record answers exactly Node.
+  // os.CpuInfo (os.cpus()'s element), path.ParsedPath (path.parse()'s
+  // result) and path.FormatInputPathObject (path.format()'s argument):
+  // stdlib data interfaces interned explicitly, the AddressInfo pattern.
+  // Key order is Node's own (lib/os.js builds { model, speed, times:
+  // { user, nice, sys, idle, irq } }; path.parse builds { root, dir, base,
+  // ext, name }).
+  const cpuTimes = (): IrType => ({
+    kind: "record",
+    shapeId: ctx.shapes.intern(
+      ["idle", "irq", "nice", "sys", "user"].map((name) => ({ name, type: F64 })),
+      false,
+      undefined,
+      ["user", "nice", "sys", "idle", "irq"],
+    ),
+  });
+  if (
+    psym &&
+    checker
+      .declarationsOf(psym)
+      .some(
+        (d) =>
+          ts.isTypeLiteralNode(d) &&
+          ts.isPropertySignature(d.parent) &&
+          ts.isIdentifier(d.parent.name) &&
+          d.parent.name.text === "times" &&
+          ts.isInterfaceDeclaration(d.parent.parent) &&
+          d.parent.parent.name.text === "CpuInfo" &&
+          ctx.isStdlibFile(d.getSourceFile()),
+      )
+  )
+    return cpuTimes();
+  if (isStdlibInterface("CpuInfo")) {
+    const times = cpuTimes();
+    return {
+      kind: "record",
+      shapeId: ctx.shapes.intern(
+        [
+          { name: "model", type: STRING },
+          { name: "speed", type: F64 },
+          { name: "times", type: times },
+        ],
+        false,
+        undefined,
+        ["model", "speed", "times"],
+      ),
+    };
+  }
+  if (isStdlibInterface("ParsedPath") || isStdlibInterface("FormatInputPathObject")) {
+    const field = psym!.name === "ParsedPath" ? STRING : withUndefinedArm(STRING, ctx.unions);
+    if (!field) return null;
+    return {
+      kind: "record",
+      shapeId: ctx.shapes.intern(
+        ["base", "dir", "ext", "name", "root"].map((name) => ({ name, type: field })),
+        false,
+        undefined,
+        ["root", "dir", "base", "ext", "name"],
+      ),
+    };
+  }
   if (isStdlibInterface("UserInfo")) {
     const args = checker.getTypeArguments(widened as ts.TypeReference);
     if (args.length > 1) return null;
@@ -3119,10 +3331,43 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
       ]),
     };
   }
-  if (isStdlibInterface("PromiseFulfilledResult") || isStdlibInterface("PromiseRejectedResult")) {
+  if (isStdlibInterface("PromiseFulfilledResult")) {
+    const arg = checker.getTypeArguments(widened as ts.TypeReference)[0];
+    if (!arg) return null;
+    // A valueless fulfillment (Promise<void>) still has its `value`
+    // property, always undefined: a dyn slot holds it, as it holds any.
+    const mapped =
+      arg.flags &
+      (ts.TypeFlags.Void | ts.TypeFlags.Undefined | ts.TypeFlags.Never | ts.TypeFlags.Any)
+        ? DYN
+        : mapType(arg, ctx);
+    if (!mapped) return null;
+    const valueT = mapped.kind === "void" || isUnitType(mapped) ? DYN : mapped;
     return {
       kind: "record",
-      shapeId: ctx.shapes.intern([{ name: "status", type: STRING }], false, undefined, ["status"]),
+      shapeId: ctx.shapes.intern(
+        [
+          { name: "status", type: STRING },
+          { name: "value", type: valueT },
+        ],
+        false,
+        undefined,
+        ["status", "value"],
+      ),
+    };
+  }
+  if (isStdlibInterface("PromiseRejectedResult")) {
+    return {
+      kind: "record",
+      shapeId: ctx.shapes.intern(
+        [
+          { name: "reason", type: DYN },
+          { name: "status", type: STRING },
+        ],
+        false,
+        undefined,
+        ["status", "reason"],
+      ),
     };
   }
   // Function types: exactly one call signature, no generics, and every
@@ -3188,6 +3433,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     }
     const params: IrType[] = [];
     let typedRest = false;
+    let dynRest = false;
     for (const p of sig.getParameters()) {
       const decl = checker.valueDeclarationOf(p);
       const rest = decl !== undefined && ts.isParameter(decl) && decl.dotDotDotToken !== undefined;
@@ -3252,6 +3498,13 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
       }
       if (!pt) return null;
       if (rest) {
+        // `...args: readonly unknown[]` collapses with its element to dyn.
+        // That is the variadic dyn pack (a hidden ScrDyn array), not a
+        // typed trailing slot and not a missing array type.
+        if (pt.kind === "dyn") {
+          dynRest = true;
+          continue;
+        }
         if (pt.kind !== "array") return null;
         typedRest = true;
       }
@@ -3308,6 +3561,7 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     )
       ret = withUndefinedArm(ret, ctx.unions) ?? ret;
     if (!ret) return null;
+    if (dynRest) return { kind: "func", params, ret, rest: true };
     return typedRest
       ? { kind: "func", params, ret, rest: true, restAbi: "typed" }
       : funcOf(params, ret);
@@ -3459,7 +3713,16 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
       const byKey = new Map<string, IrType>();
       const recordParts: { source: ts.Type; mapped: IrType & { kind: "record" } }[] = [];
       const substitutedUnions: IrUnionDef[] = [];
-      for (const part of ts.constituentTypes(widened)) {
+      // The lib's `T extends readonly unknown[] | []` idiom (Promise.all,
+      // allSettled) maps an array input to `X[] | []`: the empty tuple is
+      // one of the array's own values.
+      const parts = ts.constituentTypes(widened);
+      const emptyTuple = (part: ts.Type): boolean =>
+        checker.isTupleType(part) &&
+        checker.getTypeArguments(part as ts.TypeReference).length === 0;
+      const hasArrayPart = parts.some((part) => checker.isArrayType(part));
+      for (const part of parts) {
+        if (hasArrayPart && emptyTuple(part)) continue;
         // TypeScript's client can retain impossible intersections in a
         // distributed union. They have no inhabitants and no runtime tag.
         if (checker.isNeverType(part)) continue;
@@ -5124,9 +5387,11 @@ export function describeComponentBlocker(widened: ts.Type, ctx: TypeMapperCtx): 
   }
 
   // Arrays: the element is the failure by construction (a mappable element
-  // makes the array map).
-  if (checker.isArrayType(widened)) {
-    const elemTs = checker.getTypeArguments(widened as ts.TypeReference)[0];
+  // makes the array map). Readonly arrays use that same element rule.
+  const readonlyArray = stdlibReadonlyArrayReference(widened, ctx);
+  if (checker.isArrayType(widened) || readonlyArray) {
+    const arrayType = (readonlyArray ?? widened) as ts.TypeReference;
+    const elemTs = checker.getTypeArguments(arrayType)[0];
     if (elemTs === undefined) return null;
     const elem = mapType(elemTs, ctx);
     if (!elem) {

@@ -1,4 +1,12 @@
-import { dynUndefinedExpr, nodeThrowExpr } from "../../ir/build.js";
+import {
+  boolLit,
+  dynUndefinedExpr,
+  nodeThrowExpr,
+  numLit,
+  strLit,
+  varRef,
+} from "../../ir/build.js";
+import { checkedIterableSpread } from "./checked-iterable-spread.js";
 import { InternalCompilerError } from "../../errors.js";
 
 import * as ts from "../ts7/adapter.js";
@@ -11,8 +19,11 @@ import {
   DYN,
   F64,
   type IrExpr,
+  type IrFunction,
+  type IrLocal,
   type IrStmt,
   type IrType,
+  type SrcLoc,
   STRING,
   VOID,
   canConvertToDyn,
@@ -29,8 +40,16 @@ import {
   unsupportedNativeApiDiag,
   unsupportedPackageValueDiag,
 } from "../../diagnostics/diagnostic.js";
-import { esmNamedImportLinkCrash, isCjsJsFile, locOf, npmPackageNameOf } from "../program.js";
+import {
+  esmNamedImportLinkCrash,
+  isCjsJsFile,
+  isJsSourceFile,
+  locOf,
+  npmPackageNameOf,
+} from "../program.js";
+import { npmStaticPackageOfPath } from "../npm-static.js";
 import { foldedStringKeyOf, lowerDynObjectLiteral } from "./expressions/object-literals.js";
+import { lowerStaticallyUndefinedArgument } from "./optional-arguments.js";
 import { PoisonError, newFnCtx, own } from "./lowerer.js";
 import {
   NODE24_FETCH_COMPAT_PROFILE,
@@ -657,7 +676,12 @@ export function lowerStaticResponseCall(lowerer: Lowerer, call: ts.CallExpressio
   const member = staticResponseMemberName(lowerer, access);
   if (
     access.questionDotToken ||
-    (member !== "json" && member !== "text" && member !== "bytes" && member !== "arrayBuffer") ||
+    (member !== "json" &&
+      member !== "text" &&
+      member !== "bytes" &&
+      member !== "arrayBuffer" &&
+      member !== "clone" &&
+      member !== "formData") ||
     call.arguments.length !== 0
   ) {
     return null;
@@ -667,8 +691,26 @@ export function lowerStaticResponseCall(lowerer: Lowerer, call: ts.CallExpressio
   if (!sym || sym.name !== "Response" || !lowerer.isStdlibSymbol(sym)) return null;
   const recv = lowerer.lowerExpr(access.expression);
   if (recv.type.kind !== "dyn") return null;
-  return lowerStaticFixedFetchMethodCall(lowerer, call, access, member, recv, [], (receiver) =>
-    member === "text" || member === "bytes"
+  return lowerStaticFixedFetchMethodCall(lowerer, call, access, member, recv, [], (receiver) => {
+    if (member === "clone") {
+      return {
+        kind: "libCall",
+        fn: "fetch.responseClone",
+        args: [receiver],
+        type: DYN,
+        loc: locOf(call),
+      };
+    }
+    if (member === "formData") {
+      return {
+        kind: "libCall",
+        fn: "fetch.responseFormData",
+        args: [receiver],
+        type: { kind: "promise", inner: DYN },
+        loc: locOf(call),
+      };
+    }
+    return member === "text" || member === "bytes"
       ? {
           kind: "libCall",
           fn: member === "text" ? "fetch.responseText" : "fetch.responseBytes",
@@ -685,8 +727,8 @@ export function lowerStaticResponseCall(lowerer: Lowerer, call: ts.CallExpressio
           args: [receiver],
           type: { kind: "promise", inner: DYN },
           loc: locOf(call),
-        },
-  );
+        };
+  });
 }
 
 type StaticResponseAccess = ts.PropertyAccessExpression | ts.ElementAccessExpression;
@@ -996,6 +1038,217 @@ export function fenceStaticHeadersMember(
     "the native static Headers surface is append/delete/get/getSetCookie/has/set/forEach; keys()/values()/entries(), symbol-keyed iteration, and construction remain unsupported",
     sym,
   );
+}
+
+const HEADERS_KEYS_COLLECT = "%headers.keys";
+const HEADERS_KEYS_PUSH = "%headers.keys.push";
+const HEADER_NAMES = arrayOf(STRING);
+const HEADER_NAMES_LOCAL = "names.0";
+const HEADERS_KEYS_PUSH_TYPE: IrType = { kind: "func", params: [DYN, DYN, DYN], ret: VOID };
+
+/** `headers.keys().next()` on a native Headers handle. The iterator is
+ * created and stepped once, so the first sorted name is the whole result.
+ * `forEach` already visits each name once in that order. A stored iterator
+ * (`const it = headers.keys()`) still has no handle and keeps its fence. */
+export function lowerHeadersIteratorNext(lowerer: Lowerer, call: ts.CallExpression): IrExpr | null {
+  if (
+    call.questionDotToken ||
+    !ts.isPropertyAccessExpression(call.expression) ||
+    lowerer.chainBlocked(call, call.expression) ||
+    call.expression.name.text !== "next" ||
+    call.arguments.length !== 0 ||
+    call.arguments.some((argument) => ts.isSpreadElement(argument))
+  ) {
+    return null;
+  }
+  const source = call.expression.expression;
+  if (
+    !ts.isCallExpression(source) ||
+    source.questionDotToken ||
+    !ts.isPropertyAccessExpression(source.expression) ||
+    lowerer.chainBlocked(source, source.expression) ||
+    source.expression.name.text !== "keys" ||
+    source.arguments.length !== 0 ||
+    source.arguments.some((argument) => ts.isSpreadElement(argument)) ||
+    !isStdlibFetchInterface(lowerer, source.expression.expression, "Headers")
+  ) {
+    return null;
+  }
+  const resultType = lowerer.mapTypeOf(lowerer.typeOf(call));
+  const shape = resultType?.kind === "record" ? lowerer.shapes.get(resultType.shapeId) : undefined;
+  const doneField = shape?.fields.find((field) => field.name === "done");
+  const valueField = shape?.fields.find((field) => field.name === "value");
+  if (
+    resultType?.kind !== "record" ||
+    !shape ||
+    shape.fields.length !== 2 ||
+    doneField?.type.kind !== "bool" ||
+    valueField?.type.kind !== "dyn"
+  ) {
+    return null;
+  }
+  const headers = lowerer.lowerExpr(source.expression.expression);
+  if (headers.type.kind !== "dyn") return null;
+
+  const loc = locOf(call);
+  ensureHeadersKeyCollector(lowerer, loc);
+  const names = lowerer.declareHiddenLocal("%headerNames", HEADER_NAMES);
+  const namesRef = varRef(names.id, HEADER_NAMES, loc);
+  const length: IrExpr = {
+    kind: "arrIntrinsic",
+    method: "length",
+    receiver: namesRef,
+    args: [],
+    type: F64,
+    loc,
+  };
+  const firstName: IrExpr = {
+    kind: "arrayGet",
+    arr: namesRef,
+    index: numLit(0, loc),
+    type: STRING,
+    loc,
+  };
+  const result = (done: boolean, value: IrExpr): IrExpr => ({
+    kind: "recordLit",
+    fields: shape.fields.map((field) => ({
+      name: field.name,
+      value: field.name === "done" ? boolLit(done, loc) : value,
+    })),
+    type: resultType,
+    loc,
+  });
+  return {
+    kind: "seqExpr",
+    stmts: [
+      {
+        kind: "varDecl",
+        localId: names.id,
+        init: {
+          kind: "call",
+          callee: HEADERS_KEYS_COLLECT,
+          args: [headers],
+          type: HEADER_NAMES,
+          loc,
+        },
+        loc,
+      },
+    ],
+    result: {
+      kind: "ternary",
+      cond: {
+        kind: "bin",
+        op: "===",
+        left: length,
+        right: numLit(0, loc),
+        type: BOOL,
+        loc,
+      },
+      then: result(true, dynUndefinedExpr(loc)),
+      else_: result(false, { kind: "dynFrom", value: firstName, type: DYN, loc }),
+      type: resultType,
+      loc,
+    },
+    type: resultType,
+    loc,
+  };
+}
+
+function ensureHeadersKeyCollector(lowerer: Lowerer, loc: SrcLoc): void {
+  if (lowerer.liftedFns.some((fn) => fn.name === HEADERS_KEYS_COLLECT)) return;
+  const namesRef = varRef(HEADER_NAMES_LOCAL, HEADER_NAMES, loc);
+  const keyRef = varRef("key.0", DYN, loc);
+  const capturedNames: IrLocal = {
+    id: HEADER_NAMES_LOCAL,
+    name: "names",
+    type: HEADER_NAMES,
+    mutable: false,
+    boxed: true,
+  };
+  const push: IrFunction = {
+    name: HEADERS_KEYS_PUSH,
+    params: [
+      { localId: "value.0", name: "value", type: DYN },
+      { localId: "key.0", name: "key", type: DYN },
+      { localId: "parent.0", name: "parent", type: DYN },
+    ],
+    returnType: VOID,
+    captures: [{ localId: HEADER_NAMES_LOCAL, name: "names", type: HEADER_NAMES }],
+    locals: [
+      capturedNames,
+      { id: "value.0", name: "value", type: DYN, mutable: false },
+      { id: "key.0", name: "key", type: DYN, mutable: false },
+      { id: "parent.0", name: "parent", type: DYN, mutable: false },
+    ],
+    body: [
+      {
+        kind: "exprStmt",
+        expr: {
+          kind: "arrIntrinsic",
+          method: "push",
+          receiver: namesRef,
+          args: [{ kind: "dynCheck", value: keyRef, type: STRING, loc }],
+          type: F64,
+          loc,
+        },
+        loc,
+      },
+    ],
+    loc,
+  };
+  const collect: IrFunction = {
+    name: HEADERS_KEYS_COLLECT,
+    params: [{ localId: "headers.0", name: "headers", type: DYN }],
+    returnType: HEADER_NAMES,
+    locals: [
+      { id: "headers.0", name: "headers", type: DYN, mutable: false },
+      {
+        id: HEADER_NAMES_LOCAL,
+        name: "names",
+        type: HEADER_NAMES,
+        mutable: false,
+        boxed: true,
+      },
+    ],
+    body: [
+      {
+        kind: "varDecl",
+        localId: HEADER_NAMES_LOCAL,
+        init: { kind: "arrayLit", elems: [], type: HEADER_NAMES, loc },
+        loc,
+      },
+      {
+        kind: "exprStmt",
+        expr: {
+          kind: "dynInvoke",
+          recv: varRef("headers.0", DYN, loc),
+          method: "forEach",
+          calleeName: "Headers.forEach",
+          args: [
+            {
+              kind: "dynFrom",
+              value: {
+                kind: "closure",
+                fnName: HEADERS_KEYS_PUSH,
+                captures: [HEADER_NAMES_LOCAL],
+                type: HEADERS_KEYS_PUSH_TYPE,
+                loc,
+              },
+              fnName: "forEach",
+              type: DYN,
+              loc,
+            },
+          ],
+          type: DYN,
+          loc,
+        },
+        loc,
+      },
+      { kind: "return", value: namesRef, loc },
+    ],
+    loc,
+  };
+  lowerer.liftedFns.push(push, collect);
 }
 
 /** The native AbortController handle dispatches `abort()` directly and
@@ -1771,7 +2024,7 @@ export function lowerStaticAbortSignalListenerCall(
   const receiverTs = lowerer.checker.getBaseTypeOfLiteralType(lowerer.typeOf(access.expression));
   const symbol = receiverTs.getAliasSymbol() ?? receiverTs.getSymbol();
   if (
-    symbol?.name !== "AbortSignal" ||
+    (symbol?.name !== "AbortSignal" && symbol?.name !== "EventTarget") ||
     !lowerer.checker
       .declarationsOf(symbol)
       .some((d) => ts.isInterfaceDeclaration(d) && lowerer.isStdlibFile(d.getSourceFile()))
@@ -1801,6 +2054,40 @@ export function lowerStaticAbortSignalListenerCall(
       loc,
     }),
   );
+}
+
+/** `new EventTarget()`, `new Event(type, options?)` and `new
+ * CustomEvent(type, options?)`: native handles built from the checked
+ * argument vector (Node validates it in the constructor). */
+export function lowerEventTargetNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr | null {
+  const name = stdlibGlobalNameOf(lowerer, expr.expression);
+  if (name !== "EventTarget" && name !== "Event" && name !== "CustomEvent") return null;
+  const args = expr.arguments ?? [];
+  if (args.some(ts.isSpreadElement)) return null;
+  const loc = locOf(expr);
+  const values = args.map((arg) =>
+    ts.isObjectLiteralExpression(arg)
+      ? lowerDynObjectLiteral(lowerer, arg)
+      : lowerer.lowerExprExpecting(arg, DYN),
+  );
+  if (name === "EventTarget") {
+    const result: IrExpr = { kind: "libCall", fn: "event.targetNew", args: [], type: DYN, loc };
+    if (values.length === 0) return result;
+    return {
+      kind: "seqExpr",
+      stmts: values.map((value): IrStmt => ({ kind: "exprStmt", expr: value, loc: value.loc })),
+      result,
+      type: DYN,
+      loc,
+    };
+  }
+  return {
+    kind: "libCall",
+    fn: name === "Event" ? "event.new" : "event.customNew",
+    args: [{ kind: "dynArrLit", elems: values, type: DYN, loc }],
+    type: DYN,
+    loc,
+  };
 }
 
 export function lowerAbortControllerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr | null {
@@ -1838,13 +2125,10 @@ export function lowerStaticReadableStreamNew(
   lowerer: Lowerer,
   expr: ts.NewExpression,
 ): IrExpr | null {
-  if (!ts.isIdentifier(expr.expression) || expr.expression.text !== "ReadableStream") {
-    return null;
-  }
-  const symbol = lowerer.resolveValueSymbol(expr.expression);
-  if (!symbol || !lowerer.isStdlibSymbol(symbol)) return null;
+  // `globalThis.ReadableStream` is the same constructor as the bare name.
+  if (stdlibGlobalNameOf(lowerer, expr.expression) !== "ReadableStream") return null;
   const args = expr.arguments ?? [];
-  if (args.length > 1) return null;
+  if (args.length > 2 || args.some((argument) => ts.isSpreadElement(argument))) return null;
   const loc = locOf(expr);
 
   const source =
@@ -1853,13 +2137,171 @@ export function lowerStaticReadableStreamNew(
       : ts.isObjectLiteralExpression(args[0]!)
         ? lowerDynObjectLiteral(lowerer, args[0]!)
         : lowerLiveWebValue(lowerer, args[0]!);
-  return {
+  const constructed = (value: IrExpr): IrExpr => ({
     kind: "libCall",
     fn: "fetch.streamNew",
-    args: [source],
+    args: [value],
+    type: DYN,
+    loc,
+  });
+  const strategyNode = args[1];
+  if (!strategyNode) return constructed(source);
+  // Effect passes `options?.strategy`. An absent strategy is Node's default
+  // stream, which the one-argument runtime already builds. A real queuing
+  // strategy has no runtime parameter; refuse it instead of dropping it.
+  const omitted = lowerStaticallyUndefinedArgument(lowerer, strategyNode);
+  if (omitted) {
+    return {
+      kind: "seqExpr",
+      stmts: [{ kind: "exprStmt", expr: omitted, loc: locOf(strategyNode) }],
+      result: constructed(source),
+      type: DYN,
+      loc,
+    };
+  }
+  const strategy = lowerer.coerceToExpected(lowerer.lowerExpr(strategyNode), DYN);
+  if (strategy.type.kind !== "dyn") return null;
+  const sourceLocal = lowerer.declareHiddenLocal("%streamSource", DYN);
+  const strategyLocal = lowerer.declareHiddenLocal("%streamStrategy", DYN);
+  const sourceRef: IrExpr = { kind: "varRef", localId: sourceLocal.id, type: DYN, loc };
+  const strategyRef: IrExpr = { kind: "varRef", localId: strategyLocal.id, type: DYN, loc };
+  return {
+    kind: "seqExpr",
+    stmts: [
+      { kind: "varDecl", localId: sourceLocal.id, init: source, loc },
+      { kind: "varDecl", localId: strategyLocal.id, init: strategy, loc },
+    ],
+    result: {
+      kind: "ternary",
+      cond: { kind: "dynTest", test: "undefined", value: strategyRef, type: BOOL, loc },
+      then: constructed(sourceRef),
+      else_: nodeThrowExpr(1, "", "ReadableStream queuing strategies are not supported", DYN, loc),
+      type: DYN,
+      loc,
+    },
     type: DYN,
     loc,
   };
+}
+
+/** `globalThis.Function(...)` builds a function from source text. That is
+ * the eval stance: the call throws, and Effect's schema JIT treats the
+ * throw as "compilation unavailable" and keeps the interpreted parser.
+ * Interpreted and JIT results match for the public decode probes. */
+export function lowerBlockedFunctionCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
+  if (access.questionDotToken || call.questionDotToken) return null;
+  if (stdlibGlobalNameOf(lowerer, access) !== "Function") return null;
+  const loc = locOf(call);
+  if (call.arguments.some(ts.isSpreadElement)) {
+    lowerer.noLowering("Function with spread arguments", call);
+  }
+  const args = call.arguments.map((argument) => lowerer.lowerExpr(argument));
+  const refused = nodeThrowExpr(1, "", "Function is not available", DYN, loc);
+  if (args.length === 0) return refused;
+  return {
+    kind: "seqExpr",
+    stmts: args.map((expr): IrStmt => ({ kind: "exprStmt", expr, loc: expr.loc })),
+    result: refused,
+    type: DYN,
+    loc,
+  };
+}
+
+/** `navigator.locks.request(name, callback)` and the options form.
+ * Effect's indexed-db journal calls the three-argument shape. Missing
+ * arguments are undefined so the runtime can throw Node's callback error. */
+export function lowerNavigatorLocksRequest(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
+  if (access.questionDotToken || call.questionDotToken) return null;
+  if (access.name.text !== "request") return null;
+  const locks = access.expression;
+  if (
+    !ts.isPropertyAccessExpression(locks) ||
+    locks.questionDotToken ||
+    locks.name.text !== "locks" ||
+    !lowerer.isStdlibGlobal(locks.expression, "navigator")
+  ) {
+    return null;
+  }
+  const loc = locOf(call);
+  if (call.arguments.some(ts.isSpreadElement) || call.arguments.length > 3) {
+    lowerer.noLowering(
+      "navigator.locks.request with this argument list",
+      call,
+      "request(name, callback) and request(name, options, callback) are the lowered forms",
+    );
+  }
+  const asDyn = (node: ts.Expression | undefined): IrExpr => {
+    if (!node) return dynUndefinedExpr(loc);
+    const value = lowerer.lowerExpr(node);
+    if (value.type.kind === "dyn") return value;
+    const coerced = lowerer.coerceToExpected(value, DYN);
+    if (coerced.type.kind !== "dyn") {
+      lowerer.noLowering(
+        `navigator.locks.request with a '${lowerer.fmt(value.type)}' argument`,
+        node,
+      );
+    }
+    return coerced;
+  };
+  return {
+    kind: "libCall",
+    fn: "navigator.locksRequest",
+    args: [asDyn(call.arguments[0]), asDyn(call.arguments[1]), asDyn(call.arguments[2])],
+    type: { kind: "promise", inner: DYN },
+    loc,
+  };
+}
+
+/** Evaluate constructor arguments, then refuse. These globals typecheck
+ * under `@types/node` and Effect mentions them from uncalled callbacks.
+ * Opening a socket or a compression stream has no native lowering. */
+function lowerRefusedWebConstructor(
+  lowerer: Lowerer,
+  expr: ts.NewExpression,
+  name: "WebSocket" | "CompressionStream",
+  message: string,
+): IrExpr | null {
+  if (stdlibGlobalNameOf(lowerer, expr.expression) !== name) return null;
+  const args = expr.arguments ?? [];
+  if (args.length > 2 || args.some((argument) => ts.isSpreadElement(argument))) return null;
+  const loc = locOf(expr);
+  // Arguments keep their real types. `new globalThis.WebSocket(url, protocols)`
+  // passes a string URL; requiring a dyn argument dropped the refusal and
+  // the generic constructor path then reported `new undefined`.
+  const lowered = args.map((argument) => lowerer.lowerExpr(argument));
+  const refused = nodeThrowExpr(1, "", message, DYN, loc);
+  if (lowered.length === 0) return refused;
+  return {
+    kind: "seqExpr",
+    stmts: lowered.map((value): IrStmt => ({ kind: "exprStmt", expr: value, loc: value.loc })),
+    result: refused,
+    type: DYN,
+    loc,
+  };
+}
+
+export function lowerStaticWebSocketNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr | null {
+  return lowerRefusedWebConstructor(lowerer, expr, "WebSocket", "WebSocket is not supported");
+}
+
+export function lowerStaticCompressionStreamNew(
+  lowerer: Lowerer,
+  expr: ts.NewExpression,
+): IrExpr | null {
+  return lowerRefusedWebConstructor(
+    lowerer,
+    expr,
+    "CompressionStream",
+    "CompressionStream is not supported",
+  );
 }
 
 /** Native Request and Headers values share the fetch runtime's handles. */
@@ -2081,6 +2523,20 @@ export function lowerStaticReadableStreamReaderCall(
 export function lowerDynamicImportCall(lowerer: Lowerer, call: ts.CallExpression): IrExpr | null {
   if (call.expression.kind !== ts.SyntaxKind.ImportKeyword) return null;
   const arg = call.arguments[0];
+  // Opted-in package JavaScript evaluates a computed specifier and rejects.
+  // The module graph is still static, so the promise never loads an arbitrary
+  // runtime module. Effect's filesystem migrator builds this promise inside a
+  // loader the memory-queue cases never call. User TypeScript keeps the fence.
+  if (
+    arg !== undefined &&
+    !ts.isSpreadElement(arg) &&
+    !ts.isStringLiteralLike(arg) &&
+    call.arguments.length === 1 &&
+    isJsSourceFile(call.getSourceFile()) &&
+    npmStaticPackageOfPath(call.getSourceFile().fileName) !== null
+  ) {
+    return lowerNpmComputedImport(lowerer, call, arg);
+  }
   if (arg === undefined || !ts.isStringLiteralLike(arg)) {
     lowerer.unsupported(
       "SC1090",
@@ -2101,6 +2557,43 @@ export function lowerDynamicImportCall(lowerer: Lowerer, call: ts.CallExpression
     kind: "moduleNs",
     moduleId: `builtin:${res.module}`,
   });
+}
+
+/** Computed `import(expr)` inside an opted-in package. The specifier runs
+ * for its side effects, then the promise rejects. Nothing in the static
+ * module graph can host an arbitrary runtime specifier. */
+function lowerNpmComputedImport(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  arg: ts.Expression,
+): IrExpr {
+  const loc = locOf(call);
+  const spec = lowerer.lowerExpr(arg);
+  const mapped = lowerer.mapTypeOf(lowerer.typeOf(call));
+  const resultT: IrType = mapped?.kind === "promise" ? mapped : { kind: "promise", inner: DYN };
+  const reason = lowerer.coerceToExpected(
+    {
+      kind: "strLit",
+      value: "dynamic import() of a computed specifier is not available",
+      type: STRING,
+      loc,
+    },
+    DYN,
+  );
+  const rejected: IrExpr = {
+    kind: "intrinsic",
+    name: "promise.reject",
+    args: [reason],
+    type: resultT,
+    loc,
+  };
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "exprStmt", expr: spec, loc }],
+    result: rejected,
+    type: resultT,
+    loc,
+  };
 }
 
 /** The checker-resolved program source behind one literal import(). */
@@ -2361,6 +2854,10 @@ export function lowerStdlibMethodCall(
         src = lowerer.coerceInto(spread.expression, src, inferred);
       }
     }
+    if (src.type.kind === "dyn" || lowerer.dynConvertible(src.type)) {
+      const dynSrc = src.type.kind === "dyn" ? src : lowerer.coerceToExpected(src, DYN);
+      return lowerDynMathSpread(lowerer, name, dynSrc, spread.expression.getText(), loc);
+    }
     if (src.type.kind !== "array" || src.type.elem.kind !== "f64") {
       lowerer.unsupported(
         "SC1090",
@@ -2390,6 +2887,97 @@ export function lowerStdlibMethodCall(
   if (!entry || call.arguments.length !== entry.args.length) return null;
   if (!lowerer.isStdlibMember(access)) return null;
   lowerer.refuseUnsupportedApi(`'.${name}()' on ${kind === "f64" ? "numbers" : "strings"}`, call);
+}
+
+/** `Math.max(...unknown)` / `Math.min(...unknown)` follows the iterator,
+ * then ToNumber, then the scalar fold. An empty spread keeps the seed
+ * (-Infinity for max, +Infinity for min). */
+function lowerDynMathSpread(
+  lowerer: Lowerer,
+  name: "max" | "min",
+  source: IrExpr,
+  spelling: string,
+  loc: SrcLoc,
+): IrExpr {
+  const items = checkedIterableSpread(lowerer, source, spelling, loc);
+  const srcLocal = lowerer.declareHiddenLocal("%mathSrc", DYN);
+  const lenLocal = lowerer.declareHiddenLocal("%mathLen", F64);
+  const indexLocal = lowerer.declareHiddenLocal("%mathIndex", F64);
+  const accLocal = lowerer.declareHiddenLocal("%mathAcc", F64);
+  indexLocal.mutable = true;
+  accLocal.mutable = true;
+  const src = varRef(srcLocal.id, DYN, loc);
+  const len = varRef(lenLocal.id, F64, loc);
+  const index = varRef(indexLocal.id, F64, loc);
+  const acc = varRef(accLocal.id, F64, loc);
+  const element: IrExpr = {
+    kind: "libCall",
+    fn: "dyn.toNumberCoerce",
+    args: [
+      {
+        kind: "dynKeyGet",
+        value: src,
+        key: { kind: "toString", operand: index, type: STRING, loc },
+        type: DYN,
+        loc,
+      },
+    ],
+    type: F64,
+    loc,
+  };
+  const loop: IrStmt = {
+    kind: "while",
+    cond: { kind: "bin", op: "<", left: index, right: len, type: BOOL, loc },
+    body: [
+      {
+        kind: "assign",
+        localId: accLocal.id,
+        value: {
+          kind: "libCall",
+          fn: name === "max" ? "math.max" : "math.min",
+          args: [acc, element],
+          type: F64,
+          loc,
+        },
+        loc,
+      },
+      {
+        kind: "assign",
+        localId: indexLocal.id,
+        value: { kind: "bin", op: "+", left: index, right: numLit(1, loc), type: F64, loc },
+        loc,
+      },
+    ],
+    loc,
+  };
+  return {
+    kind: "seqExpr",
+    stmts: [
+      { kind: "varDecl", localId: srcLocal.id, init: items, loc },
+      {
+        kind: "varDecl",
+        localId: lenLocal.id,
+        init: {
+          kind: "dynCheck",
+          value: { kind: "dynKeyGet", value: src, key: strLit("length", loc), type: DYN, loc },
+          type: F64,
+          loc,
+        },
+        loc,
+      },
+      { kind: "varDecl", localId: indexLocal.id, init: numLit(0, loc), loc },
+      {
+        kind: "varDecl",
+        localId: accLocal.id,
+        init: numLit(name === "max" ? -Infinity : Infinity, loc),
+        loc,
+      },
+      loop,
+    ],
+    result: acc,
+    type: F64,
+    loc,
+  };
 }
 
 export function lowerMathProperty(

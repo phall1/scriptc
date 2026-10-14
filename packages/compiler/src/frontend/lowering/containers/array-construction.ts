@@ -44,6 +44,7 @@ import {
   lowerArrayCallback,
   callbackArrayElement,
 } from "./callback-arguments.js";
+import { lowerDynObjectLiteral } from "../expressions/object-literals.js";
 
 /** Build the argument array for a mutating/copying operation while keeping
  * the receiver's scalar payload ABI. A missing read is represented as the
@@ -786,6 +787,47 @@ export function lowerArrayFromValue(lowerer: Lowerer, loc: SrcLoc): IrExpr {
  * Strings iterate by code point and may map.
  * Other iterable shapes keep the fence. Null when the callee isn't an
  * Array-static access. */
+
+/** `Set<any>` stores checked-dynamic values. A static array of those
+ * values is only a drain: default `.sort()` has no lowering there, and
+ * `JSON.stringify` would see a typed vector instead of one dyn array.
+ * Copy into a dyn array. Typed sets (`Set<string>`) stay static. */
+function dynArrayFromDynamicSet(
+  lowerer: Lowerer,
+  source: IrExpr,
+  element: IrType,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (element.kind !== "dyn" || source.type.kind !== "set") return null;
+  const local = lowerer.declareHiddenLocal("%setValues", arrayOf(DYN));
+  return {
+    kind: "seqExpr",
+    stmts: [
+      {
+        kind: "varDecl",
+        localId: local.id,
+        init: {
+          kind: "setIntrinsic",
+          method: "toArray",
+          receiver: source,
+          args: [],
+          type: arrayOf(DYN),
+          loc,
+        },
+        loc,
+      },
+    ],
+    result: {
+      kind: "dynFrom",
+      value: varRef(local.id, arrayOf(DYN), loc),
+      type: DYN,
+      loc,
+    },
+    type: DYN,
+    loc,
+  };
+}
+
 export function lowerArrayFromCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -841,6 +883,8 @@ export function lowerArrayFromCall(
       const source = lowerCollectionInput(lowerer, input);
       if (source) {
         if (args.length === 1) {
+          const dynamic = dynArrayFromDynamicSet(lowerer, source, input.element, loc);
+          if (dynamic) return dynamic;
           requireProducedArrayElement(lowerer, call, "'Array.from(collection)'", input.element);
           return ingestCollection(
             lowerer,
@@ -873,13 +917,20 @@ export function lowerArrayFromCall(
       }
     }
   }
+  // An object literal that is not `{ length }` is a value with its own
+  // iterator method. `{ [Symbol.iterator]: () => rest }` is the
+  // NonEmptyIterable.unprepend consumer. The counted `{ length: n }`
+  // forms stay on the paths below.
+  const iterableObject = lowerIterableObjectFrom(lowerer, call);
+  if (iterableObject) return iterableObject;
   // MAPPER-LESS `Array.from({ length: n })` (usually with an explicit
   // type argument — the pMap results-array idiom): a length-n array of
   // ABSENT slots, filled by index before any read. Union elements with
   // an undefined arm hold the interned undefined (JS-exact); other
-  // refcounted elements hold NULL and must be assigned before they are
-  // read (SEMANTICS.md 46). Scalar elements have no absent value that
-  // isn't a LIE on read (0 where Node says undefined) — fenced.
+  // refcounted elements — record unions like PromiseSettledResult among
+  // them — hold NULL and must be assigned before they are read
+  // (SEMANTICS.md 46). Scalar elements have no absent value that isn't a
+  // LIE on read (0 where Node says undefined) — fenced.
   if (
     args.length === 1 &&
     ts.isObjectLiteralExpression(args[0]!) &&
@@ -892,7 +943,10 @@ export function lowerArrayFromCall(
       if (arrT?.kind !== "array") lowerer.badType(call, lowerer.typeOf(call));
       const elem = arrT.elem;
       const absent =
-        elem.kind === "union" ? lowerer.wrappedUndefined(elem, loc) !== null : isRefCounted(elem);
+        elem.kind === "union"
+          ? lowerer.wrappedUndefined(elem, loc) !== null ||
+            (lowerer.unions.get(elem.unionId)?.arms ?? []).every((arm) => arm.kind === "record")
+          : isRefCounted(elem);
       if (!absent) {
         lowerer.noLowering(
           `mapper-less Array.from({ length: n }) with '${lowerer.fmt(elem)}' elements`,
@@ -985,6 +1039,8 @@ export function lowerArrayFromCall(
       };
     }
     if (src.type.kind === "set" && args.length === 1) {
+      const dynamic = dynArrayFromDynamicSet(lowerer, src, src.type.elem, loc);
+      if (dynamic) return dynamic;
       return {
         kind: "setIntrinsic",
         method: "toArray",
@@ -1230,6 +1286,43 @@ function buildStrCharsFn(name: string, loc: SrcLoc): IrFunction {
     body,
     loc,
   };
+}
+
+function lengthPropertyName(prop: ts.ObjectLiteralElementLike): string | null {
+  if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) return prop.name.text;
+  if (ts.isShorthandPropertyAssignment(prop)) return (prop.name as ts.Identifier).text;
+  return null;
+}
+
+function isLengthOnlyLiteral(expr: ts.Expression): boolean {
+  if (!ts.isObjectLiteralExpression(expr) || expr.properties.length !== 1) return false;
+  return lengthPropertyName(expr.properties[0]!) === "length";
+}
+
+function iterableObjectSource(
+  args: readonly ts.Expression[],
+): ts.ObjectLiteralExpression | null {
+  if (args.length !== 1 && args.length !== 2) return null;
+  if (args.some(ts.isSpreadElement)) return null;
+  const source = args[0]!;
+  if (!ts.isObjectLiteralExpression(source)) return null;
+  if (isLengthOnlyLiteral(source)) return null;
+  return source;
+}
+
+/** `Array.from` of an object that is not the counted `{ length: n }` idiom.
+ * The literal is a dynamic object, so a symbol method such as
+ * `[Symbol.iterator]` is a real property the iterator protocol can call. */
+function lowerIterableObjectFrom(lowerer: Lowerer, call: ts.CallExpression): IrExpr | null {
+  const source = iterableObjectSource(call.arguments);
+  if (!source) return null;
+  const mapper = call.arguments[1];
+  return lowerCheckedArrayFrom(
+    lowerer,
+    lowerDynObjectLiteral(lowerer, source),
+    locOf(call),
+    mapper ? lowerer.lowerExprExpecting(mapper, DYN) : undefined,
+  );
 }
 
 /** The lowered `length` value of the one-property source literal, or null

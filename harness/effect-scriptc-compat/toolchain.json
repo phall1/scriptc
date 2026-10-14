@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "node": "24.19.0",
+  "pnpm": "11.19.0",
+  "typescript": "7.0.2",
+  "nodeTypes": "24.10.1",
+  "effect": "4.0.4",
+  "scriptc": {
+    "npmVersion": "0.3.0",
+    "githubReleaseTag": "effect-compat-0.3",
+    "githubCommit": "4a13740852f12d4229baf1db445aea3a6a2d6cd0",
+    "releaseUrl": "https://github.com/phall1/scriptc/commit/4a13740852f12d4229baf1db445aea3a6a2d6cd0",
+    "contributingUrl": "https://github.com/vercel-labs/scriptc/blob/v0.3.0/CONTRIBUTING.md",
+    "issuesUrl": "https://github.com/vercel-labs/scriptc/issues"
+  },
+  "runner": "node --experimental-strip-types",
+  "hostFirst": true
+}

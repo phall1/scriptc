@@ -53,7 +53,9 @@ function module(name: string, returnType: IrExpr["type"], body: IrStmt[]): IrMod
 }
 
 function body(llvm: string, name: string): string {
-  return new RegExp(`^define internal [^\\n]*@sc_bf_${name}\\([^]*?^}`, "m").exec(llvm)![0];
+  return new RegExp(`^define internal [^\\n]*@sc_bf_${name}(?:\\.i32)?\\([^]*?^}`, "m").exec(
+    llvm,
+  )![0];
 }
 
 test.each([32, 64] as const)("strict scalar reads check dense storage inline (%i-bit)", (bits) => {
@@ -73,6 +75,22 @@ test.each([32, 64] as const)("strict scalar reads check dense storage inline (%i
     /call double @scr_arr_get_f64\(.*\) cold memory\(read, inaccessiblemem: readwrite\)/,
   );
   if (bits === 32) expect(fn).toContain("trunc i64");
+});
+
+test.each([32, 64] as const)("boolean reads load one byte per element (%i-bit)", (bits) => {
+  const read: IrExpr = { kind: "arrayGet", arr: ref("b", flags), index, type: BOOL, loc };
+  const llvm = emitLlvmModule(module("flag", BOOL, [{ kind: "return", value: read, loc }]), {
+    pointerBits: bits,
+  });
+  const fn = body(llvm, "flag");
+  const size = bits === 32 ? "i32" : "i64";
+  expect(fn).toMatch(
+    new RegExp(
+      `getelementptr inbounds i8, ptr %t\\d+, ${size} %t\\d+\\n  %t(\\d+) = load i8, ptr .*\\n  %t\\d+ = icmp ne i8 %t\\1, 0`,
+    ),
+  );
+  expect(fn).not.toMatch(/getelementptr inbounds i64/);
+  expect(fn).toMatch(/call i1 @scr_arr_get_bool\(.*\) cold/);
 });
 
 test("reference reads retain inline and keep a cold +1 runtime fallback", () => {
@@ -112,7 +130,10 @@ test("element writes store inline, extend the length, and release replaced refer
   );
   const fn = body(llvm, "store");
   expect(fn).toMatch(/store double 0x4004000000000000, ptr /);
-  expect(fn).toMatch(/zext i1 .* to i64/);
+  // Boolean elements are one byte each.
+  expect(fn).toMatch(
+    /getelementptr inbounds i8, ptr .*\n  %t\d+ = zext i1 .* to i8\n  store i8 %t\d+, ptr /,
+  );
   expect(fn).toMatch(/store i8 1, ptr /);
   expect(fn).toMatch(/icmp uge i64 .*/);
   expect(fn).toContain("call void @scr_str_release(");
@@ -141,7 +162,8 @@ test.each([32, 64] as const)(
     const size = bits === 32 ? "i32" : "i64";
     expect(fn.match(new RegExp(`icmp ult ${size} `, "g"))).toHaveLength(3);
     expect(fn).toMatch(/store double 0x4004000000000000, ptr /);
-    expect(fn).toMatch(/zext i1 .* to i64/);
+    expect(fn).toMatch(/zext i1 .* to i8/);
+    expect(fn.match(/getelementptr inbounds i8, ptr /g)).toHaveLength(4);
     expect(fn.match(/store i8 1, ptr /g)).toHaveLength(3);
     expect(fn.match(new RegExp(`add nuw ${size} .*, 1$`, "gm"))).toHaveLength(3);
     // Appends never release: the slot past the length holds no value.
@@ -196,9 +218,20 @@ test.each([32, 64] as const)(
     expect(writes[0]).toMatch(/store double .*, ptr /);
     // The replaced string below the bound is released after the store.
     expect(writes[1]).toMatch(/store ptr .*\n[^]*call void @scr_str_release\(/);
-    // A state-checked store at the bound extends it.
+    // A state-checked store at the bound extends it to the index plus one,
+    // not to the loaded bound plus one (no store-to-load chain in a loop).
     expect(fn).toMatch(new RegExp(`icmp eq ${size} .*`));
-    expect(fn).toMatch(/store i32 .*, ptr /);
+    const bumps = blocks("arr\\.set\\.bump");
+    expect(bumps).toHaveLength(2);
+    const loadedBounds = new Set(
+      [...fn.matchAll(/^\s*(%[\w.]+) = load i32, ptr /gm)].map((m) => m[1]),
+    );
+    for (const block of bumps) {
+      const next = block.match(/= add i32 (%[\w.]+), 1\n/);
+      expect(next).not.toBeNull();
+      expect(loadedBounds.has(next![1]!)).toBe(false);
+      expect(block).toMatch(/store i32 .*, ptr /);
+    }
   },
 );
 

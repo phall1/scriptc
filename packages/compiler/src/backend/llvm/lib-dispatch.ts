@@ -1,3 +1,4 @@
+import { emitBigIntWrap } from "./bigint-wrap.js";
 import { emitBorrowedInput } from "./borrowed-inputs.js";
 import { borrowsIteratorInputs, borrowsJsonInputs } from "./checked-value-lifetimes.js";
 import { emitTlsLibCall } from "./lib-tls.js";
@@ -111,6 +112,27 @@ export function emitGenericLibCall(host: LlvmEmitterContext, e: LibCallExpr): Ll
     const output = host.own({ name: result, type: e.type });
     host.emitPendingCheck();
     return output;
+  }
+  if (e.fn === "dyn.isTypedRef") {
+    const value = host.emitExpr(e.args[0]!);
+    const slot = B.slot();
+    B.entryAllocas.push(`${slot} = alloca i1`);
+    B.line(`store i1 false, ptr ${slot}`);
+    const present = B.tmp();
+    const inspect = B.newLabel("typedref.inspect");
+    const done = B.newLabel("typedref.done");
+    B.line(`${present} = icmp ne ptr ${value.name}, null`);
+    B.condBr(present, inspect, done);
+    B.startBlock(inspect);
+    const kind = host.dynKind(value.name);
+    const typed = B.tmp();
+    B.line(`${typed} = icmp eq i32 ${kind}, ${DYN_KIND.TYPED_REF}`);
+    B.line(`store i1 ${typed}, ptr ${slot}`);
+    B.br(done);
+    B.startBlock(done);
+    const result = B.tmp();
+    B.line(`${result} = load i1, ptr ${slot}`);
+    return { name: result, type: e.type };
   }
   if (e.fn === "dyn.typedRefIs") {
     // A literal brand cannot replace the receiver while being evaluated.
@@ -290,11 +312,23 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
   if (USES_TIMERS_LIB_FNS.has(e.fn)) host.usesTimers = true;
   if (e.fn === "process.nextTick") return host.emitAsyncContextLibCall(e);
   if (e.fn === "sp.pipeline") return host.emitStreamLibCall(e);
+  if (e.fn === "bigint.parse" && e.args[0]?.kind === "strLit") {
+    // Literals (`123n`) and constant BigInt("...") texts are immortal
+    // statics instead of a parse at every evaluation.
+    const sym = host.internBigIntLiteral(e.args[0].value);
+    if (sym) return host.own({ name: host.retainValue(sym, e.type), type: e.type });
+  }
+  if (e.fn.startsWith("bigint.")) {
+    // Small-value operator trees run in 64-bit registers (bigint-wrap.ts).
+    const fused = emitBigIntWrap(host, e);
+    if (fused) return fused;
+  }
   const prefix = e.fn.slice(0, e.fn.indexOf(".")) as LibCallPrefix;
   switch (prefix) {
     case "fetch":
     case "abort":
     case "json":
+    case "navigator":
       return host.emitWebLibCall(e);
     case "dyn":
     case "global":
@@ -370,6 +404,10 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
     case "strdec":
       return host.emitIoLibCall(e);
     case "console":
+      // The tail of a console lowering whose effects sit in its
+      // statements: nothing runs.
+      if (e.fn === "console.noop") return { name: "", type: e.type };
+      return host.emitGenericLibCall(e);
     case "weakMap":
     case "weakSet":
     case "ffi":
@@ -381,6 +419,8 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
     case "buffer":
     case "bytes":
     case "tlsca":
+    case "event":
+    case "events":
       return host.emitGenericLibCall(e);
     case "test":
       return emitTestLibCall(host, e);

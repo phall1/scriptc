@@ -28,6 +28,14 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "insp.jsonDyn": "scr_dyn_format_j",
   "http.reqH2StreamOrThrow": "scr_http_req_h2_stream_or_throw",
   "intl.segmenterNew": "scr_intl_segmenter_new",
+  "intl.dateTimeFormatNew": "scr_intl_datetime_format_new",
+  "date.setUTCFullYear": "scr_date_set_utc_full_year",
+  "date.setUTCMonth": "scr_date_set_utc_month",
+  "date.setUTCDate": "scr_date_set_utc_date",
+  "date.setUTCHours": "scr_date_set_utc_hours",
+  "date.setUTCMinutes": "scr_date_set_utc_minutes",
+  "date.setUTCSeconds": "scr_date_set_utc_seconds",
+  "date.setUTCMilliseconds": "scr_date_set_utc_milliseconds",
   "weakMap.is": "scr_weak_map_is",
   "weakSet.is": "scr_weak_set_is",
   "weakMap.new": "scr_weak_map_new",
@@ -66,6 +74,10 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "util.toUSVString": "scr_util_to_usv_string",
   "util.isDeepStrictEqual": "scr_util_is_deep_strict_equal",
   "util.styleText": "scr_util_style_text",
+  "util.inherits": "scr_util_inherits",
+  "util.deprecate": "scr_util_deprecate",
+  "util.callbackify": "scr_util_callbackify",
+  "util.debuglog": "scr_util_debuglog",
   "util.typeIs": "scr_dyn_util_type_is",
   "util.typeValue": "scr_dyn_util_type_value",
   "math.maxArr": "scr_math_max_arr",
@@ -77,6 +89,8 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "num.parseInt": "scr_parse_int",
   "num.parseFloat": "scr_parse_float",
   "str.localeCompare": "scr_str_locale_compare",
+  "str.replaceLiteral": "scr_str_replace_literal",
+  "str.replaceChars": "scr_str_replace_chars",
   "num.fromString": "scr_string_to_number",
   "math.round": "scr_math_round",
   "math.sin": "sin",
@@ -101,8 +115,8 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "math.log10": "log10",
   "math.atan2": "atan2",
   "math.pow": "scr_math_pow",
-  // decodeUriComponent is NOT here: it throws (MAY_THROW_LIB_FNS), so it
-  // refuses by name like the rest of the throwing tier.
+  // encodeURIComponent throws URIError on a lone surrogate
+  // (MAY_THROW_LIB_FNS); decodeUriComponent is with the throwing tier below.
   "str.encodeUriComponent": "scr_str_encode_uri_component",
   "error.cause": "scr_error_cause",
   "error.setCause": "scr_error_set_cause",
@@ -116,6 +130,9 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "error.domHasCause": "scr_domex_has_cause",
   "error.domCause": "scr_domex_cause",
   "error.domClone": "scr_domex_clone",
+  "error.newAggregate": "scr_aggregate_new",
+  "error.aggregateSetErrors": "scr_aggregate_set_errors",
+  "error.aggregateErrors": "scr_aggregate_errors",
   "dyn.errInstanceof": "scr_dyn_err_instanceof",
   "num.toExponential": "scr_num_to_exponential",
   "num.toFixed0": "scr_num_to_fixed0",
@@ -145,6 +162,12 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "path.win32Dirname": "scr_path_win32_dirname",
   "path.win32Basename": "scr_path_win32_basename",
   "path.win32Extname": "scr_path_win32_extname",
+  "path.parse": "scr_path_parse",
+  "path.win32Parse": "scr_path_win32_parse",
+  "path.format": "scr_path_format",
+  "path.win32Format": "scr_path_win32_format",
+  "path.matchesGlob": "scr_path_matches_glob",
+  "path.win32MatchesGlob": "scr_path_win32_matches_glob",
   "path.win32IsAbsolute": "scr_path_win32_is_absolute",
   "path.win32Relative": "scr_path_win32_relative",
   "path.win32ToNamespacedPath": "scr_path_win32_to_namespaced_path",
@@ -152,6 +175,18 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "os.type": "scr_os_type",
   "os.totalmem": "scr_os_totalmem",
   "os.availableParallelism": "scr_os_available_parallelism",
+  "os.hostname": "scr_os_hostname",
+  "os.machine": "scr_os_machine",
+  "os.version": "scr_os_version",
+  "os.endianness": "scr_os_endianness",
+  "os.freemem": "scr_os_freemem",
+  "os.uptime": "scr_os_uptime",
+  "os.loadavg": "scr_os_loadavg",
+  "os.getPriority": "scr_os_get_priority",
+  "os.cpusTake": "scr_os_cpus_take",
+  "os.cpusModel": "scr_os_cpus_model",
+  "os.cpusField": "scr_os_cpus_field",
+  "os.constants": "scr_os_constants",
   "os.release": "scr_os_release",
   "os.userName": "scr_os_user_name",
   "os.userShell": "scr_os_user_shell",
@@ -169,6 +204,19 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "process.versions": "scr_process_versions",
   "process.builtinId": "scr_process_builtin_id",
   "console.native": "scr_console_native",
+  "console.new": "scr_console_new",
+  "console.bind": "scr_console_bind",
+  "console.write": "scr_console_inst_write",
+  "console.label": "scr_console_label",
+  "console.count": "scr_console_count",
+  "console.countReset": "scr_console_count_reset",
+  "console.time": "scr_console_time",
+  "console.timeEnd": "scr_console_time_end",
+  "console.timeLog": "scr_console_time_log",
+  "console.group": "scr_console_group",
+  "console.clear": "scr_console_clear",
+  "console.table": "scr_console_table",
+  "console.dirDyn": "scr_console_dir_dyn",
   "global.native": "scr_global_native",
   "process.builtinModule": "scr_process_builtin_module",
   "process.builtinUnsupported": "scr_process_builtin_unsupported",
@@ -250,6 +298,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "process.cpuPrevValidate": "scr_cpu_prev_validate",
   "date.toISOString": "scr_date_to_iso",
   "date.toISOStringValue": "scr_date_to_iso",
+  "date.toUTCStringValue": "scr_date_to_utc",
   "process.chdir": "scr_process_chdir",
   "process.loadEnvFile": "scr_process_load_env_file",
   "fs.writeFileSync": "scr_fs_write_file",
@@ -506,12 +555,13 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "sp.toString": "scr_sp_to_string",
   "sp.keyAt": "scr_sp_key_at",
   "sp.valAt": "scr_sp_val_at",
-  // node:querystring (scr_qs.c): unescape/stringify are plain generic
-  // calls (never throw; string results +1), and escape IS the component
-  // encoder (Node's qsEscape set equals encodeURIComponent's) so it emits
-  // the always-linked codec. qs.parse is special-cased in emitLibCall
-  // (the result dictionary's construction).
-  "qs.escape": "scr_str_encode_uri_component",
+  // node:querystring (scr_qs.c): unescape is a plain generic call (never
+  // throws; string results +1); stringify and escape throw URIError
+  // [ERR_INVALID_URI] on a lone surrogate. escape is the component encoder
+  // (Node's qsEscape set equals encodeURIComponent's) in the always-linked
+  // codec unit. qs.parse is special-cased in emitLibCall (the result
+  // dictionary's construction).
+  "qs.escape": "scr_qs_escape",
   "qs.unescape": "scr_qs_unescape",
   "qs.stringify": "scr_qs_stringify",
   // Timer handle bookkeeping (never throws; the comma-shaped chaining
@@ -630,6 +680,11 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "fetch.responseNew": "scr_fetch_response_new",
   "fetch.input": "scr_fetch_input",
   "abort.controllerNew": "scr_fetch_abort_controller_new",
+  "event.targetNew": "scr_event_target_new",
+  "event.new": "scr_event_new",
+  "event.customNew": "scr_custom_event_new",
+  "event.is": "scr_event_is",
+  "events.addAbortListener": "scr_events_add_abort_listener",
   "abort.timeout": "scr_fetch_abort_timeout",
   "abort.now": "scr_fetch_abort_now",
   "abort.any": "scr_fetch_abort_any",
@@ -640,6 +695,9 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "fetch.responseJson": "scr_fetch_response_json",
   "fetch.responseText": "scr_fetch_response_text",
   "fetch.responseBytes": "scr_fetch_response_bytes",
+  "fetch.responseClone": "scr_fetch_response_clone",
+  "fetch.responseFormData": "scr_fetch_response_form_data",
+  "navigator.locksRequest": "scr_navigator_locks_request",
   "fetch.abortControllerNew": "scr_fetch_abort_controller_new",
   "fetch.abortTimeout": "scr_fetch_abort_timeout",
   "fetch.abortNow": "scr_fetch_abort_now",
@@ -678,11 +736,14 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "dyn.arrLen": "scr_dyn_arr_len",
   "dyn.arrAt": "scr_dyn_arr_at",
   "dyn.hasKey": "scr_dyn_has_key",
+  "dyn.in": "scr_dyn_in",
   "dyn.defineProps": "scr_dyn_define_props",
   "dyn.defineProperty": "scr_dyn_define_property",
   "dyn.getOwnPropertyDescriptor": "scr_dyn_get_own_property_descriptor",
   "dyn.arrayProtoCall": "scr_dyn_array_proto_call",
   "dyn.promiseAll": "scr_dyn_promise_all",
+  "dyn.promiseAllSettled": "scr_dyn_promise_all_settled",
+  "dyn.promiseAny": "scr_dyn_promise_any",
   "dyn.typeof": "scr_dyn_typeof",
   "dyn.objectTag": "scr_dyn_object_tag",
   "dyn.freeze": "scr_dyn_freeze",
@@ -691,6 +752,9 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "dyn.nativeSetIs": "scr_dyn_native_set_is",
   "dyn.nativeMapIs": "scr_dyn_native_map_is",
   "dyn.nativeUrlIs": "scr_dyn_native_url_is",
+  "dyn.nativeSearchParamsIs": "scr_dyn_native_search_params_is",
+  "dyn.nativeInstanceOfOperand": "scr_dyn_native_instanceof_operand",
+  "dyn.nativeConstructor": "scr_dyn_native_constructor",
   "dyn.nativeDateIs": "scr_dyn_native_date_is",
   "date.nativeNew": "scr_dyn_native_date_new",
   "date.checkedValue": "scr_dyn_native_date_value",
@@ -757,6 +821,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "emitter.getMax": "scr_emitter_get_max",
   "emitter.setDefaultMax": "scr_emitter_set_default_max",
   "emitter.getDefaultMax": "scr_emitter_get_default_max",
+  "emitter.errorMonitor": "scr_emitter_error_monitor",
   // node:stream (scr_stream.c): receivers borrowed, chunks borrowed,
   // chaining forms answer the receiver +1. The throwing members
   // (listeners and option callbacks run synchronously inside) ride the
@@ -937,6 +1002,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "sc.text": "scr_sc_text",
   "sc.json": "scr_sc_json",
   "sc.buffer": "scr_sc_buffer",
+  "sc.arrayBuffer": "scr_sc_array_buffer",
   "dc.channel": "scr_dc_channel",
   "dc.subscribe": "scr_dc_subscribe",
   "dc.unsubscribe": "scr_dc_unsubscribe",
@@ -980,6 +1046,9 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "process.onWarning": "scr_process_on_warning",
   "process.offWarning": "scr_process_off_warning",
   "process.emitWarning": "scr_process_emit_warning",
+  "process.emitWarningText": "scr_process_emit_warning_text",
+  "process.deprecationFlag": "scr_process_deprecation_flag",
+  "process.setDeprecationFlag": "scr_process_set_deprecation_flag",
   "process.onUncaughtException": "scr_process_on_uncaught_exception",
   "process.offUncaughtException": "scr_process_off_uncaught_exception",
   "process.onUnhandledRejection": "scr_process_on_unhandled_rejection",
@@ -990,7 +1059,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   // current fiber — USES_TIMERS_LIB_FNS marks the loop live).
   "async.hop": "scr_await_hop",
   "async.awaitDyn": "scr_await_dyn_value",
-  // encodeURI never throws; the WHATWG base64 globals throw the
+  // encodeURI throws URIError on a lone surrogate; the WHATWG base64 globals throw the
   // catchable DOMException InvalidCharacterError (may-throw), and the
   // zero-argument form always throws ERR_MISSING_ARGS.
   "str.encodeUri": "scr_encode_uri",
@@ -1003,6 +1072,9 @@ export const LIB_FN_SYMS: Record<string, string> = {
   // (catchable SyntaxError) — all may-throw generics over the checked-dynamic tree.
   "dyn.objKeys": "scr_dyn_obj_keys",
   "dyn.forInKeys": "scr_dyn_for_in_keys",
+  "dyn.forInKeyStrings": "scr_dyn_for_in_key_strs",
+  "dyn.forInStable": "scr_dyn_for_in_stable",
+  "dyn.objKeyStrings": "scr_dyn_obj_key_strs",
   "dyn.hasOwn": "scr_dyn_has_own",
   "dyn.propertyIsEnumerable": "scr_dyn_property_is_enumerable",
   "dyn.assign": "scr_dyn_assign",
@@ -1036,7 +1108,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "dyn.bagSet": "scr_dyn_bag_set",
   "dyn.objCreate": "scr_dyn_obj_create",
   "dyn.objCreateWithProperties": "scr_dyn_obj_create_with_properties",
-  "dyn.getPrototype": "scr_dyn_get_prototype",
+  "dyn.getPrototype": "scr_dyn_get_prototype_exposed",
   "dyn.setPrototype": "scr_dyn_set_prototype",
   "dyn.getOwnPropertyNames": "scr_dyn_get_own_property_names",
   "dyn.ownKeys": "scr_dyn_own_keys",
@@ -1055,6 +1127,9 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "regex.resetLastIndex": "scr_regex_reset_last_index",
   "regex.newChecked": "scr_regex_new_checked",
   "regex.replaceCallback": "scr_regex_replace_callback",
+  "regex.groupEquals": "scr_regex_group_eq",
+  "regex.groupNumber": "scr_regex_group_number",
+  "regex.groupParseInt": "scr_regex_group_parse_int",
   // queueMicrotask's checked-dynamic form (borrowed dyn; a non-function
   // throws synchronously), the minted setImmediate value, and the
   // timers/promises immediate — all mark the loop live.
@@ -1064,6 +1139,12 @@ export const LIB_FN_SYMS: Record<string, string> = {
 };
 
 export const USES_TIMERS_LIB_FNS = new Set<string>([
+  "process.emitWarning",
+  "process.emitWarningText",
+  // The wrappers schedule warnings and callbacks on the tick queue.
+  "util.deprecate",
+  "util.callbackify",
+  "util.debuglog",
   "worker.new",
   "worker.parentPort",
   "process.stdio",
@@ -1073,6 +1154,12 @@ export const USES_TIMERS_LIB_FNS = new Set<string>([
   "fetch.requestNew",
   "fetch.abortTimeout",
   "abort.timeout",
+  // EventTarget listeners report their exceptions from a nextTick.
+  "event.targetNew",
+  "abort.controllerNew",
+  "abort.any",
+  "fetch.abortControllerNew",
+  "fetch.abortAny",
   "fetch.streamNew",
   "fetch.streamFrom",
   "readable.new",
@@ -1115,6 +1202,7 @@ export const USES_TIMERS_LIB_FNS = new Set<string>([
   "readable.unpipe",
   "writable.write",
   "writable.writeStr",
+  "console.write",
   "writable.writeU",
   "writable.writeDyn",
   "writable.end",
@@ -1138,6 +1226,7 @@ export const USES_TIMERS_LIB_FNS = new Set<string>([
   "sc.text",
   "sc.json",
   "sc.buffer",
+  "sc.arrayBuffer",
   "net.listen",
   "net.listenCb",
   "net.listenOpts",

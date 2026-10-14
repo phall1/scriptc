@@ -21,6 +21,10 @@ export interface FnCtx {
   /** Bindings belong to this lowering of the body. Generic specializations
    * share checker symbols and AST declarations, but never local storage. */
   hoistedVars: Map<ts.Symbol, IrLocal>;
+  /** The function whose body this context is lowering. Re-entrant
+   * instantiations share that node, so a local must bind in the nearest
+   * copy rather than an outer instantiation of the same declaration. */
+  bodyDecl?: ts.Node;
   hoistedFnDecls: Set<ts.FunctionDeclaration>;
   /** Forward captures waiting for their source declaration to initialize
    * the TDZ box. The declaration's owner retains this entry while nested
@@ -37,6 +41,10 @@ export interface FnCtx {
    * its own closure would be an RC cycle and leak). */
   selfSymbol: ts.Symbol | null;
   selfType: IrType | null;
+  /** Named function expression instantiated as a plain generic. Its inner
+   * name is this function, which has no lifted environment, so references
+   * are a direct closure of `plainSelfName` rather than `selfRef`. */
+  plainSelfName?: string | null;
   /** Await is legal here (async function body). */
   isAsync?: boolean;
   /** Yield is legal here (generator function body): the yield/next value
@@ -62,6 +70,11 @@ export interface FnCtx {
    * through the cleanup regions it crosses. Per function, so a nested
    * function's jumps never bind to enclosing constructs. */
   ctl: { kind: "loop" | "switch" | "block"; labels?: string[] }[];
+  /** Source parameter localId → argument index. Date setters use it to
+   * return the updated scalar to the caller. */
+  paramIndexByLocal?: Map<string, number>;
+  /** Set when a UTC setter assigns a date parameter. */
+  dateWriteback?: { localId: string; index: number };
 }
 
 export function newFnCtx(
@@ -157,6 +170,10 @@ export function captureContextBinding(
   for (let depth = stack.length - 2; depth >= 0; depth--) {
     const origin = bindingInContext(stack[depth]!, symbol);
     if (origin === null) continue;
+    // A nearer instantiation of this same body is still initializing the
+    // local. The hit is the outer copy, or a capture of that copy; the
+    // nearer body must predeclare its own slot.
+    if (symbol !== undefined && symbol !== "arguments" && nearerBodyOwns(stack, depth)) continue;
 
     // references use the backends' box tracing for capture cycles.
     origin.boxed = true;
@@ -193,6 +210,21 @@ export function captureContextBinding(
     return { local: parentEntry, origin, error: null };
   }
   return { local: null, origin: null, error: null };
+}
+
+/** True when a context between the found binding and the use is another
+ * lowering of a body that already appears at or outside the binding.
+ * That nearer copy shares the checker symbol but not the local, and a
+ * plain instantiation cannot thread the outer copy into it. */
+function nearerBodyOwns(stack: FnCtx[], originDepth: number): boolean {
+  for (let j = originDepth + 1; j < stack.length; j++) {
+    const owner = stack[j]!.bodyDecl;
+    if (owner === undefined) continue;
+    for (let k = 0; k <= originDepth; k++) {
+      if (stack[k]!.bodyDecl === owner) return true;
+    }
+  }
+  return false;
 }
 
 export function captureContextArguments(stack: FnCtx[]): IrLocal | null {

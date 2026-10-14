@@ -131,6 +131,8 @@ export function validateModule(mod: IrModule): IrValidationError[] {
   const moduleLoc: SrcLoc = { file: mod.sourceFile, start: 0, end: 0 };
   if (mod.workers !== undefined && typeof mod.workers !== "boolean")
     errors.push({ message: "worker execution mode must be a boolean", loc: moduleLoc });
+  if (mod.lifetimeRegions !== undefined && mod.lifetimeRegions !== true)
+    errors.push({ message: "lifetimeRegions must be true when present", loc: moduleLoc });
   if (mod.workers && mod.lib !== undefined)
     errors.push({
       message: "worker execution requires a native static executable",
@@ -458,6 +460,12 @@ export function validateModule(mod: IrModule): IrValidationError[] {
     }
     if (cls.jsLength !== undefined && (!Number.isSafeInteger(cls.jsLength) || cls.jsLength < 0)) {
       errors.push({ message: `class ${cls.name}: invalid constructor length`, loc: cls.loc });
+    }
+    if (
+      cls.prototypeNames !== undefined &&
+      new Set(cls.prototypeNames).size !== cls.prototypeNames.length
+    ) {
+      errors.push({ message: `class ${cls.name}: duplicate prototype member names`, loc: cls.loc });
     }
     if (
       cls.tracksOwnFields &&
@@ -897,10 +905,13 @@ export function validateModule(mod: IrModule): IrValidationError[] {
         return null;
     }
   };
+  // Inferred string globals can widen to boxed unions during initialization.
+  // Even undefined/null arms use non-null interned boxes, preserving the TDZ sentinel.
+  const tdzPointerKinds = new Set<IrType["kind"]>(["record", "func", "string", "union", "dyn"]);
   for (const g of mod.globals ?? []) {
-    if (g.tdz && g.type.kind !== "record" && g.type.kind !== "func" && g.type.kind !== "dyn") {
+    if (g.tdz && !tdzPointerKinds.has(g.type.kind)) {
       errors.push({
-        message: `TDZ global "${g.name}" must have record, function, or checked-value storage`,
+        message: `TDZ global "${g.name}" must have record, function, string, union, or checked-value storage`,
         loc: noLoc,
       });
     }
@@ -975,6 +986,7 @@ export function validateModule(mod: IrModule): IrValidationError[] {
       classValidation,
       errors,
       mod.workers === true,
+      mod.lifetimeRegions === true,
     );
   }
   return errors;
@@ -992,6 +1004,7 @@ function validateFunction(
   classValidation: ClassValidation,
   errors: IrValidationError[],
   workers: boolean,
+  lifetimeRegions: boolean,
 ): void {
   const locals = new Map(fn.locals.map((l) => [l.id, l]));
   const err = (message: string, loc: SrcLoc) =>
@@ -1609,6 +1622,7 @@ function validateFunction(
           "block",
           "if",
           "while",
+          "for",
         ]);
         if (e.generatorDelegate) {
           if (!fn.generator || fn.async)
@@ -1616,6 +1630,7 @@ function validateFunction(
           allowed.add("return");
           allowed.add("throw");
           allowed.add("runtimeFence");
+          allowed.add("tryCatch");
         }
         if (e.diverges) {
           const last = e.stmts[e.stmts.length - 1];
@@ -1642,6 +1657,16 @@ function validateFunction(
             if (s.kind === "while") {
               expectType(s.cond, BOOL, "seqExpr while condition");
               checkExpr(s.cond);
+              flat(s.body);
+              continue;
+            }
+            if (s.kind === "for") {
+              if (s.init) flat([s.init]);
+              if (s.cond) {
+                expectType(s.cond, BOOL, "seqExpr for condition");
+                checkExpr(s.cond);
+              }
+              if (s.update) flat([s.update]);
               flat(s.body);
               continue;
             }
@@ -1949,7 +1974,19 @@ function validateFunction(
           const want = sig.argTypes[i];
           if (want) expectType(a, want, `regexIntrinsic ${e.method} arg ${i}`);
         });
-        if (e.method === "match" || e.method === "exec") {
+        if (
+          (e.method === "execGroups" || e.method === "execSpans" || e.method === "matchGroups") &&
+          e.args.slice(1).some((mask) => mask.kind !== "numLit")
+        ) {
+          err(`regexIntrinsic ${e.method} masks must be numeric literals`, e.loc);
+        }
+        if (
+          e.method === "match" ||
+          e.method === "exec" ||
+          e.method === "execGroups" ||
+          e.method === "execSpans" ||
+          e.method === "matchGroups"
+        ) {
           // The `string[] | null` union (program-dependent id) — checked
           // by arms, like the libCall case checks process.envGet.
           const def = e.type.kind === "union" ? unions.get(e.type.unionId) : undefined;
@@ -2053,7 +2090,8 @@ function validateFunction(
       case "arrayHas": {
         checkExpr(e.arr);
         checkExpr(e.index);
-        expectType(e.index, F64, "arrayHas index");
+        if (e.index.type.kind !== "f64" && e.index.type.kind !== "string")
+          err(`arrayHas key ${e.index.type.kind} != f64 or string`, e.loc);
         if (!typeEquals(e.type, BOOL)) err(`arrayHas result ${e.type.kind} != bool`, e.loc);
         if (e.arr.type.kind !== "array") {
           err(`arrayHas on non-array ${e.arr.type.kind}`, e.loc);
@@ -2311,9 +2349,15 @@ function validateFunction(
                                                   : e.method === "shift"
                                                     ? { argTypes: [], result: e.type } // union-checked below
                                                     : e.method === "sortValues"
-                                                      ? { argTypes: [F64, null], result: VOID }
+                                                      ? {
+                                                          argTypes: [F64, null, F64, null],
+                                                          result: VOID,
+                                                        }
                                                       : e.method === "sortDense"
-                                                        ? { argTypes: [null, BOOL], result: BOOL }
+                                                        ? {
+                                                            argTypes: [null, BOOL, F64, null],
+                                                            result: BOOL,
+                                                          }
                                                         : { argTypes: [], result: F64 }; // length
         if (
           (e.method === "sortPrimitive" || e.method === "toSortedPrimitive") &&
@@ -2338,6 +2382,29 @@ function validateFunction(
             err(`arrIntrinsic ${e.method} comparator must be (elem, elem) => number`, e.loc);
           if (e.method === "sortDense" && e.args[1]?.kind !== "boolLit")
             err("arrIntrinsic sortDense owned flag must be a boolean literal", e.loc);
+          // A recognized comparator's key order: [order] for numbers,
+          // [order, key reader] for record and class elements.
+          const order = e.args[2];
+          if (order) {
+            if (order.kind !== "numLit" || (order.value !== 1 && order.value !== -1))
+              err(`arrIntrinsic ${e.method} key order must be the literal 1 or -1`, e.loc);
+            const key = e.args[3]?.type;
+            if (
+              elem.kind === "f64"
+                ? key !== undefined
+                : elem.kind !== "record" && elem.kind !== "object"
+            )
+              err(`arrIntrinsic ${e.method} key order on ${elem.kind} elements`, e.loc);
+            if (
+              elem.kind !== "f64" &&
+              (!key ||
+                key.kind !== "func" ||
+                key.params.length !== 1 ||
+                !typeEquals(key.params[0]!, elem) ||
+                key.ret.kind !== "f64")
+            )
+              err(`arrIntrinsic ${e.method} key reader must be (elem) => number`, e.loc);
+          }
         }
         if (e.method === "getNumber" && elem.kind !== "f64") {
           err(`arrIntrinsic getNumber requires f64 elements, got ${elem.kind}`, e.loc);
@@ -2397,7 +2464,14 @@ function validateFunction(
         // slice's indices and splice's count are optional (omitted args
         // omitted from the IR — backends fill the defaults); everything
         // else is exact.
-        const minArgs = e.method === "slice" ? 0 : e.method === "splice" ? 1 : sig.argTypes.length;
+        const minArgs =
+          e.method === "slice"
+            ? 0
+            : e.method === "splice"
+              ? 1
+              : e.method === "sortValues" || e.method === "sortDense"
+                ? 2
+                : sig.argTypes.length;
         if (e.args.length < minArgs || e.args.length > sig.argTypes.length) {
           err(
             `arrIntrinsic ${e.method}: ${e.args.length} args, expected ${sig.argTypes.length}`,
@@ -3075,24 +3149,10 @@ function validateFunction(
         const want = recordValidation.get(shape.id)!.initializationFields;
         const seen = new Set<string>();
         for (const f of e.fields) {
-          if (f.drop || f.overflow) checkExpr(f.value);
+          if (f.overflow) checkExpr(f.value);
           else checkSlotValue(f.value);
           if (seen.has(f.name)) err(`recordLit initializes field "${f.name}" twice`, e.loc);
           seen.add(f.name);
-          if (f.drop) {
-            // A mapping-dropped field (the PromiseSettledResult honest
-            // subset): evaluated, never stored — it must NOT name a
-            // declared field (that would silently drop a real store),
-            // and its value may be any type, void included.
-            if (f.overflow) err(`recordLit drop entry "${f.name}" flagged overflow too`, e.loc);
-            if (want.has(f.name)) {
-              err(
-                `recordLit drop entry "${f.name}" shadows a declared field of shape ${shape.id}`,
-                e.loc,
-              );
-            }
-            continue;
-          }
           if (f.overflow) {
             // Overflow entries exist only on index-signature shapes, name
             // no declared field, and carry the index-value type exactly
@@ -3113,7 +3173,7 @@ function validateFunction(
           if (!ft) err(`shape ${shape.id} has no field "${f.name}"`, e.loc);
           else expectType(f.value, ft, `recordLit field "${f.name}"`);
         }
-        if (e.fields.filter((f) => !f.overflow && !f.drop).length !== shape.fields.length) {
+        if (e.fields.filter((f) => !f.overflow).length !== shape.fields.length) {
           err(`recordLit does not initialize every field of shape ${shape.id}`, e.loc);
         }
         break;
@@ -3712,6 +3772,24 @@ function validateFunction(
       if (e.type.kind !== "void") err("module.tdzCheck must be void", e.loc);
       return;
     }
+    if (
+      e.name === "region.create" ||
+      e.name === "region.enter" ||
+      e.name === "region.leave" ||
+      e.name === "region.release"
+    ) {
+      if (!lifetimeRegions) err(`${e.name} outside a lifetimeRegions module`, e.loc);
+      const takesId = e.name === "region.enter" || e.name === "region.release";
+      if (e.args.length !== (takesId ? 1 : 0))
+        err(`${e.name} takes ${takesId ? "one region id" : "no arguments"}`, e.loc);
+      for (const a of e.args) {
+        checkExpr(a);
+        if (a.type.kind !== "f64") err(`${e.name} id must be f64`, e.loc);
+      }
+      if (e.type.kind !== (e.name === "region.create" ? "f64" : "void"))
+        err(`${e.name} has type ${e.name === "region.create" ? "f64" : "void"}`, e.loc);
+      return;
+    }
     if (e.name === "threads.publish") {
       if (e.args.length !== 1) err("threads.publish takes exactly one argument", e.loc);
       for (const a of e.args) {
@@ -3747,6 +3825,25 @@ function validateFunction(
       if (e.type.kind !== "promise") err("promise.all must be promise-typed", e.loc);
       else if (e.type.inner.kind !== "array" && e.type.inner.kind !== "void") {
         err("promise.all result must be a promise of an array (or void)", e.loc);
+      }
+      return;
+    }
+    if (e.name === "promise.allSettled" || e.name === "promise.any") {
+      if (e.args.length !== 1) err(`${e.name} takes exactly one argument`, e.loc);
+      for (const a of e.args) {
+        checkExpr(a);
+        if (a.type.kind !== "array" || a.type.elem.kind !== "promise") {
+          err(`${a.type.kind} argument to ${e.name} (needs an array of promises)`, a.loc);
+        } else if (e.name === "promise.any" && !typeEquals(a.type.elem, e.type)) {
+          err("promise.any result must be the entries' promise type", e.loc);
+        }
+      }
+      if (e.type.kind !== "promise") err(`${e.name} must be promise-typed`, e.loc);
+      else if (
+        e.name === "promise.allSettled" &&
+        (e.type.inner.kind !== "array" || e.type.inner.elem.kind !== "union")
+      ) {
+        err("promise.allSettled result must be a promise of a settled-record union array", e.loc);
       }
       return;
     }
@@ -3943,6 +4040,25 @@ function validateFunction(
           e.loc,
         );
       }
+      return true;
+    }
+    if (e.fn === "dyn.objEntryPairs") {
+      // Result: the native [string, any][] the backend assembles from the
+      // runtime's owned pair snapshot.
+      const shape =
+        e.type.kind === "array" && e.type.elem.kind === "record"
+          ? records.get(e.type.elem.shapeId)
+          : undefined;
+      const field = (name: string): IrType | undefined =>
+        shape?.fields.find((f) => f.name === name)?.type;
+      const ok =
+        shape !== undefined &&
+        shape.tuple === true &&
+        shape.indexValue === undefined &&
+        shape.fields.length === 2 &&
+        field("0")?.kind === "string" &&
+        field("1")?.kind === "dyn";
+      if (!ok) err(`libCall dyn.objEntryPairs must return a [string, any] tuple array`, e.loc);
       return true;
     }
     if (e.fn === "fetch.streamFrom") {
@@ -4945,6 +5061,15 @@ function validateFunction(
       }
       return true;
     }
+    if (e.fn === "error.aggregateSetErrors" || e.fn === "error.aggregateErrors") {
+      // Receiver: exactly %AggregateError (subclassing is fenced — the
+      // hidden runtime slot admits no other layout).
+      const recv = e.args[0];
+      if (!recv || recv.type.kind !== "object" || recv.type.className !== "%AggregateError") {
+        err(`libCall ${e.fn} receiver must be %AggregateError`, e.loc);
+      }
+      return true;
+    }
     if (e.fn === "error.newDom") {
       if (e.type.kind !== "object" || e.type.className !== "%DOMException") {
         err(`libCall error.newDom must return %DOMException, got ${e.type.kind}`, e.loc);
@@ -5198,6 +5323,7 @@ function validateFunction(
       e.fn !== "emitter.setDefaultMax" &&
       e.fn !== "emitter.setDefaultMaxChk" &&
       e.fn !== "emitter.getDefaultMax" &&
+      e.fn !== "emitter.errorMonitor" &&
       e.fn !== "emitter.checkListener"
     ) {
       // Receiver: an emitter-hierarchy object (the %EventEmitter class
@@ -5398,6 +5524,9 @@ function validateFunction(
     }
   }
 
+  // The yield a `delegate` genResume is checking as its argument.
+  let delegatedYield: IrExpr | null = null;
+
   function checkAsyncExpr(
     e: IrExpr & {
       kind:
@@ -5418,6 +5547,8 @@ function validateFunction(
           err(`await type ${e.type.kind} != promise inner ${e.value.type.inner.kind}`, e.loc);
         }
         if (!fn.async) err("await outside an async function", e.loc);
+        if (e.adopt === true && fn.generator !== undefined)
+          err("returned-promise adoption inside a generator", e.loc);
         break;
       }
       case "yieldExpr": {
@@ -5438,7 +5569,10 @@ function validateFunction(
         }
         // The undefined next-channel has no C value form: such yields are
         // void-typed (statement position only — the frontend fences reads).
-        if (e.captureCompletion) {
+        if (e.delegated) {
+          if (delegatedYield !== e) err("delegated yield outside a delegate resume", e.loc);
+          if (e.type.kind !== "void" || e.captureCompletion) err("invalid delegated yield", e.loc);
+        } else if (e.captureCompletion) {
           if (
             fn.async ||
             e.type.kind !== "dyn" ||
@@ -5464,7 +5598,50 @@ function validateFunction(
           break;
         }
         const genT = e.gen.type;
+        if (e.mode === "delegate") {
+          if (e.arg !== null) {
+            if (e.arg.kind === "yieldExpr" && e.arg.delegated) delegatedYield = e.arg;
+            else err("genResume delegate argument is not a delegated yield", e.loc);
+            checkExpr(e.arg);
+            delegatedYield = null;
+          }
+          const outer = fn.generator;
+          if (outer === undefined || fn.async || genT.async)
+            err("genResume delegate outside a sync generator body", e.loc);
+          else if (
+            genT.nextT.kind !== "undefinedT" &&
+            genT.nextT.kind !== "dyn" &&
+            !typeEquals(genT.nextT, outer.nextT)
+          )
+            err(
+              `genResume delegate into a ${typeKey(genT.nextT)} next-channel from ${typeKey(outer.nextT)}`,
+              e.loc,
+            );
+          if (e.type.kind !== "bool" && e.type.kind !== "record")
+            err(`genResume delegate result ${typeKey(e.type)}`, e.loc);
+          break;
+        }
         if (e.arg !== null) checkExpr(e.arg);
+        if (e.mode === "step" || e.mode === "value" || e.mode === "close") {
+          if (genT.async) err(`genResume ${e.mode} on an async generator`, e.loc);
+          if (e.arg !== null) err(`genResume ${e.mode} with an argument`, e.loc);
+          if (e.mode === "step") {
+            if (genT.nextT.kind !== "undefinedT" && genT.nextT.kind !== "dyn")
+              err(`genResume step on a ${typeKey(genT.nextT)} next-channel`, e.loc);
+            if (e.type.kind !== "bool") err(`genResume step result ${typeKey(e.type)}`, e.loc);
+          } else if (e.mode === "close") {
+            if (e.type.kind !== "void") err(`genResume close result ${typeKey(e.type)}`, e.loc);
+          } else if (
+            (genT.yieldT.kind === "void" || !typeEquals(e.type, genT.yieldT)) &&
+            (genT.retT.kind === "void" || !typeEquals(e.type, genT.retT))
+          ) {
+            err(
+              `genResume value ${typeKey(e.type)} != yield channel ${typeKey(genT.yieldT)}`,
+              e.loc,
+            );
+          }
+          break;
+        }
         if (e.mode === "next") {
           if (e.arg === null) {
             if (genT.nextT.kind !== "undefinedT" && genT.nextT.kind !== "dyn") {

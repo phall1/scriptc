@@ -41,8 +41,8 @@ import {
   reflectClassPrototype,
 } from "./class-prototypes.js";
 import {
+  errorDynamicPropertyWrite,
   errorPropertyRead,
-  errorPropertyWrite,
   errorToStringCall,
   errorToStringMethod,
   refreshErrorPropertyDispatch,
@@ -310,8 +310,10 @@ export function classPropertiesHelper(lowerer: Lowerer, loc: SrcLoc, readOnly = 
   return helper;
 }
 
-/** A for-in presence recheck needs only the live property table, avoiding
- * value conversion or a dispatch branch for every possible member name. */
+/** A for-in presence recheck asks the live property table first, avoiding
+ * value conversion or a dispatch branch for every possible member name.
+ * Declared fields of a compiled class live in its native layout rather
+ * than that table, so a miss rechecks the instance itself. */
 export function classForInHasKey(
   lowerer: Lowerer,
   value: IrExpr,
@@ -335,18 +337,31 @@ export function classForInHasKey(
         {
           kind: "return",
           value: {
-            kind: "libCall",
-            fn: "dyn.hasKey",
-            args: [
-              {
-                kind: "call",
-                callee: classPropertiesHelper(lowerer, loc).name,
-                args: [varRef("value", DYN, loc)],
-                type: DYN,
-                loc,
-              },
-              varRef("key", STRING, loc),
-            ],
+            kind: "logical",
+            op: "||",
+            left: {
+              kind: "libCall",
+              fn: "dyn.hasKey",
+              args: [
+                {
+                  kind: "call",
+                  callee: classPropertiesHelper(lowerer, loc).name,
+                  args: [varRef("value", DYN, loc)],
+                  type: DYN,
+                  loc,
+                },
+                varRef("key", STRING, loc),
+              ],
+              type: BOOL,
+              loc,
+            },
+            right: {
+              kind: "libCall",
+              fn: "dyn.hasKey",
+              args: [varRef("value", DYN, loc), varRef("key", STRING, loc)],
+              type: BOOL,
+              loc,
+            },
             type: BOOL,
             loc,
           },
@@ -578,7 +593,8 @@ export class ClassDynamicDispatch {
   private readonly prototypeIdentityClasses = new Set<string>();
   private readonly instancePrototypes = new Map<string, { fn: IrFunction; classes: Set<string> }>();
   private readonly checkedCasts = new Map<string, { fn: IrFunction; classes: Set<string> }>();
-  private enumeration: IrFunction | null = null;
+  /** The for-in key helpers, by libCall (dyn and native string[] keys). */
+  private readonly enumerations = new Map<"dyn.forInKeys" | "dyn.forInKeyStrings", IrFunction>();
   private readonly enumerationClasses = new Set<string>();
 
   process(lowerer: Lowerer, functions: readonly IrFunction[]): boolean {
@@ -675,6 +691,7 @@ export class ClassDynamicDispatch {
                 expr.fn === "dyn.toString" ||
                 expr.fn === "dyn.stringConstructor" ||
                 expr.fn === "dyn.forInKeys" ||
+                expr.fn === "dyn.forInKeyStrings" ||
                 expr.fn === "dyn.hasKeyComputed" ||
                 expr.fn === "dyn.hasOwnComputed" ||
                 expr.fn === "dyn.propertyIsEnumerableComputed" ||
@@ -1338,27 +1355,35 @@ export class ClassDynamicDispatch {
               loc: expr.loc,
             };
           }
-          if (expr.kind === "libCall" && expr.fn === "dyn.forInKeys") {
-            if (!this.enumeration) {
+          if (
+            expr.kind === "libCall" &&
+            (expr.fn === "dyn.forInKeys" || expr.fn === "dyn.forInKeyStrings")
+          ) {
+            let enumeration = this.enumerations.get(expr.fn);
+            if (!enumeration) {
               const loc = expr.loc;
               const value = varRef("p.0", DYN, loc);
-              this.enumeration = {
-                name: "%dyn.class.forInKeys",
+              enumeration = {
+                name:
+                  expr.fn === "dyn.forInKeys"
+                    ? "%dyn.class.forInKeys"
+                    : "%dyn.class.forInKeyStrings",
                 params: [{ localId: "p.0", name: "value", type: DYN }],
-                returnType: DYN,
+                returnType: expr.type,
                 locals: [{ id: "p.0", name: "value", type: DYN, mutable: false }],
                 body: [{ kind: "return", value: { ...expr, args: [value] }, loc }],
                 loc,
               };
-              this.generated.add(this.enumeration);
-              lowerer.liftedFns.push(this.enumeration);
+              this.enumerations.set(expr.fn, enumeration);
+              this.generated.add(enumeration);
+              lowerer.liftedFns.push(enumeration);
               changed = true;
             }
             return {
               kind: "call",
-              callee: this.enumeration.name,
+              callee: enumeration.name,
               args: expr.args,
-              type: DYN,
+              type: expr.type,
               loc: expr.loc,
             };
           }
@@ -1389,21 +1414,45 @@ export class ClassDynamicDispatch {
                     cond: { kind: "dynTest", test: "symbol", value: key, type: BOOL, loc },
                     then: [
                       {
-                        kind: "exprStmt",
-                        expr: {
-                          ...expr,
-                          args: [
-                            {
-                              kind: "call",
-                              callee: this.propertyBag!.name,
-                              args: [target],
-                              type: DYN,
-                              loc,
-                            },
-                            key,
-                            descriptor,
-                          ],
+                        // A class instance keeps symbol properties in its bag.
+                        // Prototype setup defines those same symbols on a plain
+                        // object while the bag helper is still on the stack;
+                        // entering that helper again overflows a fiber.
+                        kind: "if",
+                        cond: {
+                          kind: "libCall",
+                          fn: "dyn.isTypedRef",
+                          args: [target],
+                          type: BOOL,
+                          loc,
                         },
+                        then: [
+                          {
+                            kind: "exprStmt",
+                            expr: {
+                              ...expr,
+                              args: [
+                                {
+                                  kind: "call",
+                                  callee: this.propertyBag!.name,
+                                  args: [target],
+                                  type: DYN,
+                                  loc,
+                                },
+                                key,
+                                descriptor,
+                              ],
+                            },
+                            loc,
+                          },
+                        ],
+                        else_: [
+                          {
+                            kind: "exprStmt",
+                            expr: { ...expr, args: [target, key, descriptor] },
+                            loc,
+                          },
+                        ],
                         loc,
                       },
                       { kind: "return", value: target, loc },
@@ -1476,7 +1525,7 @@ export class ClassDynamicDispatch {
               reflect ||
               !!computedProbe ||
               computedWrite?.fn === "dyn.keySetComputed" ||
-              computedRead?.key.type.kind === "dyn";
+              (computedRead !== null && computedRead.key.type.kind !== "string");
             const sourceKey = keyValue(
               computedRead?.key ?? (computedWrite ?? computedProbe)!.args[1]!,
             );
@@ -1530,7 +1579,7 @@ export class ClassDynamicDispatch {
                       ...computedProbe,
                       fn:
                         probe === "in"
-                          ? "dyn.hasKey"
+                          ? "dyn.in"
                           : probe === "own"
                             ? "dyn.hasOwn"
                             : "dyn.propertyIsEnumerable",
@@ -1720,7 +1769,12 @@ export class ClassDynamicDispatch {
               args: reflect
                 ? (reflectRead ?? reflectWrite)!.args
                 : computedRead
-                  ? [computedRead.value, computedRead.key]
+                  ? [
+                      computedRead.value,
+                      dynamicKey
+                        ? lowerer.coerceToExpected(computedRead.key, DYN)
+                        : computedRead.key,
+                    ]
                   : (computedWrite ?? computedProbe)!.args,
               type: dispatch.fn.returnType,
               loc: expr.loc,
@@ -2686,20 +2740,21 @@ export class ClassDynamicDispatch {
         changed = true;
       }
     }
-    if (this.enumeration)
+    for (const [fn, enumeration] of this.enumerations)
       for (const plan of this.propertyReceivers(lowerer, false, false)) {
-        if (!plan.info.def.tracksOwnFields || this.enumerationClasses.has(plan.key)) continue;
-        this.enumerationClasses.add(plan.key);
-        const loc = this.enumeration.loc;
+        const classKey = `${fn}:${plan.key}`;
+        if (!plan.info.def.tracksOwnFields || this.enumerationClasses.has(classKey)) continue;
+        this.enumerationClasses.add(classKey);
+        const loc = enumeration.loc;
         const { condition } = this.propertyReceiver(plan, loc);
         const bag = this.readPropertyBagOrEmpty(lowerer, varRef("p.0", DYN, loc), loc);
-        this.enumeration.body.unshift({
+        enumeration.body.unshift({
           kind: "if",
           cond: condition,
           then: [
             {
               kind: "return",
-              value: { kind: "libCall", fn: "dyn.forInKeys", args: [bag], type: DYN, loc },
+              value: { kind: "libCall", fn, args: [bag], type: enumeration.returnType, loc },
               loc,
             },
           ],
@@ -3379,12 +3434,7 @@ export class ClassDynamicDispatch {
     if ((name === "message" || name === "name") && lowerer.isSubclassOf(info.def.name, "%Error"))
       return write
         ? [
-            errorPropertyWrite(
-              lowerer,
-              receiver,
-              lowerer.coerceToExpected(varRef("p.1", DYN, loc), STRING),
-              name,
-            ),
+            errorDynamicPropertyWrite(lowerer, receiver, varRef("p.1", DYN, loc), name),
             { kind: "return", value: null, loc },
           ]
         : [

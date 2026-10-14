@@ -1,4 +1,5 @@
-import { dynUndefinedExpr, nodeThrowExpr } from "../../ir/build.js";
+import { dynUndefinedExpr, nodeThrowExpr, varRef } from "../../ir/build.js";
+import { checkedIterableSpread } from "./checked-iterable-spread.js";
 import { collectClassMethodMutations } from "./class-method-mutations.js";
 import { InternalCompilerError } from "../../errors.js";
 /* Class lowering: shape collection over the single-inheritance graph
@@ -72,7 +73,10 @@ import { lowerObjectConstructor } from "./containers/indexed-objects.js";
 import { bufEncoding } from "./containers/bytes.js";
 import { isSafeToRepeat } from "./expressions/evaluation-safety.js";
 import { lowerSearchParamsNew } from "./builtins/url.js";
+import { lowerFormDataNew } from "./builtins/form-data.js";
+import { lowerFileNew } from "./builtins/file.js";
 import { lowerTextCodecNew } from "./builtins/text-codecs.js";
+import { lowerGcHandleNew } from "./builtins/weak-refs.js";
 import { lowerWorkerNew } from "./builtins/workers.js";
 import {
   unsupportedPackageValueDiag,
@@ -100,7 +104,6 @@ import {
   classSymbolKeyOfSymbol,
   symbolFieldDisplayName,
 } from "./symbol-fields.js";
-import { builtinFenceHintOf } from "./surfaces.js";
 import { lowerHttpAgentNew, lowerHttpServerNew } from "./lower-server.js";
 import {
   ambientNsRootOf,
@@ -114,6 +117,7 @@ import {
 } from "./lower-namespaces.js";
 import { mixinResultBindingClassOf, type MixinInstanceInfo } from "./lower-mixins.js";
 import { hasLexicalPrivateReference, hasStaticThis, rejectStaticThis } from "./static-this.js";
+import { reexportedBuiltinConstructor } from "./builtin-constructor-identity.js";
 import { lowerUrlNew } from "./lower-url.js";
 import { isNativeProxyInitializer, lowerNativeProxy } from "./expressions/native-proxy.js";
 import { classStaticDataFor } from "./class-static-data.js";
@@ -153,6 +157,39 @@ function functionLocalClass(decl: ts.ClassLikeDeclaration): boolean {
     if (ts.isFunctionLike(parent)) return true;
   }
   return false;
+}
+
+/** `extends factory()` — one paren layer included. The emit pass lowers
+ * the call again when collection could not, so a binding whose type named
+ * a class that was not registered yet still becomes the runtime base. */
+function isCallHeritage(expression: ts.Expression): boolean {
+  const inner = ts.isParenthesizedExpression(expression) ? expression.expression : expression;
+  return ts.isCallExpression(inner);
+}
+
+/** Type arguments on `extends Data.Class<{ name: string }>` erase: the
+ * runtime class has no type parameters, and the argument only types the
+ * constructor props. A generic class (`class Box<T>`) still needs its
+ * concrete instantiation, and an unresolved base stays fenced. */
+function heritageTypeArgumentsErase(
+  base: ClassInfo | null | undefined,
+  typeArguments: ts.NodeArray<ts.TypeNode> | undefined,
+): boolean {
+  if (typeArguments === undefined) return false;
+  if (base == null || base.generic) return false;
+  return true;
+}
+
+/** A heritage whose one call signature is a JavaScript function body. */
+function jsFunctionHeritage(lowerer: Lowerer, expression: ts.Expression): boolean {
+  const signatures = lowerer.checker.getCallSignatures(lowerer.typeOf(expression));
+  const source =
+    signatures.length === 1 ? lowerer.checker.signatureDeclaration(signatures[0]!) : undefined;
+  return (
+    source !== undefined &&
+    isJsSourceFile(source.getSourceFile()) &&
+    (ts.isFunctionDeclaration(source) || ts.isFunctionExpression(source))
+  );
 }
 
 export function storedClassValueType(
@@ -466,6 +503,10 @@ export interface ClassInfo {
    * the base chain. The value names which SIDES the class carries. User
    * `extends` of these classes is fenced at the declaration (phase 1). */
   builtinStream?: "r" | "w" | "rw";
+  /** The synthetic LifetimeRegion class (@scriptc/experimental,
+   * lifetime-regions.ts): its constructor is synthesized with the class,
+   * and its methods lower at their call sites. */
+  lifetimeRegion?: true;
   /** This class's own `emit` override in the FORWARDING SHAPE (the one
    * EventEmitter member a subclass may re-declare): never in `methods` —
    * emit calls keep routing through the emitter spoke, which lowers the
@@ -929,6 +970,52 @@ export function builtinStreamInfoOf(
     return false;
   });
   return declared ? (lowerer.classes.get(irName) ?? null) : null;
+}
+
+function assignsThisField(node: ts.Node, field: string): ts.Expression | null {
+  if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken)
+    return null;
+  const left = node.left;
+  if (!ts.isPropertyAccessExpression(left) || left.expression.kind !== ts.SyntaxKind.ThisKeyword)
+    return null;
+  return left.name.text === field ? node.right : null;
+}
+
+function nestedClass(node: ts.Node, owner: ts.Node): boolean {
+  return node !== owner && (ts.isClassDeclaration(node) || ts.isClassExpression(node));
+}
+
+function untypedJsParameter(lowerer: Lowerer, expression: ts.Expression): boolean {
+  let node = expression;
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  if (!ts.isIdentifier(node) || !isJsSourceFile(node.getSourceFile())) return false;
+  const symbol = lowerer.resolveValueSymbol(node);
+  const decl = symbol ? lowerer.checker.valueDeclarationOf(symbol) : undefined;
+  return decl !== undefined && ts.isParameter(decl) && decl.type === undefined;
+}
+
+/** `value = AbsentValue` then `this.value = payload`. The initializer is a
+ * symbol, and a later write stores the published element in the same slot. */
+function jsSymbolFieldHoldsPayload(
+  lowerer: Lowerer,
+  owner: ts.ClassDeclaration | ts.ClassExpression,
+  field: string,
+): boolean {
+  let payload = false;
+  const scan = (node: ts.Node): void => {
+    if (payload || nestedClass(node, owner)) return;
+    const rhs = assignsThisField(node, field);
+    if (rhs) {
+      const flags = lowerer.typeOf(rhs).flags;
+      const anyValue = (flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0;
+      const mapped = lowerer.mapTypeOf(lowerer.typeOf(rhs));
+      const untyped = untypedJsParameter(lowerer, rhs);
+      if (anyValue || untyped || mapped?.kind !== "symbol") payload = true;
+    }
+    node.forEachChild(scan);
+  };
+  scan(owner);
+  return payload;
 }
 
 /** A dictionary lookup may be absent even when its checker type is a
@@ -1762,31 +1849,25 @@ export function collectClassShapeInner(
     let genericBase: ts.ExpressionWithTypeArguments | undefined;
     let callableBase: ClassInfo["callableBase"];
     let factoryBaseExpression: ts.Expression | undefined;
-    const adoptCallableBase = (expression: ts.Expression): boolean => {
-      if (familyMode || inst || mixin) return false;
-      if (lowerer.computedCallableBases.has(decl)) {
-        callableBase = {
-          expression,
-          constructorId: `%g.${className}.base`,
-          prototypeId: `%g.${className}.basePrototype`,
-        };
-        return true;
-      }
-      const signatures = lowerer.checker.getCallSignatures(lowerer.typeOf(expression));
-      const source =
-        signatures.length === 1 ? lowerer.checker.signatureDeclaration(signatures[0]!) : undefined;
-      if (
-        !source ||
-        !isJsSourceFile(source.getSourceFile()) ||
-        !(ts.isFunctionDeclaration(source) || ts.isFunctionExpression(source))
-      )
-        return false;
+    const rememberCallableBase = (expression: ts.Expression): boolean => {
       callableBase = {
         expression,
         constructorId: `%g.${className}.base`,
         prototypeId: `%g.${className}.basePrototype`,
       };
       return true;
+    };
+    // A call heritage whose collection-time lower missed (a binding whose
+    // type named a class not registered yet) is lowered again at emit,
+    // when those classes exist. Emit reads `callableBase.expression`
+    // directly when this declaration is absent from `computedCallableBases`.
+    const adoptCallableBase = (expression: ts.Expression): boolean => {
+      if (familyMode || inst || mixin) return false;
+      if (lowerer.computedCallableBases.has(decl) || isCallHeritage(expression)) {
+        return rememberCallableBase(expression);
+      }
+      if (!jsFunctionHeritage(lowerer, expression)) return false;
+      return rememberCallableBase(expression);
     };
     const ownGenericBase = inst?.family.genericBase;
     if (inst && ownGenericBase) {
@@ -1835,7 +1916,11 @@ export function collectClassShapeInner(
           lowerer.isStdlibGlobal(t.expression.expression, "globalThis")
             ? lowerer.builtinErrorInfoOf(resolved)
             : null;
-        if (globalError && globalError.def.name !== "%DOMException") {
+        if (
+          globalError &&
+          globalError.def.name !== "%DOMException" &&
+          globalError.def.name !== "%AggregateError"
+        ) {
           if (t.typeArguments) lowerer.unsupported("SC1090", t, "extending generic classes");
           base = globalError;
           continue;
@@ -1866,7 +1951,9 @@ export function collectClassShapeInner(
               `extending the namespace member '${t.expression.name.text}' (no class lowering)`,
             );
           }
-          if (t.typeArguments) lowerer.unsupported("SC1090", t, "extending generic classes");
+          if (t.typeArguments && !heritageTypeArgumentsErase(nsBase, t.typeArguments)) {
+            lowerer.unsupported("SC1090", t, "extending generic classes");
+          }
           base = nsBase;
           continue;
         }
@@ -1884,7 +1971,9 @@ export function collectClassShapeInner(
         if (!t.expression.questionDotToken) {
           const propBase = propertyAssignedClassInfoOf(lowerer, memberSym);
           if (propBase) {
-            if (t.typeArguments) lowerer.unsupported("SC1090", t, "extending generic classes");
+            if (t.typeArguments && !heritageTypeArgumentsErase(propBase, t.typeArguments)) {
+              lowerer.unsupported("SC1090", t, "extending generic classes");
+            }
             const baseDecl = propBase.decl;
             if (
               baseDecl != null &&
@@ -1983,6 +2072,15 @@ export function collectClassShapeInner(
           "extending DOMException (its runtime layout carries hidden slots a subclass would overlap — extend Error and set name/code yourself)",
         );
       }
+      // `extends AggregateError`: the errors list is the same kind of
+      // hidden runtime slot.
+      if (lowerer.builtinErrorInfoOf(symbol)?.def.name === "%AggregateError") {
+        lowerer.unsupported(
+          "SC1090",
+          t,
+          "extending AggregateError (its runtime layout carries a hidden errors slot a subclass would overlap — extend Error and keep the list in a field)",
+        );
+      }
       const named =
         (symbol && lowerer.classBySymbol.get(symbol)) ??
         lowerer.builtinErrorInfoOf(symbol) ??
@@ -2025,7 +2123,9 @@ export function collectClassShapeInner(
         base = instBase;
         continue;
       }
-      if (t.typeArguments) lowerer.unsupported("SC1090", t, "extending generic classes");
+      if (t.typeArguments && !heritageTypeArgumentsErase(named, t.typeArguments)) {
+        lowerer.unsupported("SC1090", t, "extending generic classes");
+      }
       base = named;
       if (!base) {
         if (adoptCallableBase(t.expression)) continue;
@@ -2679,6 +2779,13 @@ export function collectClassShapeInner(
           lowerer.dynConvertible(type)
         )
           type = DYN;
+        if (
+          isJsSourceFile(member.getSourceFile()) &&
+          !member.type &&
+          type.kind === "symbol" &&
+          jsSymbolFieldHoldsPayload(lowerer, decl, member.name.text)
+        )
+          type = DYN;
         // JS permits reads before a constructor's first assignment even
         // when its inferred field type omits undefined.
         if (isJsSourceFile(member.getSourceFile()) && !member.initializer && type.kind !== "dyn") {
@@ -2715,6 +2822,12 @@ export function collectClassShapeInner(
           // JS dyn redeclaration resets the existing slot to undefined.
           // Other bare or type-changing redeclarations keep the fence.
           const baseType = fields.get(member.name.text)!;
+          // `message = this.reason.message` on an Error subclass. The
+          // inherited slot is string; a schema reason still types the
+          // read as unknown. Keep the string slot and check the value.
+          if (member.initializer && baseType.kind === "string" && type.kind === "dyn") {
+            type = baseType;
+          }
           if ((member.initializer || type.kind === "dyn") && typeEquals(type, baseType)) {
             fieldOrder.push({
               name: member.name.text,
@@ -3872,6 +3985,10 @@ export function collectClassShapeInner(
             .map((f) => ({ name: f.name, type: f.type })),
         ],
         ...(methods.size > 0 ? { methods: [...methods.keys()] } : {}),
+        ...((): { prototypeNames?: string[] } => {
+          const names = classPrototypeNames(decl);
+          return names.length > 0 ? { prototypeNames: names } : {};
+        })(),
         ...(abstractClass ? { abstract: true as const } : {}),
         ...((): { abstractMethods?: string[] } => {
           const am = [...methods.entries()].filter(([, s]) => s.abstract === true).map(([n]) => n);
@@ -6603,6 +6720,37 @@ function lowerClassCtorInner(lowerer: Lowerer, info: ClassInfo): IrFunction {
   }
 }
 
+/** The string keys a class declaration puts on its prototype: concrete
+ * instance methods and accessors with literal names. Symbol-keyed,
+ * private, static and abstract members are not prototype string keys. */
+function classPrototypeNames(decl: ts.ClassLikeDeclaration): string[] {
+  const names: string[] = [];
+  for (const member of decl.members) {
+    if (
+      !ts.isMethodDeclaration(member) &&
+      !ts.isGetAccessorDeclaration(member) &&
+      !ts.isSetAccessorDeclaration(member)
+    )
+      continue;
+    if (
+      ts
+        .getModifiers(member)
+        ?.some(
+          (m) => m.kind === ts.SyntaxKind.StaticKeyword || m.kind === ts.SyntaxKind.AbstractKeyword,
+        )
+    )
+      continue;
+    const name = member.name;
+    let text: string | null = null;
+    if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) text = name.text;
+    else if (ts.isNumericLiteral(name)) text = String(Number(name.text));
+    else if (ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression))
+      text = name.expression.text;
+    if (text !== null && !names.includes(text)) names.push(text);
+  }
+  return names;
+}
+
 /** The lowered method-map name of a class member: identifier text, a
  * COMPUTED name that folds to one compile-time string
  * (foldedStringKeyOf — the object-literal computed-key machinery
@@ -7507,44 +7655,48 @@ export function superCallStmt(
     type: { kind: "object", className: info.def.name },
     loc,
   };
-  if (info.callableBase)
+  if (info.callableBase) {
+    // The derived object does not embed the runtime base's layout, so the
+    // base is constructed on its own instance and its own properties are
+    // copied here. Calling the boxed class throws "without new".
+    const base: IrExpr = info.localClass
+      ? {
+          kind: "libCall",
+          fn: "dyn.getPrototype",
+          args: [
+            {
+              kind: "dynFrom",
+              value: {
+                kind: "fieldGet",
+                obj: thisRef,
+                className: info.def.name,
+                field: `%classEnvironment:${info.def.name}`,
+                type: { kind: "classval", className: info.def.name },
+                loc,
+              },
+              type: DYN,
+              loc,
+            },
+          ],
+          type: DYN,
+          loc,
+        }
+      : { kind: "varRef", localId: info.callableBase.constructorId, type: DYN, loc };
     return {
       kind: "exprStmt",
       expr: {
         kind: "libCall",
-        fn: "dyn.classSuper",
+        fn: "dyn.assign",
         args: [
-          info.localClass
-            ? {
-                kind: "libCall",
-                fn: "dyn.getPrototype",
-                args: [
-                  {
-                    kind: "dynFrom",
-                    value: {
-                      kind: "fieldGet",
-                      obj: thisRef,
-                      className: info.def.name,
-                      field: `%classEnvironment:${info.def.name}`,
-                      type: { kind: "classval", className: info.def.name },
-                      loc,
-                    },
-                    type: DYN,
-                    loc,
-                  },
-                ],
-                type: DYN,
-                loc,
-              }
-            : { kind: "varRef", localId: info.callableBase.constructorId, type: DYN, loc },
           lowerer.coerceToExpected(thisRef, DYN),
-          args[0]!,
+          checkedClassConstructionPacked(lowerer, base, args[0]!, loc),
         ],
-        type: VOID,
+        type: DYN,
         loc,
       },
       loc,
     };
+  }
   if (base.builtinError) {
     // super(message) into the runtime-provided Error constructor: stamps
     // name/message on the (already-allocated) object. Receiver + message
@@ -7843,6 +7995,66 @@ function inheritsBuiltinStreamCtor(lowerer: Lowerer, info: ClassInfo): boolean {
 /** Preserve argument evaluation order and option presence through builtin
  * and inherited Error constructors. Checked-dynamic conversion retains
  * Error identity and distinguishes a missing cause from undefined. */
+/** `new AggregateError(errors, message, options)` in the spec's order:
+ * the message and cause install first, then `errors` iterates (a
+ * non-iterable throws out of the constructor). */
+function aggregateErrorConstructor(lowerer: Lowerer, loc: SrcLoc): string {
+  const name = "%aggregate.new";
+  if (lowerer.liftedFns.some((fn) => fn.name === name)) return name;
+  const type: IrType = { kind: "object", className: "%AggregateError" };
+  const context = newFnCtx(false, null, null, type);
+  lowerer.fnStack.push(context);
+  try {
+    const params = ["errors", "message", "options"].map((id) => ({
+      localId: id,
+      name: id,
+      type: DYN,
+    }));
+    const error = varRef("error", type, loc);
+    const list = checkedIterableSpread(lowerer, varRef("errors", DYN, loc), "", loc);
+    lowerer.liftedFns.push({
+      name,
+      params,
+      returnType: type,
+      locals: [
+        ...params.map((p) => ({ id: p.localId, name: p.name, type: DYN, mutable: false })),
+        { id: "error", name: "error", type, mutable: false },
+        ...context.locals,
+      ],
+      body: [
+        {
+          kind: "varDecl",
+          localId: "error",
+          init: {
+            kind: "libCall",
+            fn: "error.newAggregate",
+            args: [varRef("message", DYN, loc), varRef("options", DYN, loc)],
+            type,
+            loc,
+          },
+          loc,
+        },
+        {
+          kind: "exprStmt",
+          expr: {
+            kind: "libCall",
+            fn: "error.aggregateSetErrors",
+            args: [error, list],
+            type: VOID,
+            loc,
+          },
+          loc,
+        },
+        { kind: "return", value: error, loc },
+      ],
+      loc,
+    });
+  } finally {
+    lowerer.fnStack.pop();
+  }
+  return name;
+}
+
 export function errorConstructorArgs(
   lowerer: Lowerer,
   args: readonly ts.Expression[],
@@ -7960,6 +8172,96 @@ function assignedThisFieldType(lowerer: Lowerer, expr: ts.NewExpression): IrType
   return lowerer.currentClass?.fields.get(parent.left.name.text) ?? null;
 }
 
+/** `new RegExp(pattern, flags?)` and a const re-export of that constructor.
+ * The pattern compiles eagerly, so bad input throws Node's catchable
+ * SyntaxError at construction. Checked arguments retain native regexes. */
+function lowerStdlibRegExpNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
+  const loc = locOf(expr);
+  const args = expr.arguments ?? [];
+  if (args.length > 2) {
+    lowerer.noLowering(`new RegExp with ${args.length} arguments`, expr);
+  }
+  if (args.some(ts.isSpreadElement)) lowerer.noLowering("new RegExp with spread arguments", expr);
+  const values = args.map((arg) => lowerer.lowerExpr(arg));
+  if (values.some((value) => value.type.kind === "dyn" || value.type.kind === "regex")) {
+    const checked = [0, 1].map((index): IrExpr =>
+      values[index] ? lowerer.coerceInto(args[index]!, values[index]!, DYN) : dynUndefinedExpr(loc),
+    );
+    return {
+      kind: "libCall",
+      fn: "regex.newChecked",
+      args: checked,
+      type: { kind: "regex" },
+      loc,
+    };
+  }
+  const strArg = (a: ts.Expression | undefined, what: string): IrExpr => {
+    if (!a) return { kind: "strLit", value: "", type: STRING, loc };
+    const v = values[args.indexOf(a)]!;
+    const empty: IrExpr = { kind: "strLit", value: "", type: STRING, loc };
+    if (v.type.kind === "undefinedT") {
+      if (v.kind === "unitLit") return empty;
+      return {
+        kind: "seqExpr",
+        stmts: [{ kind: "exprStmt", expr: lowerer.coerceToExpected(v, DYN), loc: locOf(a) }],
+        result: empty,
+        type: STRING,
+        loc,
+      };
+    }
+    if (
+      v.type.kind === "union" &&
+      lowerer.unions
+        .get(v.type.unionId)
+        ?.arms.every((arm) => arm.kind === "string" || arm.kind === "undefinedT")
+    ) {
+      return { kind: "nullish", left: v, right: empty, type: STRING, loc: locOf(a) };
+    }
+    if (v.type.kind !== "string") {
+      lowerer.noLowering(
+        `new RegExp with a '${lowerer.fmt(v.type)}' ${what}`,
+        a,
+        "string or undefined arguments are the lowered form (a RegExp copy or ToString coercion has no lowering)",
+      );
+    }
+    return v;
+  };
+  const pattern = strArg(args[0], "pattern");
+  const flags = strArg(args[1], "flags argument");
+  return {
+    kind: "libCall",
+    fn: "regex.new",
+    args: [pattern, flags],
+    type: { kind: "regex" },
+    loc,
+  };
+}
+
+/** Effect's named-zone constructor: `new Intl.DateTimeFormat("en-US", options)`.
+ * The formatter is a dyn handle. Host zoneinfo supplies the offset;
+ * resolvedOptions and formatToParts run at the call. */
+function lowerIntlDateTimeFormatNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
+  const loc = locOf(expr);
+  const args = expr.arguments ?? [];
+  if (args.length !== 2 || args.some(ts.isSpreadElement)) {
+    lowerer.noLowering(
+      "new Intl.DateTimeFormat",
+      expr,
+      'the supported form is new Intl.DateTimeFormat("en-US", options) with timeZoneName ' +
+        '"longOffset" and numeric calendar fields; the offset comes from host zoneinfo',
+    );
+  }
+  const locale = lowerer.coerceInto(args[0]!, lowerer.lowerExpr(args[0]!), DYN);
+  const options = lowerer.coerceInto(args[1]!, lowerer.lowerExpr(args[1]!), DYN);
+  return {
+    kind: "libCall",
+    fn: "intl.dateTimeFormatNew",
+    args: [locale, options],
+    type: DYN,
+    loc,
+  };
+}
+
 export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
   const loc = locOf(expr);
   const worker = lowerWorkerNew(lowerer, expr);
@@ -7974,6 +8276,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
   const intl = ts.isPropertyAccessExpression(intlConstructor)
     ? lowerer.stdlibGlobalMember(intlConstructor, "Intl")
     : null;
+  if (intl === "DateTimeFormat") return lowerIntlDateTimeFormatNew(lowerer, expr);
   if (intl && intl !== "Segmenter")
     lowerer.noLowering(
       `new Intl.${intl}`,
@@ -8083,15 +8386,6 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     });
     const result: IrExpr = { kind: "libCall", fn: "intl.segmenterNew", args: [], type: DYN, loc };
     return stmts.length ? { kind: "seqExpr", stmts, result, type: DYN, loc } : result;
-  }
-  const consoleCtor = ts.isIdentifier(expr.expression)
-    ? lowerer.builtinImportOf(expr.expression)
-    : ts.isPropertyAccessExpression(expr.expression) &&
-        lowerer.builtinNamespaceModuleOf(expr.expression.expression) === "console"
-      ? { module: "console", member: expr.expression.name.text }
-      : null;
-  if (consoleCtor?.module === "console" && consoleCtor.member === "Console") {
-    lowerer.noLowering("new console.Console", expr, builtinFenceHintOf("console", "Console"));
   }
   // A package declaration without a compiled constructor cannot provide
   // a runtime value. Report the package at the construction site.
@@ -8299,6 +8593,20 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         loc,
       };
     }
+    if (errInfo && errInfo.def.name === "%AggregateError") {
+      const args = expr.arguments ?? [];
+      if (args.length > 3 || args.some(ts.isSpreadElement)) {
+        lowerer.noLowering(`new AggregateError with this argument list`, expr);
+      }
+      const errors = args[0] ? lowerer.lowerExprExpecting(args[0], DYN) : dynUndefinedExpr(loc);
+      return {
+        kind: "call",
+        callee: aggregateErrorConstructor(lowerer, loc),
+        args: [errors, ...lowerer.errorConstructorArgs(args.slice(1), loc, expr)],
+        type: { kind: "object", className: "%AggregateError" },
+        loc,
+      };
+    }
     if (errInfo) {
       const args = lowerer.errorConstructorArgs(expr.arguments ?? [], loc, expr);
       return {
@@ -8341,67 +8649,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     // so bad input throws Node's catchable SyntaxError at construction.
     // Checked arguments retain native regexes and perform runtime coercion.
     if (symbol && symbol.name === "RegExp" && lowerer.isStdlibSymbol(symbol)) {
-      const args = expr.arguments ?? [];
-      if (args.length > 2) {
-        lowerer.noLowering(`new RegExp with ${args.length} arguments`, expr);
-      }
-      if (args.some(ts.isSpreadElement))
-        lowerer.noLowering("new RegExp with spread arguments", expr);
-      const values = args.map((arg) => lowerer.lowerExpr(arg));
-      if (values.some((value) => value.type.kind === "dyn" || value.type.kind === "regex")) {
-        const checked = [0, 1].map((index): IrExpr =>
-          values[index]
-            ? lowerer.coerceInto(args[index]!, values[index]!, DYN)
-            : dynUndefinedExpr(loc),
-        );
-        return {
-          kind: "libCall",
-          fn: "regex.newChecked",
-          args: checked,
-          type: { kind: "regex" },
-          loc,
-        };
-      }
-      const strArg = (a: ts.Expression | undefined, what: string): IrExpr => {
-        if (!a) return { kind: "strLit", value: "", type: STRING, loc };
-        const v = values[args.indexOf(a)]!;
-        const empty: IrExpr = { kind: "strLit", value: "", type: STRING, loc };
-        if (v.type.kind === "undefinedT") {
-          if (v.kind === "unitLit") return empty;
-          return {
-            kind: "seqExpr",
-            stmts: [{ kind: "exprStmt", expr: lowerer.coerceToExpected(v, DYN), loc: locOf(a) }],
-            result: empty,
-            type: STRING,
-            loc,
-          };
-        }
-        if (
-          v.type.kind === "union" &&
-          lowerer.unions
-            .get(v.type.unionId)
-            ?.arms.every((arm) => arm.kind === "string" || arm.kind === "undefinedT")
-        ) {
-          return { kind: "nullish", left: v, right: empty, type: STRING, loc: locOf(a) };
-        }
-        if (v.type.kind !== "string") {
-          lowerer.noLowering(
-            `new RegExp with a '${lowerer.fmt(v.type)}' ${what}`,
-            a,
-            "string or undefined arguments are the lowered form (a RegExp copy or ToString coercion has no lowering)",
-          );
-        }
-        return v;
-      };
-      const pattern = strArg(args[0], "pattern");
-      const flags = strArg(args[1], "flags argument");
-      return {
-        kind: "libCall",
-        fn: "regex.new",
-        args: [pattern, flags],
-        type: { kind: "regex" },
-        loc,
-      };
+      return lowerStdlibRegExpNew(lowerer, expr);
     }
     if (symbol && symbol.name === "URL" && lowerer.isStdlibSymbol(symbol)) {
       return lowerUrlNew(lowerer, expr);
@@ -8411,10 +8659,19 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     if (symbol && symbol.name === "URLSearchParams" && lowerer.isStdlibSymbol(symbol)) {
       return lowerSearchParamsNew(lowerer, expr, loc);
     }
-    // Date's read-only value slice: store the constructor's TimeClip'd
-    // epoch milliseconds as the scalar date kind. That is sufficient
-    // for every getter and toISOString; identity and setters stay
-    // fenced, so copying the scalar cannot create an observable lie.
+    if (identifier.text === "FormData" && isJsSourceFile(expr.getSourceFile())) {
+      const declarations = symbol ? lowerer.checker.declarationsOf(symbol) : [];
+      const userDeclared = declarations.some((decl) => !lowerer.isStdlibFile(decl.getSourceFile()));
+      if (!userDeclared) return lowerFormDataNew(lowerer, expr);
+    }
+    if (identifier.text === "File" && isJsSourceFile(expr.getSourceFile())) {
+      const declarations = symbol ? lowerer.checker.declarationsOf(symbol) : [];
+      const userDeclared = declarations.some((decl) => !lowerer.isStdlibFile(decl.getSourceFile()));
+      if (!userDeclared) return lowerFileNew(lowerer, expr);
+    }
+    // TypeScript stores the TimeClip scalar. JavaScript stores a mutable
+    // native date, so a UTC setter updates that same handle. Copying the
+    // scalar still cannot pretend to be a shared object.
     if (symbol && symbol.name === "Date" && lowerer.isStdlibSymbol(symbol)) {
       const args = expr.arguments ?? [];
       if (args.some(ts.isSpreadElement) || args.length > 1) {
@@ -8485,6 +8742,13 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         type: decT,
         loc,
       };
+    }
+    if (
+      symbol &&
+      (symbol.name === "WeakRef" || symbol.name === "FinalizationRegistry") &&
+      lowerer.isStdlibSymbol(symbol)
+    ) {
+      return lowerGcHandleNew(lowerer, expr, symbol.name);
     }
     if (
       symbol &&
@@ -9093,6 +9357,13 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         lowerer.unsupported("SC1090", expr, hint);
       }
     }
+  }
+  // `new RegExp.RegExp(source, flags)` — a const re-export of the global
+  // constructor. The direct `new RegExp` path above never sees the
+  // namespace member, so construct with the same libCall instead of the
+  // indirect native-constructor fence.
+  if (reexportedBuiltinConstructor(lowerer, expr.expression) === "RegExp") {
+    return lowerStdlibRegExpNew(lowerer, expr);
   }
   // Checked construction supports emitted classes and builtin typed arrays.
   const callee = tryLowerExpression(lowerer, expr.expression);

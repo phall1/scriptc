@@ -34,15 +34,6 @@ fenced.ts:28:15 - error SC2020: 'Response.type' is typed by @types/node but has 
 
   hint: the member is outside the native static handle projection
 
-fenced.ts:29:3 - error SC2020: 'Response.clone' is typed by @types/node but has no scriptc lowering yet
-
-  28 |   console.log(response.type);
-  29 |   response.clone();
-     |   ^~~~~~~~~~~~~~
-  30 | }
-
-  hint: the native fetch runtime does not implement this Response operation
-
 fenced.ts:32:21 - error SC2020: 'ReadableStream.from() over Set<number> iterables' is part of the standard library types but has no scriptc lowering yet
 
   31 | void inspectResponse;
@@ -57,36 +48,34 @@ fenced.ts:39:1 - error SC2020: 'fs.watchFile' is typed by @types/node but has no
   38 | import { win32 } from "path";
   39 | watchFile("x", () => {});
      | ^~~~~~~~~~~~~~~~~~~~~~~~
-  40 | console.log(cpus().length);
+  40 | setPriority(0);
 
   hint: the type checker sees everything @types/node declares, but only the supported surface compiles (https://scriptc.dev/limitations)
 
-fenced.ts:40:13 - error SC2020: 'CpuInfo[].length' is part of the standard library types but has no scriptc lowering yet
+fenced.ts:40:1 - error SC2020: 'os.setPriority' is typed by @types/node but has no scriptc lowering yet
 
   39 | watchFile("x", () => {});
-  40 | console.log(cpus().length);
-     |             ^~~~~~~~~~~~~
+  40 | setPriority(0);
+     | ^~~~~~~~~~~~~~
   41 | console.log(win32.sep);
 
-  hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
+  hint: the type checker sees everything @types/node declares, but only the supported surface compiles (https://scriptc.dev/limitations)
 
 fenced.ts:41:13 - error SC2020: 'PlatformPath.sep' is typed by @types/node but has no scriptc lowering yet
 
-  40 | console.log(cpus().length);
+  40 | setPriority(0);
   41 | console.log(win32.sep);
      |             ^~~~~~~~~
   42 | /* URL getters and serialization lower under @types/node, but object-URL
 
   hint: the type checker sees everything @types/node declares, but only the supported surface compiles (https://scriptc.dev/limitations)
 
-fenced.ts:47:13 - error SC2020: 'URL.createObjectURL' is typed by @types/node but has no scriptc lowering yet
+fenced.ts:47:13 - error SC1090: method calls like 'URL.createObjectURL' is not supported yet
 
   46 | const u = new URL("https://example.com/x?a=1");
   47 | console.log(URL.createObjectURL(new Blob(["data"])));
      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   48 | u.searchParams.get("a");
-
-  hint: protocol, origin, username, password, pathname, href, host, hostname, port, search, hash, searchParams, toString(), and toJSON() are the supported URL members
 
 fenced.ts:53:21 - error SC2020: 'deflateSync with these options' is part of the standard library types but has no scriptc lowering yet
 
@@ -213,3 +202,12 @@ fenced.ts:89:22 - error SC2020: 'ReadableStream.tee' is typed by @types/node but
   90 | }
 
   hint: this operation is outside the native readable-stream implementation
+
+fenced.ts:95:23 - error SC2020: 'util.callbackify into a callback whose error parameter excludes null' is part of the standard library types but has no scriptc lowering yet
+
+  94 | import { callbackify } from "node:util";
+  95 | const callbackified = callbackify(async (n: number) => n);
+     |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  96 | void callbackified;
+
+  hint: Node calls back with a null error on success; type the binding's callback as (err: NodeJS.ErrnoException | null, ...) => void

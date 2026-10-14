@@ -83,7 +83,7 @@ function mod(...functions: IrFunction[]): IrModule {
 }
 function body(module: IrModule, name: string, bits: 32 | 64 = 64): string {
   expect(validateModule(module)).toEqual([]);
-  const match = new RegExp(`^define internal [^\\n]*@${name}\\([^]*?^}`, "m").exec(
+  const match = new RegExp(`^define internal [^\\n]*@${name}(?:\\.i32)?\\([^]*?^}`, "m").exec(
     emitLlvmModule(module, { pointerBits: bits }),
   );
   expect(match, name).not.toBeNull();
@@ -452,10 +452,10 @@ test("string comparisons decide identity, lengths and leading bytes before the r
       type: BOOL,
       loc,
     });
-  const same = fn("same", [], {
+  const same = fn("same", ["a", "b"], {
     kind: "strEq",
-    left: str("a"),
-    right: str("b"),
+    left: { kind: "varRef", localId: "a", type: STRING, loc },
+    right: { kind: "varRef", localId: "b", type: STRING, loc },
     negated: false,
     type: BOOL,
     loc,
@@ -463,7 +463,7 @@ test("string comparisons decide identity, lengths and leading bytes before the r
   for (const bits of [32, 64] as const) {
     const ir = emitLlvmModule(mod(order(false), order(true), same), { pointerBits: bits });
     const helper = (name: string) =>
-      new RegExp(`^define internal [^\\n]*@${name}\\([^]*?^}`, "m").exec(ir)![0];
+      new RegExp(`^define internal [^\\n]*@${name}(?:\\.i32)?\\([^]*?^}`, "m").exec(ir)![0];
     const eq = helper("sc_str_eq");
     expect(eq).toContain("icmp eq ptr %a, %b");
     expect(eq).toMatch(/icmp eq i(32|64) %alen, %blen/);

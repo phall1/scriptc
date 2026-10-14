@@ -10,6 +10,7 @@ import {
   type IrParam,
   type IrStmt,
   type SrcLoc,
+  VOID,
   canBoxFuncIntoDyn,
   typeEquals,
 } from "../../ir/ir.js";
@@ -18,6 +19,7 @@ import { PoisonError, jsFuncNameOf, newFnCtx } from "./lowerer.js";
 import { enforceLibBoundary, lowerSurplusCalls } from "./lib-boundary.js";
 import { returnsOnlyThis } from "./lower-classes.js";
 import { declSymbolOf } from "./lower-modules.js";
+import { jsFunctionReceivesProperties } from "./binding-analysis.js";
 import {
   hasExplicitJsDocReturn,
   producesConstructor,
@@ -83,6 +85,7 @@ export function lowerNestedFunctionDecl(lowerer: Lowerer, stmt: ts.FunctionDecla
   // BEFORE lowerLambda lets a sibling lowered from that body capture this
   // local's eventual box. The local object may become boxed while either
   // body lowers; backends inspect its final shape when emitting varDecl.
+  const receivesProperties = jsFunctionReceivesProperties(lowerer, stmt);
   const local = lowerer.declareLocal(stmt.name, stmt.name.text, funcType, true);
   let declared = false;
   for (let i = lowerer.activeStmtLists.length - 1; i >= 0; i--) {
@@ -98,17 +101,41 @@ export function lowerNestedFunctionDecl(lowerer: Lowerer, stmt: ts.FunctionDecla
     );
   }
   const init = lowerer.lowerLambda(stmt);
+  // `function Workflow() {}` then `Object.assign(Workflow, options)`:
+  // the properties live on that function. A static function slot cannot
+  // hold them, so the binding is the boxed function those writes mutate.
+  const boxed =
+    receivesProperties &&
+    init.type.kind === "func" &&
+    canBoxFuncIntoDyn(
+      init.type,
+      (id) => lowerer.shapes.get(id),
+      (id) => lowerer.unions.get(id),
+    );
   // Body inference may settle a JS return differently from the initial
   // checker signature. Publish that same ABI on the hoisted binding and
-  // every mutable capture of it before callers are lowered.
-  if (init.type.kind === "func" && !typeEquals(local.type, init.type)) {
-    local.type = init.type;
-    for (const fn of lowerer.liftedFns)
+  // every mutable capture of it before callers are lowered. A function
+  // that receives properties publishes the boxed value instead.
+  const published = boxed ? DYN : init.type.kind === "func" ? init.type : null;
+  if (published && !typeEquals(local.type, published)) {
+    local.type = published;
+    for (const fn of lowerer.liftedFns) {
       for (const capture of fn.captures ?? []) {
-        if (capture.localId === local.id) capture.type = init.type;
+        if (capture.localId !== local.id) continue;
+        capture.type = published;
+        // Capturing allocated this slot at the pre-property function
+        // type. The param and that local are one box; leaving the local
+        // behind fails validation (`capture local has the wrong type`).
+        for (const slot of fn.locals) {
+          if (slot.id === capture.localId) slot.type = published;
+        }
       }
+    }
   }
-  return { kind: "assign", localId: local.id, value: init, loc: locOf(stmt) };
+  const value = boxed
+    ? { kind: "dynFrom" as const, value: init, type: DYN, loc: init.loc }
+    : init;
+  return { kind: "assign", localId: local.id, value, loc: locOf(stmt) };
 }
 
 /** Install the hidden arguments binding, or clone a source rest pack
@@ -285,6 +312,11 @@ export function lowerLambda(
         : null;
     const { params, prologue } = lowerer.declareParams(node.parameters, shapes);
     if (receiver) prologue.unshift(receiver);
+    // The inner name of `function loop() {}` is visible to nested
+    // functions. Direct calls use selfRef; a nested `loop()` captures this
+    // local, which holds the running closure.
+    const selfLocal =
+      selfSymbol && nameIdent ? lowerer.declareLocal(nameIdent, baseName, funcType, false) : null;
     declareFunctionArguments(
       lowerer,
       node,
@@ -322,10 +354,14 @@ export function lowerLambda(
           body = [lowerer.lowerExprStatement(stripped)];
         } else {
           const value = lowerer.lowerExpr(bodyExpr);
+          // `async () => p` with a void result still resolves the
+          // function's promise with p (its settlement, rejections included).
           body =
             value.kind === "unitLit"
               ? []
-              : [{ kind: "exprStmt", expr: value, loc: locOf(node.body!) }];
+              : isAsync && value.type.kind === "promise"
+                ? [lowerer.adoptingReturn(value, VOID, (e) => e)]
+                : [{ kind: "exprStmt", expr: value, loc: locOf(node.body!) }];
         }
       } else {
         // Concise and block bodies use the same destination layout for
@@ -339,7 +375,7 @@ export function lowerLambda(
         // thenable into the function's own promise — lowerReturnValue's
         // await-through, applied to the implicit return.
         if (isAsync && value.type.kind === "promise" && bodyReturn.kind !== "promise") {
-          value = { kind: "awaitExpr", value, type: value.type.inner, loc: value.loc };
+          value = lowerer.returnedPromiseAwait(value);
         }
         body =
           value.type.kind === "void" && lowerer.wrappedUndefined(bodyReturn, locOf(node.body!))
@@ -367,6 +403,15 @@ export function lowerLambda(
       );
       funcType = { ...funcType, ret: bodyReturn };
       fnCtx.returnType = bodyReturn;
+    }
+    if (selfLocal) {
+      selfLocal.type = funcType;
+      body.unshift({
+        kind: "varDecl",
+        localId: selfLocal.id,
+        init: { kind: "selfRef", type: funcType, loc },
+        loc,
+      });
     }
     body = [...prologue, ...body];
     // Bare-expression bodies never pass through lowerStmts, so the
@@ -452,6 +497,7 @@ export function lowerFunction(lowerer: Lowerer, decl: ts.FunctionDeclaration): I
       ? lowerer.genBodyReturnType(sig.returnType)
       : lowerer.bodyReturnType(sig.isAsync === true, sig.returnType);
   const ctx = newFnCtx(false, null, null, bodyReturn);
+  ctx.bodyDecl = decl;
   ctx.isAsync = sig.isAsync === true;
   if (sig.generator !== undefined) ctx.generator = sig.generator;
   const diagsBefore = lowerer.diags.length;

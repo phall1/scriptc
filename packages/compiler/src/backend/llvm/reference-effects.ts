@@ -23,6 +23,9 @@ export function preservesRegexInputs(method: string): boolean {
   switch (method) {
     case "test":
     case "exec":
+    case "execGroups":
+    case "execSpans":
+    case "matchGroups":
     case "match":
     case "search":
     case "matchAll":
@@ -91,7 +94,6 @@ function expressionPreservesEdges(
     case "strEq":
     case "strCmp":
     case "arrayGet":
-    case "arrayHas":
     case "arrayState":
     case "unionEq":
     case "unionFuncEq":
@@ -115,6 +117,9 @@ function expressionPreservesEdges(
       );
     case "virtualCall":
       return virtualCall?.(e) ?? false;
+    case "arrayHas":
+      // A prototype Proxy's has trap can mutate references during string-key queries.
+      return e.index.type.kind !== "string";
     // A module binding's TDZ check reads its initialization flag and may
     // throw; it never touches a reference.
     case "intrinsic":

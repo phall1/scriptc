@@ -540,13 +540,37 @@ export function undefinedArgFor(
   return wrapped;
 }
 
+/** The RUNTIME-ARITY spread call — `f(...args)`, the rest-forwarding idiom
+ * (`const f = (...args) => from(...args)`): a spread whose length is a
+ * runtime fact has no home in the compile-time completion, so the call
+ * rides a dynamic boundary instead. Two lanes, picked by the spread
+ * source's tier:
+ *
+ * - CHECKED-DYNAMIC (dyn spread sources — a JS rest binding, a dyn
+ *   value): box the callee (dynFrom; a dyn callee is already boxed),
+ *   convert every argument into dyn, and emit the spread-marked dynCall
+ *   — the emitters build one fresh dyn argument array (spreads flatten
+ *   left-to-right, non-iterables throw V8's TypeError) and apply through
+ *   it; the boxed thunk delivers JS arity exactly. Result dyn, checked
+ *   per use like every any-origin value.
+ * - ISLAND (a jsval spread source — the --dynamic rest binding is the
+ *   engine's own arguments array): marshal the callee in and emit jsOp
+ *   callSpread — the prelude helper's REAL `f(...pre, ...s)`, so
+ *   iterator protocols and the not-iterable TypeError are the engine's
+ *   own. One trailing spread after the fixed arguments is the modeled
+ *   shape (exactly the forwarding idiom).
+ *
+ * Answers null when neither lane fits (typed .ts spreads keep
+ * completeArgs' rest packing and its fences). A TypeScript file reaches
+ * this lane only when the callee is already dyn (`errors.push(...args)`
+ * on `unknown[]`); a typed function keeps its static completion. */
 export function lowerSpreadArgsCall(
   lowerer: Lowerer,
   expr: ts.CallExpression,
   callee: IrExpr,
   loc: SrcLoc,
 ): IrExpr | null {
-  if (!isJsSourceFile(expr.getSourceFile())) return null;
+  if (!isJsSourceFile(expr.getSourceFile()) && callee.type.kind !== "dyn") return null;
   if (!expr.arguments.some((a) => ts.isSpreadElement(a))) return null;
   if (callee.type.kind !== "dyn" && callee.type.kind !== "func") return null;
   const calleeName =

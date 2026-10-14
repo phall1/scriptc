@@ -64,6 +64,16 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "fetch.responseNew": { argTypes: [DYN, DYN], result: DYN },
   "fetch.input": { argTypes: [DYN, DYN], result: { kind: "promise", inner: DYN } },
   "abort.controllerNew": { argTypes: [], result: DYN },
+  /** EventTarget / Event / CustomEvent construction (scr_event_target.c):
+   * the Event constructors take the argument vector as one dyn array and
+   * throw Node's validation errors; `event.is` is `v instanceof Event`
+   * (kind 0), `CustomEvent` (1), `EventTarget` (2). addAbortListener
+   * answers the disposer (the Disposable's [Symbol.dispose]). */
+  "event.targetNew": { argTypes: [], result: DYN },
+  "event.new": { argTypes: [DYN], result: DYN },
+  "event.customNew": { argTypes: [DYN], result: DYN },
+  "event.is": { argTypes: [DYN, F64], result: BOOL },
+  "events.addAbortListener": { argTypes: [DYN, DYN], result: DYN },
   "abort.timeout": { argTypes: [DYN], result: DYN },
   "abort.now": { argTypes: [DYN], result: DYN },
   "abort.any": { argTypes: [DYN], result: DYN },
@@ -74,6 +84,12 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "fetch.responseJson": { argTypes: [DYN], result: { kind: "promise", inner: DYN } },
   "fetch.responseText": { argTypes: [DYN], result: { kind: "promise", inner: STRING } },
   "fetch.responseBytes": { argTypes: [DYN], result: { kind: "promise", inner: BYTES_U8 } },
+  "fetch.responseClone": { argTypes: [DYN], result: DYN },
+  "fetch.responseFormData": { argTypes: [DYN], result: { kind: "promise", inner: DYN } },
+  /** `navigator.locks.request(name, options?, callback)`. A missing
+   * callback rejects the returned promise; a granted callback may settle
+   * it later. */
+  "navigator.locksRequest": { argTypes: [DYN, DYN, DYN], result: { kind: "promise", inner: DYN } },
   "fetch.abortControllerNew": { argTypes: [], result: DYN },
   "fetch.abortTimeout": { argTypes: [DYN], result: DYN },
   "fetch.abortNow": { argTypes: [DYN], result: DYN },
@@ -118,6 +134,8 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "dyn.globalSymbolDelete": { argTypes: [SYMBOL_T], result: VOID },
   /** Exact native class capsule identity, without materializing its fields. */
   "dyn.typedRefIs": { argTypes: [DYN, STRING], result: BOOL },
+  /** True when the value is any native class capsule, ignoring its brand. */
+  "dyn.isTypedRef": { argTypes: [DYN], result: BOOL },
   "dyn.classIs": { argTypes: [DYN, STRING], result: BOOL },
   /** Destructuring pack over a dyn source — `const [a, b] = d`, a
    * destructured dyn callback param (args: the source and the STATIC
@@ -149,12 +167,19 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
    * own-member presence, ARR answers 'length'/a valid index — exactly
    * the literal-key dynHasKey path. Proxy has traps may throw. */
   "dyn.hasKey": { argTypes: [DYN, STRING], result: BOOL },
+  /** The `in` operator with a runtime string key: dyn.hasKey plus the
+   * members inherited from builtin and compiled class prototypes. */
+  "dyn.in": { argTypes: [DYN, STRING], result: BOOL },
   "dyn.freeze": { argTypes: [DYN], result: DYN },
   "dyn.isFrozen": { argTypes: [DYN], result: BOOL },
   "dyn.nativeSetNew": { argTypes: [DYN], result: DYN },
   "dyn.nativeSetIs": { argTypes: [DYN], result: BOOL },
   "dyn.nativeMapIs": { argTypes: [DYN], result: BOOL },
   "dyn.nativeUrlIs": { argTypes: [DYN], result: BOOL },
+  "dyn.nativeSearchParamsIs": { argTypes: [DYN], result: BOOL },
+  /** A tag-only brand test cannot implement Proxy getPrototypeOf traps. */
+  "dyn.nativeInstanceOfOperand": { argTypes: [DYN], result: VOID },
+  "dyn.nativeConstructor": { argTypes: [STRING], result: DYN },
   "dyn.nativeDateIs": { argTypes: [DYN], result: BOOL },
   "date.nativeNew": { argTypes: [DYN], result: DYN },
   "date.checkedValue": { argTypes: [DYN], result: DATE_T },
@@ -175,7 +200,14 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "dyn.defineProperty": { argTypes: [DYN, DYN, DYN], result: DYN },
   "dyn.getOwnPropertyDescriptor": { argTypes: [DYN, DYN], result: DYN },
   "dyn.arrayProtoCall": { argTypes: [DYN, STRING, DYN], result: DYN },
-  "dyn.promiseAll": { argTypes: [DYN], result: { kind: "promise", inner: DYN } },
+  /** Promise.all / Promise.allSettled / Promise.any over a spread
+   * checked-dynamic array: the values, the settled-record array, or the
+   * first fulfillment (AggregateError once every entry rejects).
+   * Thenable elements adopt; the second argument reads a program class
+   * instance's `then` (the compiled property dispatch). */
+  "dyn.promiseAll": { argTypes: [DYN, DYN], result: { kind: "promise", inner: DYN } },
+  "dyn.promiseAllSettled": { argTypes: [DYN, DYN], result: { kind: "promise", inner: DYN } },
+  "dyn.promiseAny": { argTypes: [DYN, DYN], result: { kind: "promise", inner: DYN } },
   /** Bare `typeof v` on a dyn value AS A STRING (arg: the dyn value,
    * borrowed; result: an owned string) — the dyn kind's JS answer:
    * undefined→"undefined", null/object/array/bytes→"object" (JS's oldest
@@ -389,6 +421,21 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "path.win32IsAbsolute": { argTypes: [STRING], result: BOOL },
   "path.win32Relative": { argTypes: [STRING, STRING], result: STRING },
   "path.win32ToNamespacedPath": { argTypes: [STRING], result: STRING },
+  /** path.parse: [root, dir, base, ext, name] as a fresh string[] (the
+   * frontend builds the ParsedPath record); path.format: the pathObject's
+   * root, dir, base, name and ext with undefined spelled "". */
+  "path.parse": { argTypes: [STRING], result: arrayOf(STRING) },
+  "path.win32Parse": { argTypes: [STRING], result: arrayOf(STRING) },
+  "path.format": { argTypes: [STRING, STRING, STRING, STRING, STRING], result: STRING },
+  "path.win32Format": { argTypes: [STRING, STRING, STRING, STRING, STRING], result: STRING },
+  /** path.matchesGlob(path, pattern): Node's matchGlobPattern over its
+   * bundled minimatch (scr_glob.c). Both families match case-insensitively
+   * on macOS and Windows hosts like Node's; win32 also accepts either
+   * separator. Throws TypeError for a pattern over 64 Ki code units,
+   * RangeError for a brace sequence too long to expand, and SyntaxError
+   * when a segment's regex is invalid under the u flag. */
+  "path.matchesGlob": { argTypes: [STRING, STRING], result: BOOL },
+  "path.win32MatchesGlob": { argTypes: [STRING, STRING], result: BOOL },
   /** node:os: homedir is $HOME else getpwuid(3); tmpdir is Node's env
    * cascade ($TMPDIR/$TMP/$TEMP else /tmp, one trailing slash trimmed).
    * os.platform() lowers to process.platform — one implementation. */
@@ -404,6 +451,29 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "os.totalmem": { argTypes: [], result: F64 },
   /** os.availableParallelism(): CPUs the process may use (libuv's answer), >= 1. Never throws. */
   "os.availableParallelism": { argTypes: [], result: F64 },
+  /** os.hostname/machine/version/endianness, freemem, uptime and loadavg:
+   * libuv's answers (uname's machine and version fields, gethostname,
+   * "LE"/"BE", free memory in bytes, uptime in seconds, the three load
+   * averages). Fresh results; never throw. */
+  "os.hostname": { argTypes: [], result: STRING },
+  "os.machine": { argTypes: [], result: STRING },
+  "os.version": { argTypes: [], result: STRING },
+  "os.endianness": { argTypes: [], result: STRING },
+  "os.freemem": { argTypes: [], result: F64 },
+  "os.uptime": { argTypes: [], result: F64 },
+  "os.loadavg": { argTypes: [], result: arrayOf(F64) },
+  /** os.getPriority(pid): validateInt32 (RangeError ERR_OUT_OF_RANGE),
+   * then the priority; a failure throws Node's SystemError. */
+  "os.getPriority": { argTypes: [F64], result: F64 },
+  /** os.cpus(): cpusTake snapshots every CPU and answers the count;
+   * cpusModel(i) and cpusField(i, k) (k: 0 speed, 1 user, 2 nice, 3 sys,
+   * 4 idle, 5 irq) read the snapshot. Never throw. */
+  "os.cpusTake": { argTypes: [], result: F64 },
+  "os.cpusModel": { argTypes: [F64], result: STRING },
+  "os.cpusField": { argTypes: [F64, F64], result: F64 },
+  /** os.constants: the per-thread null-prototype constants object (dlopen,
+   * errno, signals, priority, UV_UDP_REUSEADDR). Never throws. */
+  "os.constants": { argTypes: [], result: DYN },
   /** umask(2): arg < 0 reads without setting (umask has no read-only form
    * — set 0, restore); otherwise sets and answers the PREVIOUS mask.
    * Never throws. */
@@ -526,6 +596,10 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   /** `a.localeCompare(b)`: -1/0/1 in Node's root-locale collation for
    * Latin-script text (scr_str_locale_compare). Never throws. */
   "str.localeCompare": { argTypes: [STRING, STRING], result: F64 },
+  "str.replaceLiteral": { argTypes: [STRING, STRING, STRING, BOOL], result: STRING },
+  // (subject, characters, NUL-separated replacement texts): the fused
+  // chain of global one-character replacements.
+  "str.replaceChars": { argTypes: [STRING, STRING, STRING], result: STRING },
   /* ToNumber(string) — ECMA-262 7.1.4.1 StringToNumber (scr_string.c):
    * trim the JS StrWhiteSpace set, empty/whitespace-only → +0, then the
    * whole span must be one StrNumericLiteral — signed decimal (Infinity
@@ -541,8 +615,8 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
    * str.encodeUriComponent percent-encodes every byte outside the
    * unreserved component set (ALPHA/DIGIT/- _ . ! ~ * ' ( )) as uppercase
    * %XX — the spec's per-code-point UTF-8 encoding IS a byte scan here —
-   * and never throws (the spec's URIError case is an unpaired surrogate,
-   * which cannot exist in well-formed UTF-8). str.decodeUriComponent
+   * and THROWS the spec's URIError ("URI malformed") on a lone surrogate.
+   * str.decodeUriComponent
    * decodes %XX escapes bytewise (raw non-escape bytes copy through) and
    * requires the escaped bytes to form strictly valid UTF-8 (overlong
    * forms, surrogate code points, and >U+10FFFF refused, per UTF8-decode
@@ -570,7 +644,7 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "str.decodeUriComponent": { argTypes: [STRING], result: STRING },
   "str.decodeUri": { argTypes: [STRING], result: STRING },
   /** encodeURI: the same Encode() keeping the reserved set and '#'
-   * unescaped — total like the component encoder. Borrow; result +1. */
+   * unescaped — throwing like the component encoder. Borrow; result +1. */
   "str.encodeUri": { argTypes: [STRING], result: STRING },
   /** RegExp.escape (ES2025): per-code-point EncodeForRegExpEscape —
    * leading ASCII alphanumeric hex-escapes, syntax characters and '/'
@@ -747,9 +821,8 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   /** node:querystring (scr_qs.c — link-gated by moduleUsesQs; NOT
    * URLSearchParams: the legacy codec's escaping and '+' rules differ).
    * qs.escape is Node's qsEscape, which encodes exactly the component
-   * unreserved set — it emits the always-linked
-   * scr_str_encode_uri_component, so escape-only programs never pull the
-   * unit. qs.unescape is Node's qsUnescape: strict decodeURIComponent
+   * unreserved set — it emits the always-linked scr_qs_escape, so
+   * escape-only programs never pull the unit. qs.unescape is Node's qsUnescape: strict decodeURIComponent
    * first, the lenient legacy unescapeBuffer fallback on failure (never
    * throws). qs.parse takes (str, sep, eq, maxKeys) — the frontend
    * completes omitted/null sep/eq to "&"/"=" and the omitted maxKeys
@@ -764,7 +837,8 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
    * through) — Node's encodeStringified rules run in the runtime, so
    * arrays expand to repeated keys and null/undefined/nested objects are
    * empty values. Custom encoder/decoder options fence at compile time.
-   * All borrow; string results +1; none throw. */
+   * All borrow; string results +1; escape and stringify throw URIError
+   * [ERR_INVALID_URI] on a lone surrogate. */
   "qs.parse": { argTypes: [STRING, STRING, STRING, F64], result: VOID },
   "qs.stringify": { argTypes: [DYN, STRING, STRING], result: STRING },
   "qs.escape": { argTypes: [STRING], result: STRING },
@@ -782,6 +856,13 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "util.toUSVString": { argTypes: [DYN], result: STRING },
   "util.isDeepStrictEqual": { argTypes: [DYN, DYN, DYN], result: BOOL },
   "util.styleText": { argTypes: [DYN, DYN, DYN], result: STRING },
+  /** util.inherits/deprecate/callbackify/debuglog over checked-dynamic
+   * arguments (scr_util_callable.c). The function results are native dyn
+   * wrappers; call sites with a static function type check them back. */
+  "util.inherits": { argTypes: [DYN, DYN], result: VOID },
+  "util.deprecate": { argTypes: [DYN, DYN, DYN, DYN], result: DYN },
+  "util.callbackify": { argTypes: [DYN], result: DYN },
+  "util.debuglog": { argTypes: [DYN, DYN], result: DYN },
   "util.typeIs": { argTypes: [DYN, STRING], result: BOOL },
   "util.typeValue": { argTypes: [DYN, STRING], result: DYN },
   /** fs.statSync → a Stats value (may throw, like the other sync fs
@@ -2494,6 +2575,40 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
    * unwind abandons — the value never exists). */
   "global.undefRead": { argTypes: [STRING], result: VOID },
   "console.native": { argTypes: [], result: DYN },
+  /** node:console Console instances (scr_console_native.c): new mints the
+   * handle over the stdout/stderr fds (1/2; 0 = a stream binds next) and
+   * the ignoreErrors flag; bind attaches a borrowed writable stream to
+   * target 0 (stdout) or 1 (stderr); write prints `text\n` to the
+   * selected target of an instance or the global console handle. */
+  "console.new": { argTypes: [F64, F64, BOOL], result: DYN },
+  "console.bind": { argTypes: [DYN, F64, null], result: VOID },
+  "console.write": { argTypes: [DYN, STRING, BOOL], result: VOID },
+  /** The global console's remaining members (scr_console_native.c; the
+   * group indentation itself lives with the writers in scr_console.c).
+   * Arguments are borrowed; string results are owned. noop is the
+   * emitter-dropped tail of a lowering whose effects sit in statements.
+   * label is `${label}` over a defaulted label (undefined -> "default";
+   * a Symbol throws Node's TypeError). count prints "label: n".
+   * countReset answers the warning text for an unknown (or non-string)
+   * label, "" otherwise. time answers the duplicate-label warning text
+   * or ""; timeEnd/timeLog answer Node's formatted elapsed time, or ""
+   * for an unknown label (timeEnd drops the timer). group adds (+1) or
+   * removes (-1) one two-space indentation step. clear writes the
+   * cursor-home and erase-down sequences when stdout is a terminal.
+   * table renders and prints Node's table for a dyn value (undefined
+   * properties = all). dirDyn is console.dir's inspect of a dyn value
+   * (custom inspection off: a Buffer anywhere inside throws the fence). */
+  "console.noop": { argTypes: [], result: VOID },
+  "console.label": { argTypes: [DYN], result: STRING },
+  "console.count": { argTypes: [STRING], result: VOID },
+  "console.countReset": { argTypes: [DYN], result: STRING },
+  "console.time": { argTypes: [STRING], result: STRING },
+  "console.timeEnd": { argTypes: [STRING], result: STRING },
+  "console.timeLog": { argTypes: [STRING], result: STRING },
+  "console.group": { argTypes: [F64], result: VOID },
+  "console.clear": { argTypes: [], result: VOID },
+  "console.table": { argTypes: [DYN, DYN], result: VOID },
+  "console.dirDyn": { argTypes: [DYN, F64], result: STRING },
   /** A native reference to the global object; known names retain value fences. */
   "global.native": { argTypes: [arrayOf(STRING)], result: DYN },
   // `X.name` through a class value: the arg is a program-dependent
@@ -2551,6 +2666,18 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
    * list throws DataCloneError, nothing static is transferable). Result
    * +1 %DOMException. */
   "error.domClone": { argTypes: [null, DYN], result: VOID },
+  /** `new AggregateError(errors, message?, options?)` (scr_json.c), in
+   * spec order: newAggregate installs the message and cause (both dyn,
+   * borrowed — the message conversion can throw) and returns an owned
+   * %AggregateError; aggregateSetErrors then stores the iterated list
+   * (borrowed receiver, the dyn array borrowed and retained).
+   * aggregateErrors reads the list (+1, the same array every read). */
+  "error.newAggregate": {
+    argTypes: [DYN, DYN],
+    result: { kind: "object", className: "%AggregateError" },
+  },
+  "error.aggregateSetErrors": { argTypes: [null, DYN], result: VOID },
+  "error.aggregateErrors": { argTypes: [null], result: DYN },
   /** `d instanceof TypeError` (and the other BUILTIN error classes) on a
    * checked-dynamic value (scr_json.c): the from_error cache holds the
    * dyn↔error identity edge, so the test resolves the runtime error and
@@ -2584,6 +2711,11 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "ffi.argument": { argTypes: [DYN, STRING], result: DYN },
   "ffi.memoryModule": { argTypes: [DYN], result: DYN },
   "intl.segmenterNew": { argTypes: [], result: DYN },
+  /** `new Intl.DateTimeFormat("en-US", options)` for the numeric longOffset
+   * bag. The value is a dyn handle: resolvedOptions().timeZone and
+   * formatToParts(millis) read host zoneinfo. Other locales and option
+   * bags throw. */
+  "intl.dateTimeFormatNew": { argTypes: [DYN, DYN], result: DYN },
   "arrayBuffer.is": { argTypes: [DYN], result: BOOL },
   "arrayBuffer.isView": { argTypes: [DYN], result: BOOL },
   "arrayBuffer.byteLengthGetter": { argTypes: [], result: F64 },
@@ -2608,6 +2740,12 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
    * ("Cannot convert undefined or null to object"). */
   "dyn.objKeys": { argTypes: [DYN], result: DYN },
   "dyn.forInKeys": { argTypes: [DYN], result: DYN },
+  "dyn.forInKeyStrings": { argTypes: [DYN], result: arrayOf(STRING) },
+  "dyn.forInStable": { argTypes: [DYN], result: BOOL },
+  "dyn.objKeyStrings": { argTypes: [DYN], result: arrayOf(STRING) },
+  /** Object.entries as a native [string, any][] (VOID: the tuple row's
+   * shape is program-dependent; the validator checks it). */
+  "dyn.objEntryPairs": { argTypes: [DYN], result: VOID },
   "dyn.hasOwn": { argTypes: [DYN, STRING], result: BOOL },
   "dyn.propertyIsEnumerable": { argTypes: [DYN, STRING], result: BOOL },
   "dyn.assign": { argTypes: [DYN, DYN], result: DYN },
@@ -2698,6 +2836,12 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "regex.resetLastIndex": { argTypes: [REGEX, F64], result: VOID },
   "regex.newChecked": { argTypes: [DYN, DYN], result: REGEX },
   "regex.replaceCallback": { argTypes: [STRING, REGEX, DYN, BOOL], result: STRING },
+  // Reads of capture args[1] of an execSpans/matchGroups result:
+  // `capture === args[2]`, Number(capture) and parseInt(capture,
+  // args[2]). Borrowed; never throw.
+  "regex.groupEquals": { argTypes: [arrayOf(STRING), F64, STRING], result: BOOL },
+  "regex.groupNumber": { argTypes: [arrayOf(STRING), F64], result: F64 },
+  "regex.groupParseInt": { argTypes: [arrayOf(STRING), F64, F64], result: F64 },
   // node:events EventEmitter: receivers are emitter-hierarchy objects and
   // the chaining forms (on/off/removeAll/setMax) return the receiver's
   // own class — program-dependent object types, checked in the libCall
@@ -2758,6 +2902,9 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "emitter.getMax": { argTypes: [null], result: F64 },
   "emitter.setDefaultMax": { argTypes: [F64], result: VOID },
   "emitter.getDefaultMax": { argTypes: [], result: F64 },
+  /** The events.errorMonitor event key: an immortal string the runtime
+   * registry matches by identity, so no string event name reaches it. */
+  "emitter.errorMonitor": { argTypes: [], result: STRING },
   // node:stream: receivers are stream-hierarchy objects and several
   // results are program-dependent (the receiver's class, unions) — the
   // libCall case owns those checks. The constructors and a few methods
@@ -2840,11 +2987,13 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
    * machinery: (s) → a pending promise settled at the terminal point
    * with the accumulated result (sc.text: the utf8 decode, sc.json: the
    * parsed dyn — malformed input rejects with the parse's SyntaxError,
-   * sc.buffer: the concatenated bytes) or rejected with the stream's
+   * sc.buffer: the concatenated bytes, sc.arrayBuffer: an ArrayBuffer
+   * dyn over them) or rejected with the stream's
    * error / ERR_STREAM_PREMATURE_CLOSE. */
   "sc.text": { argTypes: [null], result: { kind: "promise", inner: STRING } },
   "sc.json": { argTypes: [null], result: { kind: "promise", inner: DYN } },
   "sc.buffer": { argTypes: [null], result: { kind: "promise", inner: BYTES_U8 } },
+  "sc.arrayBuffer": { argTypes: [null], result: { kind: "promise", inner: DYN } },
   "readable.newDyn": { argTypes: [DYN], result: VOID },
   "writable.newDyn": { argTypes: [DYN], result: VOID },
   "duplex.newDyn": { argTypes: [DYN], result: VOID },
@@ -3198,14 +3347,23 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
    * Node's payload. */
   "process.onRejectionHandled": { argTypes: [DYN, BOOL], result: VOID },
   "process.offRejectionHandled": { argTypes: [DYN], result: VOID },
-  /** process warnings (scr_lib.c): onWarning/offWarning register dyn
-   * listeners; emitWarning applies Node's full argument grammar over the
-   * call's dyn argument vector (ERR_INVALID_ARG_TYPE TypeErrors — MAY
-   * THROW; a listener throw propagates too) and always prints Node's
-   * stderr report. Emission is synchronous (SEMANTICS.md). */
+  /** process warnings (scr_async_dyn.c): onWarning/offWarning register
+   * dyn listeners; emitWarning applies Node's full argument grammar over
+   * the call's dyn argument vector (ERR_INVALID_ARG_TYPE TypeErrors — MAY
+   * THROW) and emits on the next tick, like Node: Node's stderr report,
+   * then the listeners. */
   "process.onWarning": { argTypes: [DYN], result: VOID },
   "process.offWarning": { argTypes: [DYN], result: VOID },
   "process.emitWarning": { argTypes: [DYN], result: VOID },
+  /** A Warning-typed process warning with this message (the console
+   * members' warnings), emitted on the next tick as Node's emitWarning
+   * does (so the loop runs); an empty message emits nothing. */
+  "process.emitWarningText": { argTypes: [STRING], result: VOID },
+  /** process.noDeprecation (0) / process.throwDeprecation (1): the stored
+   * value (undefined until assigned) and its assignment. util.deprecate's
+   * warnings and DeprecationWarning emissions read their truthiness. */
+  "process.deprecationFlag": { argTypes: [F64], result: DYN },
+  "process.setDeprecationFlag": { argTypes: [F64, DYN], result: VOID },
   /** AsyncLocalStorage (node:async_hooks — scr_async.c): stores are f64
    * handles; contexts are immutable fiber-carried snapshots (spawned
    * fibers inherit the spawner's — Node's init-time capture). run/exit
@@ -3263,6 +3421,9 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "date.valueOf": { argTypes: [DATE_T], result: F64 },
   "date.toISOString": { argTypes: [F64], result: STRING },
   "date.toISOStringValue": { argTypes: [DATE_T], result: STRING },
+  /** Date.prototype.toUTCString / toGMTString. Never throws: NaN and
+   * out-of-range times answer "Invalid Date". */
+  "date.toUTCStringValue": { argTypes: [DATE_T], result: STRING },
   "date.getFullYear": { argTypes: [DATE_T], result: F64 },
   "date.getUTCFullYear": { argTypes: [DATE_T], result: F64 },
   "date.getMonth": { argTypes: [DATE_T], result: F64 },
@@ -3295,14 +3456,24 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
    * map to 1900+year, out-of-range months/dates roll over, non-finite
    * parts and out-of-range results answer NaN. Never throws. */
   "date.utc": { argTypes: [F64, F64, F64, F64, F64, F64, F64], result: F64 },
+  /** UTC setters return the new TimeClip scalar. `nopt` is the number of
+   * optional components after the required one. The frontend writes that
+   * scalar back onto the Date local. */
+  "date.setUTCFullYear": { argTypes: [DATE_T, F64, F64, F64, F64], result: DATE_T },
+  "date.setUTCMonth": { argTypes: [DATE_T, F64, F64, F64], result: DATE_T },
+  "date.setUTCDate": { argTypes: [DATE_T, F64], result: DATE_T },
+  "date.setUTCHours": { argTypes: [DATE_T, F64, F64, F64, F64, F64], result: DATE_T },
+  "date.setUTCMinutes": { argTypes: [DATE_T, F64, F64, F64, F64], result: DATE_T },
+  "date.setUTCSeconds": { argTypes: [DATE_T, F64, F64, F64], result: DATE_T },
+  "date.setUTCMilliseconds": { argTypes: [DATE_T, F64], result: DATE_T },
   /** WHATWG TextDecoder.decode over u8 bytes (scr_bytes.c): utf-8 with
    * default options — the same maximal-subpart replacement decode as
    * Buffer.toString("utf8"), with the leading BOM stripped (the one
    * behavioral difference; ignoreBOM defaults to false). Inline calls
    * lower directly; stored decoder records dispatch by encoding id.
    * TextEncoder.encode needs no libFn: its matching forms
-   * lower to buffer.fromStr(s, "utf8") (identical bytes — ScrStr storage
-   * is well-formed UTF-8). Borrowed arg; owned (+1) string; never throws. */
+   * lower to buffer.fromStr(s, "utf8") (identical bytes — both write each
+   * lone surrogate as U+FFFD). Borrowed arg; owned (+1) string; never throws. */
   "text.decode": { argTypes: [BYTES_U8], result: STRING },
   "bytes.bufferSource": { argTypes: [DYN], result: BYTES_U8 },
   "text.decodeBufferSource": { argTypes: [DYN], result: STRING },
