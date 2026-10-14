@@ -1521,6 +1521,26 @@ console.log(make(undefined));
   }
 });
 
+test("metric keys sort entry names with localeCompare", async () => {
+  await matchesNode(
+    "metric-key",
+    `
+export function makeMetricKey(id, attributes) {
+  if (attributes === undefined || Object.keys(attributes).length === 0) return id;
+  const sortedEntries = Object.entries(attributes).sort((a, b) => a[0].localeCompare(b[0]));
+  return id + ":" + JSON.stringify(sortedEntries);
+}
+`,
+    `
+import { makeMetricKey } from "metric-key/probe.js";
+console.log(makeMetricKey("fixed_counter", undefined));
+console.log(makeMetricKey("fixed_counter", {}));
+console.log(makeMetricKey("fixed_counter", { unit: "ms", name: "fixed" }));
+console.log(makeMetricKey("fixed_counter", { z: "1", a: "2", count: 3 }));
+`,
+  );
+});
+
 test("Symbol.iterator in a plain record takes Object.entries", async () => {
   await matchesNode(
     "headers-in",

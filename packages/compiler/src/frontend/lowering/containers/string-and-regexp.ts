@@ -1464,8 +1464,13 @@ function lowerLocaleCompareCall(
     : lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text);
   const argument = call.arguments[0]!;
   const lowered = lowerer.lowerExpr(argument);
-  if (!dynamic && lowered.type.kind !== "string")
+  // An index read keeps a hole arm after the checker has typed the
+  // element as string (`entries[i][0]`). localeCompare applies ToString,
+  // so that arm converts instead of failing the string type.
+  const checkerArg = lowerer.mapTypeOf(lowerer.typeOf(argument));
+  if (!dynamic && lowered.type.kind !== "string" && checkerArg?.kind !== "string") {
     lowerer.badType(argument, lowerer.typeOf(argument));
+  }
   const compared =
     lowered.type.kind === "string" ? lowered : lowerer.ensureString(lowered, argument);
   return { kind: "libCall", fn: "str.localeCompare", args: [receiver, compared], type: F64, loc };
