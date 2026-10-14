@@ -5,7 +5,11 @@ import { lowerArrayCallbackCall } from "./containers/array-callback-call.js";
  * own owners; this module selects the applicable call path. */
 import { dynUndefinedExpr, nodeThrowExpr, countedFor, numLit, varRef } from "../../ir/build.js";
 import { lowerBuiltinCall } from "./builtin-calls.js";
-import { lowerHeadersIteratorNext } from "./lower-stdlib.js";
+import {
+  lowerBlockedFunctionCall,
+  lowerHeadersIteratorNext,
+  lowerNavigatorLocksRequest,
+} from "./lower-stdlib.js";
 import { threadsImportOf } from "../threads-import.js";
 import {
   adaptZeroArgTimerCallback,
@@ -1345,6 +1349,8 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
       // Bare `crypto.randomUUID()` — the Web Crypto global, not a
       // node:crypto namespace import. Before the member fence.
       lowerGlobalCryptoCall(lowerer, expr, expr.expression) ??
+      lowerNavigatorLocksRequest(lowerer, expr, expr.expression) ??
+      lowerBlockedFunctionCall(lowerer, expr, expr.expression) ??
       // The node:perf_hooks spoke: performance.now() and its
       // .bind(performance) function value over the runtime's
       // process-start-anchored monotonic clock.
@@ -3701,7 +3707,16 @@ function lowerDynReceiverMethodCall(
   // its name overlaps a primitive prototype (`colors.bold(...)`): the
   // source value was compiled from that object shape, while genuinely
   // untyped/any receivers retain the runtime-kind ambiguity and fence.
-  if (DYN_PROTO_METHOD_NAMES.has(access.name.text) && !ownCallable) return null;
+  // response.formData() is a dyn object whose get/append/entries are own
+  // methods. `entries` is also an array prototype name, so the shared
+  // fence would refuse FormData before the own-property call.
+  const formDataMethod =
+    recvSymbol?.name === "FormData" &&
+    lowerer.isStdlibSymbol(recvSymbol) &&
+    (access.name.text === "append" ||
+      access.name.text === "get" ||
+      access.name.text === "entries");
+  if (DYN_PROTO_METHOD_NAMES.has(access.name.text) && !ownCallable && !formDataMethod) return null;
   // Optional forms (`obj.cb?.()`, `obj?.cb()`) belong to the chain
   // machinery's short-circuit semantics — not modeled here yet.
   if (call.questionDotToken || access.questionDotToken) return null;

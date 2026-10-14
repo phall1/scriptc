@@ -1,6 +1,60 @@
 // The engine-free user surface: this is intentionally top-level and has
 // no --dynamic directive. Both backends must compile fetch(url),
 // RequestInit, and Response.json() into the native net/http/tls runtime.
+const cloned = new Response("hello", {
+  status: 201,
+  statusText: "Made",
+  headers: { "content-type": "text/plain" },
+});
+const clone = cloned.clone();
+clone.headers.append("x-clone", "yes");
+console.log(
+  "cloned response:",
+  clone.status,
+  clone.statusText,
+  clone.headers.get("content-type"),
+  clone.headers.get("x-clone"),
+  cloned.headers.get("x-clone"),
+  cloned.bodyUsed,
+  await clone.text(),
+  await cloned.text(),
+  clone.bodyUsed,
+  cloned.bodyUsed,
+);
+const consumed = new Response("x");
+await consumed.text();
+try {
+  consumed.clone();
+  console.log("clone consumed: missed");
+} catch (error) {
+  console.log("clone consumed:", (error as Error).name, (error as Error).message);
+}
+const urlencoded = new Response("a=1&b=2", {
+  headers: { "content-type": "application/x-www-form-urlencoded" },
+});
+const form = await urlencoded.formData();
+console.log(
+  "urlencoded form:",
+  JSON.stringify(Array.from(form.entries() as Iterable<[string, string]>)),
+  form.get("a"),
+  form.get("missing"),
+);
+try {
+  await new Response("a=1").formData();
+  console.log("form content-type: missed");
+} catch (error) {
+  console.log("form content-type:", (error as Error).name, (error as Error).message);
+}
+const boundary = "----b";
+const multipartBody = `--${boundary}\r\nContent-Disposition: form-data; name="n"\r\n\r\nhi\r\n--${boundary}--\r\n`;
+const multipart = await new Response(multipartBody, {
+  headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+}).formData();
+console.log(
+  "multipart form:",
+  JSON.stringify(Array.from(multipart.entries() as Iterable<[string, string]>)),
+);
+
 const constructed = new Response("1");
 console.log(
   "constructed response:",

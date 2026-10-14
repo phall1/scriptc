@@ -131,6 +131,7 @@ export const FETCH_AMBIENT_TYPES = [
   "AbortController",
   "AbortSignal",
   "Headers",
+  "FormData",
   "ReadableStream",
   "ReadableStreamDefaultReader",
   "ReadableStreamDefaultController",

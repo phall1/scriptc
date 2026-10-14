@@ -3826,9 +3826,8 @@
       "id": "stdlib.response.clone",
       "kind": "stdlib",
       "name": "Response.clone",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; the native fetch runtime does not implement this Response operation"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: body-consumption, state-machine, error-shape; differential evidence: fixture:static"
     },
     {
       "id": "stdlib.response.constructor",
@@ -3841,9 +3840,8 @@
       "id": "stdlib.response.formData",
       "kind": "stdlib",
       "name": "Response.formData",
-      "status": "unsupported",
-      "code": "SC2020",
-      "note": "Node 24.15.0 / Undici 7.24.4; the native fetch runtime does not implement this Response operation"
+      "status": "static",
+      "note": "Node 24.15.0 / Undici 7.24.4; facets: body-consumption, promise-settlement, state-machine, error-shape; differential evidence: fixture:static"
     },
     {
       "id": "stdlib.response.headers",

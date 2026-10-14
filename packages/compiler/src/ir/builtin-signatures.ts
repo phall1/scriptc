@@ -74,6 +74,12 @@ export const LIB_FN_SIGS = defineLibFnSignatures({
   "fetch.responseJson": { argTypes: [DYN], result: { kind: "promise", inner: DYN } },
   "fetch.responseText": { argTypes: [DYN], result: { kind: "promise", inner: STRING } },
   "fetch.responseBytes": { argTypes: [DYN], result: { kind: "promise", inner: BYTES_U8 } },
+  "fetch.responseClone": { argTypes: [DYN], result: DYN },
+  "fetch.responseFormData": { argTypes: [DYN], result: { kind: "promise", inner: DYN } },
+  /** `navigator.locks.request(name, options?, callback)`. A missing
+   * callback rejects the returned promise; a granted callback may settle
+   * it later. */
+  "navigator.locksRequest": { argTypes: [DYN, DYN, DYN], result: { kind: "promise", inner: DYN } },
   "fetch.abortControllerNew": { argTypes: [], result: DYN },
   "fetch.abortTimeout": { argTypes: [DYN], result: DYN },
   "fetch.abortNow": { argTypes: [DYN], result: DYN },

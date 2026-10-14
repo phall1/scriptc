@@ -116,6 +116,7 @@ enum {
   SF_COLLECT_TEXT,
   SF_COLLECT_BYTES,
   SF_COLLECT_ARRAY_BUFFER,
+  SF_COLLECT_FORM,
 };
 
 enum {
@@ -131,6 +132,7 @@ struct SfCollector {
   size_t len;
   size_t cap;
   int mode;
+  ScrStr *content_type; /* owned; formData only */
 };
 
 struct SfPullWait {
@@ -190,6 +192,11 @@ struct SfStream {
   SfTransfer *response_owner; /* weak; transfer owns the stream */
   bool callbacks_tracked;
   SfStream *callbacks_next;
+  /* Response.clone tees later chunks into these branches. tee_head is
+   * owned; tee_link is the sibling list; tee_source is weak. */
+  SfStream *tee_head;
+  SfStream *tee_link;
+  SfStream *tee_source;
 };
 
 struct SfHeaders {
@@ -1341,9 +1348,17 @@ static void sf_inflate_finish_if_ended(SfTransfer *t);
  * A pending read remains a consumer even if its reader handle was dropped:
  * fulfill that request first, then reconsider from sf_stream_drain().
  */
+static bool sf_stream_tee_observed(SfStream *s) {
+  for (SfStream *branch = s->tee_head; branch; branch = branch->tee_link) {
+    if (branch->rc > 1) return true;
+  }
+  return false;
+}
+
 static void sf_response_discard_if_unobserved(SfStream *s) {
   if (s->rc != 1 || s->discarded || !s->response_owner ||
-      s->collector || (s->reader && s->reader->pending_head)) {
+      s->collector || (s->reader && s->reader->pending_head) ||
+      sf_stream_tee_observed(s)) {
     return;
   }
   s->discarded = true;
@@ -1391,12 +1406,53 @@ static void sf_stream_drop_source_callbacks(
   scr_dyn_release(source_this);
 }
 
+static void sf_stream_release(SfStream *s);
+static void sf_stream_enqueue_value(SfStream *s, ScrDyn *value);
+static void sf_stream_close(SfStream *s);
+static void sf_stream_error(SfStream *s, ScrDyn *reason);
+
+static void sf_stream_tee_forward(SfStream *src, ScrDyn *value) {
+  SfStream **at = &src->tee_head;
+  while (*at) {
+    SfStream *branch = *at;
+    if (branch->rc == 1 || branch->closed || branch->close_requested ||
+        branch->error) {
+      *at = branch->tee_link;
+      branch->tee_source = NULL;
+      branch->tee_link = NULL;
+      sf_stream_release(branch);
+      continue;
+    }
+    sf_stream_enqueue_value(branch, value);
+    at = &branch->tee_link;
+  }
+}
+
+static void sf_stream_tee_finish(SfStream *src) {
+  SfStream *branch = src->tee_head;
+  src->tee_head = NULL;
+  bool failed = src->error != NULL;
+  while (branch) {
+    SfStream *next = branch->tee_link;
+    branch->tee_link = NULL;
+    branch->tee_source = NULL;
+    if (branch->rc > 1 && !branch->closed && !branch->close_requested &&
+        !branch->error) {
+      if (failed) sf_stream_error(branch, src->error);
+      else sf_stream_close(branch);
+    }
+    sf_stream_release(branch);
+    branch = next;
+  }
+}
+
 static void sf_stream_release(SfStream *s) {
   if (!s) return;
   if (--s->rc > 0) {
     sf_response_discard_if_unobserved(s);
     return;
   }
+  sf_stream_tee_finish(s);
   sf_stream_drop_chunks(s);
   if (s->reader) {
     s->reader->stream = NULL;
@@ -1530,11 +1586,14 @@ static void sf_collector_drop(SfStream *s) {
    * on both fulfillment and rejection.
    */
   scr_promise_release(c->promise);
+  scr_str_release(c->content_type);
   free(c->data);
   SfStream *held = c->held_stream;
   free(c);
   sf_stream_release(held);
 }
+
+static ScrDyn *sf_form_data_from_bytes(const ScrBytes *bytes, const ScrStr *content_type);
 
 static void sf_collector_finish(SfStream *s) {
   SfCollector *c = s->collector;
@@ -1552,6 +1611,8 @@ static void sf_collector_finish(SfStream *s) {
     scr_str_release(text);
   } else if (c->mode == SF_COLLECT_ARRAY_BUFFER) {
     value = scr_array_buffer_from_bytes(bytes);
+  } else if (c->mode == SF_COLLECT_FORM) {
+    value = sf_form_data_from_bytes(bytes, c->content_type);
   } else {
     value = scr_dyn_new_bytes(bytes);
   }
@@ -1580,6 +1641,9 @@ static void sf_release(SfTransfer *t);
 static void sf_inflate_resume(SfTransfer *t);
 static void sf_stream_pull(SfStream *s);
 static void sf_stream_schedule_initial_pull(SfStream *s);
+static void sf_stream_close(SfStream *s);
+static void sf_stream_error(SfStream *s, ScrDyn *reason);
+static void sf_stream_tee_finish(SfStream *src);
 
 /*
  * A default ReadableStream has a one-chunk high-water mark. Apply that
@@ -1588,11 +1652,33 @@ static void sf_stream_schedule_initial_pull(SfStream *s);
  * in the kernel/TCP window. resume() merely re-arms the poller, so calling
  * it while satisfying a read never re-enters this stack.
  */
+/* The transport pauses only when every live branch is holding a chunk.
+ * A clone that is being read must keep the socket moving even while the
+ * unread original queue grows. */
+static SfStream *sf_stream_tee_root(SfStream *s) {
+  while (s->tee_source) s = s->tee_source;
+  return s;
+}
+
+static bool sf_stream_branch_wants_chunk(SfStream *s) {
+  return !s->discarded && !s->closed && !s->close_requested && !s->error &&
+         s->queued < 1;
+}
+
+static bool sf_stream_tee_backpressured(SfStream *root) {
+  if (sf_stream_branch_wants_chunk(root)) return false;
+  for (SfStream *branch = root->tee_head; branch; branch = branch->tee_link) {
+    if (branch->rc > 1 && sf_stream_branch_wants_chunk(branch)) return false;
+  }
+  return root->queued >= 1 || root->tee_head != NULL;
+}
+
 static void sf_response_pause_if_full(SfStream *s) {
-  SfTransfer *t = s->response_owner;
-  if (s->discarded || !t || t->done || t->response_paused ||
+  SfStream *root = sf_stream_tee_root(s);
+  SfTransfer *t = root->response_owner;
+  if (root->discarded || !t || t->done || t->response_paused ||
       !t->response_socket ||
-      s->queued < 1) {
+      !sf_stream_tee_backpressured(root)) {
     return;
   }
   t->response_paused = true;
@@ -1600,9 +1686,11 @@ static void sf_response_pause_if_full(SfStream *s) {
 }
 
 static void sf_response_resume_if_ready(SfStream *s) {
-  SfTransfer *t = s->response_owner;
+  SfStream *root = sf_stream_tee_root(s);
+  SfTransfer *t = root->response_owner;
   if (!t || t->done || !t->response_paused || !t->response_socket ||
-      s->queued >= 1 || s->close_requested || s->closed || s->error) {
+      sf_stream_tee_backpressured(root) || root->close_requested ||
+      root->closed || root->error) {
     return;
   }
   if (t->inflate_draining) return;
@@ -1751,6 +1839,7 @@ static void sf_stream_enqueue_value(SfStream *s, ScrDyn *value) {
   ) {
     sf_stream_pull(s);
   }
+  sf_stream_tee_forward(s, stored);
   sf_response_pause_if_full(s);
 }
 
@@ -1768,6 +1857,7 @@ static void sf_stream_close(SfStream *s) {
   sf_stream_drop_source_callbacks(s, false);
   sf_stream_drain(s);
   sf_stream_finish_close(s);
+  sf_stream_tee_finish(s);
 }
 
 static void sf_stream_error(SfStream *s, ScrDyn *reason) {
@@ -1782,6 +1872,7 @@ static void sf_stream_error(SfStream *s, ScrDyn *reason) {
     sf_transfer_stream_error(s->request_owner, reason);
   }
   sf_stream_drop_source_callbacks(s, true);
+  sf_stream_tee_finish(s);
 }
 
 /* Web Streams adopts promise-like results from start/pull/cancel through
@@ -2314,7 +2405,7 @@ static ScrPromise *sf_stream_cancel(SfStream *s, ScrDyn *reason,
   return p;
 }
 
-static ScrPromise *sf_stream_collect(SfStream *s, int mode) {
+static ScrPromise *sf_stream_collect(SfStream *s, int mode, ScrStr *content_type) {
   ScrPromise *p = scr_promise_new();
   if (s->disturbed || s->reader || s->internal_lock) {
     sf_type_error("Body is unusable: Body has already been read");
@@ -2328,8 +2419,10 @@ static ScrPromise *sf_stream_collect(SfStream *s, int mode) {
   c->promise = scr_promise_retain(p);
   c->held_stream = sf_stream_retain(s);
   c->mode = mode;
+  c->content_type = content_type ? scr_str_retain(content_type) : NULL;
   s->collector = c;
   sf_stream_drain(s);
+  if (s->tee_source) sf_stream_pull(s->tee_source);
   return p;
 }
 
@@ -2695,6 +2788,15 @@ static SfHeaders *sf_headers_new(ScrArr *pairs, bool immutable) {
   h->pairs = pairs;
   h->immutable = immutable;
   return h;
+}
+
+static SfHeaders *sf_headers_clone(SfHeaders *h) {
+  size_t n = (size_t)scr_arr_len(h->pairs);
+  ScrArr *pairs = scr_arr_new(SCR_ELEM_STR, n);
+  for (size_t i = 0; i < n; i++) {
+    scr_arr_push_ref(pairs, scr_arr_get_ref(h->pairs, (double)i));
+  }
+  return sf_headers_new(pairs, h->immutable);
 }
 
 static SfHeaders *sf_headers_new_response(ScrArr *raw_pairs) {
@@ -3085,8 +3187,326 @@ static void sf_response_release_v(void *p) {
   sf_response_release((SfResponse *)p);
 }
 
+static bool sf_content_type_is(const ScrStr *ct, const char *media) {
+  if (!ct) return false;
+  size_t i = 0;
+  size_t n = strlen(media);
+  while (i < ct->len && (ct->data[i] == ' ' || ct->data[i] == '\t')) i++;
+  if (ct->len - i < n) return false;
+  for (size_t k = 0; k < n; k++) {
+    unsigned char c = (unsigned char)ct->data[i + k];
+    if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
+    if (c != (unsigned char)media[k]) return false;
+  }
+  size_t end = i + n;
+  return end == ct->len || ct->data[end] == ';' || ct->data[end] == ' ' ||
+         ct->data[end] == '\t';
+}
+
+static void sf_form_push(ScrDyn *pairs, ScrStr *name, ScrStr *value) {
+  ScrDyn *row = scr_dyn_new_arr();
+  scr_dyn_arr_push(row, scr_dyn_new_str(name));
+  scr_dyn_arr_push(row, scr_dyn_new_str(value));
+  scr_dyn_arr_push(pairs, row);
+  scr_str_release(name);
+  scr_str_release(value);
+}
+
+static ScrDyn *sf_form_get(ScrClosure *clo, ScrDyn *const *args, size_t argc) {
+  if (argc < 1) {
+    sf_type_error(
+        "Failed to execute 'get' on 'FormData': 1 argument required, but only 0 present.");
+    return NULL;
+  }
+  ScrStr *name = scr_dyn_string_coerce_js(args[0]);
+  if (!name) return NULL;
+  ScrDyn *pairs = scr_box_get_ref(clo->caps[0]);
+  double n = scr_dyn_arr_len(pairs);
+  for (double i = 0; i < n; i++) {
+    ScrDyn *row = scr_dyn_arr_at(pairs, i);
+    ScrDyn *key = scr_dyn_arr_at(row, 0);
+    bool match = key->kind == SCR_DYN_STR && key->v.str->len == name->len &&
+                 memcmp(key->v.str->data, name->data, name->len) == 0;
+    if (match) {
+      ScrDyn *val = scr_dyn_arr_at(row, 1);
+      scr_dyn_release(key);
+      scr_dyn_release(row);
+      scr_str_release(name);
+      return val;
+    }
+    scr_dyn_release(key);
+    scr_dyn_release(row);
+  }
+  scr_str_release(name);
+  return scr_dyn_new_null();
+}
+
+static ScrDyn *sf_form_entries(ScrClosure *clo, ScrDyn *const *args, size_t argc) {
+  (void)args;
+  (void)argc;
+  ScrDyn *pairs = scr_box_get_ref(clo->caps[0]);
+  ScrDyn *copy = scr_dyn_new_arr();
+  double n = scr_dyn_arr_len(pairs);
+  for (double i = 0; i < n; i++) scr_dyn_arr_push(copy, scr_dyn_arr_at(pairs, i));
+  return copy;
+}
+
+static ScrDyn *sf_form_append(ScrClosure *clo, ScrDyn *const *args, size_t argc) {
+  if (argc < 2) {
+    sf_type_error(
+        "Failed to execute 'append' on 'FormData': 2 arguments required, but only 0 present.");
+    return NULL;
+  }
+  ScrStr *name = scr_dyn_string_coerce_js(args[0]);
+  ScrStr *value = name ? scr_dyn_string_coerce_js(args[1]) : NULL;
+  if (!name || !value) {
+    scr_str_release(name);
+    scr_str_release(value);
+    return NULL;
+  }
+  sf_form_push(scr_box_get_ref(clo->caps[0]), name, value);
+  return scr_dyn_undefined();
+}
+
+static ScrDyn *sf_form_method(ScrDyn *pairs, ScrDynThunk thunk, uint32_t arity,
+                              const char *name) {
+  ScrClosure *clo = scr_closure_new(NULL, 1);
+  ScrBox *box = scr_box_new_obj(&scr_dyn_retain_v, &scr_dyn_release_v, NULL);
+  scr_box_set_ref(box, scr_dyn_retain(pairs));
+  clo->caps[0] = box;
+  return scr_dyn_new_func(clo, thunk, arity, name, name);
+}
+
+static ScrDyn *sf_form_object(ScrDyn *pairs) {
+  ScrDyn *obj = scr_dyn_new_obj();
+  scr_dyn_obj_set(obj, "get", 3, sf_form_method(pairs, sf_form_get, 1, "get"));
+  scr_dyn_obj_set(obj, "append", 6, sf_form_method(pairs, sf_form_append, 2, "append"));
+  scr_dyn_obj_set(obj, "entries", 7, sf_form_method(pairs, sf_form_entries, 0, "entries"));
+  scr_dyn_release(pairs);
+  return obj;
+}
+
+static ScrDyn *sf_form_from_urlencoded(const ScrBytes *bytes) {
+  ScrStr *text = scr_text_decode(bytes);
+  if (!text) return NULL;
+  ScrSearchParams *sp = scr_sp_parse(text);
+  scr_str_release(text);
+  ScrDyn *pairs = scr_dyn_new_arr();
+  double n = scr_sp_size(sp);
+  for (double i = 0; i < n; i++) sf_form_push(pairs, scr_sp_key_at(sp, i), scr_sp_val_at(sp, i));
+  scr_sp_release(sp);
+  return sf_form_object(pairs);
+}
+
+static bool sf_form_param(const char *block, size_t len, const char *key,
+                          const char **out, size_t *out_len) {
+  size_t klen = strlen(key);
+  for (size_t i = 0; i + klen + 1 < len; i++) {
+    if (memcmp(block + i, key, klen) != 0 || block[i + klen] != '=') continue;
+    size_t v = i + klen + 1;
+    if (v < len && block[v] == '"') {
+      v++;
+      size_t end = v;
+      while (end < len && block[end] != '"') end++;
+      if (end >= len) return false;
+      *out = block + v;
+      *out_len = end - v;
+      return true;
+    }
+    size_t end = v;
+    while (end < len && block[end] != ';' && block[end] != ' ' && block[end] != '\r') end++;
+    *out = block + v;
+    *out_len = end - v;
+    return true;
+  }
+  return false;
+}
+
+static int sf_form_find(const char *data, size_t len, size_t from, const char *pat,
+                        size_t plen) {
+  if (plen == 0 || from > len || plen > len - from) return -1;
+  for (size_t i = from; i + plen <= len; i++) {
+    if (memcmp(data + i, pat, plen) == 0) return (int)i;
+  }
+  return -1;
+}
+
+static ScrStr *sf_form_boundary(const ScrStr *content_type) {
+  const char *key = "boundary=";
+  size_t klen = 9;
+  for (size_t i = 0; i + klen < content_type->len; i++) {
+    bool match = true;
+    for (size_t k = 0; k < klen; k++) {
+      unsigned char c = (unsigned char)content_type->data[i + k];
+      if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
+      if (c != (unsigned char)key[k]) {
+        match = false;
+        break;
+      }
+    }
+    if (!match) continue;
+    size_t v = i + klen;
+    if (v < content_type->len && content_type->data[v] == '"') {
+      v++;
+      size_t end = v;
+      while (end < content_type->len && content_type->data[end] != '"') end++;
+      if (end >= content_type->len) return NULL;
+      return scr_str_new(content_type->data + v, end - v);
+    }
+    size_t end = v;
+    while (end < content_type->len && content_type->data[end] != ';' &&
+           content_type->data[end] != ' ' && content_type->data[end] != '\t')
+      end++;
+    return scr_str_new(content_type->data + v, end - v);
+  }
+  return NULL;
+}
+
+static ScrDyn *sf_form_from_multipart(const ScrBytes *bytes, const ScrStr *content_type) {
+  ScrStr *boundary = sf_form_boundary(content_type);
+  if (!boundary || boundary->len == 0) {
+    scr_str_release(boundary);
+    sf_type_error("Failed to parse body as FormData.");
+    return NULL;
+  }
+  const char *data = (const char *)bytes->data;
+  size_t len = bytes->len;
+  size_t blen = boundary->len;
+  if (len < blen + 2 || data[0] != '-' || data[1] != '-' ||
+      memcmp(data + 2, boundary->data, blen) != 0) {
+    scr_str_release(boundary);
+    sf_type_error("Failed to parse body as FormData.");
+    return NULL;
+  }
+  char *delim = malloc(blen + 4);
+  if (!delim) sf_oom();
+  delim[0] = '\r';
+  delim[1] = '\n';
+  delim[2] = '-';
+  delim[3] = '-';
+  memcpy(delim + 4, boundary->data, blen);
+  size_t dlen = blen + 4;
+  scr_str_release(boundary);
+  ScrDyn *pairs = scr_dyn_new_arr();
+  size_t at = 2 + blen;
+  if (at + 1 < len && data[at] == '-' && data[at + 1] == '-') {
+    free(delim);
+    return sf_form_object(pairs);
+  }
+  if (at + 1 >= len || data[at] != '\r' || data[at + 1] != '\n') goto fail;
+  at += 2;
+  while (at <= len) {
+    int header_end = sf_form_find(data, len, at, "\r\n\r\n", 4);
+    if (header_end < 0) goto fail;
+    const char *name = NULL;
+    size_t name_len = 0;
+    if (!sf_form_param(data + at, (size_t)header_end - at, "name", &name, &name_len))
+      goto fail;
+    size_t body_at = (size_t)header_end + 4;
+    int next = sf_form_find(data, len, body_at, delim, dlen);
+    if (next < 0) goto fail;
+    sf_form_push(pairs, scr_str_new(name, name_len),
+                 scr_str_new(data + body_at, (size_t)next - body_at));
+    size_t after = (size_t)next + dlen;
+    if (after + 1 < len && data[after] == '-' && data[after + 1] == '-') {
+      free(delim);
+      return sf_form_object(pairs);
+    }
+    if (after + 1 >= len || data[after] != '\r' || data[after + 1] != '\n') goto fail;
+    at = after + 2;
+  }
+fail:
+  free(delim);
+  scr_dyn_release(pairs);
+  sf_type_error("Failed to parse body as FormData.");
+  return NULL;
+}
+
+static ScrDyn *sf_form_data_from_bytes(const ScrBytes *bytes, const ScrStr *content_type) {
+  if (sf_content_type_is(content_type, "application/x-www-form-urlencoded"))
+    return sf_form_from_urlencoded(bytes);
+  if (sf_content_type_is(content_type, "multipart/form-data"))
+    return sf_form_from_multipart(bytes, content_type);
+  sf_type_error(
+      "Content-Type was not one of \"multipart/form-data\" or \"application/x-www-form-urlencoded\".");
+  return NULL;
+}
+
+static void sf_stream_copy_queued(SfStream *dst, SfStream *src) {
+  for (SfChunk *chunk = src->head; chunk; chunk = chunk->next) {
+    SfChunk *copy = calloc(1, sizeof *copy);
+    if (!copy) sf_oom();
+    copy->value = scr_dyn_retain(chunk->value);
+    if (dst->tail) dst->tail->next = copy;
+    else dst->head = copy;
+    dst->tail = copy;
+    dst->queued++;
+  }
+}
+
+static ScrDyn *sf_response_clone(SfResponse *r) {
+  if (!r->null_body &&
+      (r->body->disturbed || r->body->reader || r->body->internal_lock)) {
+    sf_type_error("Response.clone: Body has already been consumed.");
+    return NULL;
+  }
+  SfStream *body = sf_stream_new_native();
+  if (!r->null_body) {
+    if (r->body->error) {
+      body->error = scr_dyn_retain(r->body->error);
+    } else if (r->body->closed || r->body->close_requested) {
+      sf_stream_copy_queued(body, r->body);
+      body->close_requested = true;
+      if (!body->head) body->closed = true;
+    } else {
+      sf_stream_copy_queued(body, r->body);
+      body->tee_source = r->body;
+      body->tee_link = r->body->tee_head;
+      r->body->tee_head = sf_stream_retain(body);
+    }
+  } else {
+    sf_stream_close(body);
+  }
+  SfResponse *out = calloc(1, sizeof *out);
+  if (!out) sf_oom();
+  out->rc = 1;
+  out->body = body;
+  out->headers = sf_headers_clone(r->headers);
+  out->url = scr_str_retain(r->url);
+  out->status_text = scr_str_retain(r->status_text);
+  out->status = r->status;
+  out->redirected = r->redirected;
+  out->null_body = r->null_body;
+  ScrDyn *dyn = scr_dyn_new_handle(out, SCR_DYNH_FETCH_RESPONSE);
+  sf_response_release(out);
+  return dyn;
+}
+
+static ScrPromise *sf_response_form_data(SfResponse *r) {
+  ScrStr *name = scr_str_new("content-type", 12);
+  ScrStr *content_type = sf_headers_get_value(r->headers, name);
+  scr_str_release(name);
+  if (r->null_body) {
+    ScrPromise *p = scr_promise_new();
+    ScrBytes *empty = scr_bytes_new(SCR_BYTES_U8, 0);
+    ScrDyn *value = sf_form_data_from_bytes(empty, content_type);
+    scr_bytes_release(empty);
+    scr_str_release(content_type);
+    if (scr_exc_pending()) {
+      scr_dyn_release(value);
+      scr_promise_reject_pending(p);
+    } else {
+      scr_promise_fulfill_ref(p, value, &scr_dyn_retain_v, &scr_dyn_release_v, NULL);
+    }
+    return p;
+  }
+  ScrPromise *p = sf_stream_collect(r->body, SF_COLLECT_FORM, content_type);
+  scr_str_release(content_type);
+  return p;
+}
+
 static ScrPromise *sf_response_collect(SfResponse *r, int mode) {
-  if (!r->null_body) return sf_stream_collect(r->body, mode);
+  if (!r->null_body) return sf_stream_collect(r->body, mode, NULL);
 
   /*
    * A null body is not a disturbed empty stream: body stays null,
@@ -3192,6 +3612,29 @@ ScrPromise *scr_fetch_response_array_buffer(ScrDyn *response) {
 
 ScrPromise *scr_fetch_response_bytes(ScrDyn *response) {
   return sf_response_collect_dyn(response, SF_COLLECT_BYTES);
+}
+
+static bool sf_response_handle(const ScrDyn *response) {
+  return response && response->kind == SCR_DYN_HANDLE &&
+         response->v.handle.tag == SCR_DYNH_FETCH_RESPONSE;
+}
+
+ScrDyn *scr_fetch_response_clone(ScrDyn *response) {
+  if (!sf_response_handle(response)) {
+    sf_type_error("Illegal invocation");
+    return NULL;
+  }
+  return sf_response_clone(response->v.handle.ptr);
+}
+
+ScrPromise *scr_fetch_response_form_data(ScrDyn *response) {
+  if (!sf_response_handle(response)) {
+    sf_type_error("Illegal invocation");
+    ScrPromise *p = scr_promise_new();
+    scr_promise_reject_pending(p);
+    return p;
+  }
+  return sf_response_form_data(response->v.handle.ptr);
 }
 
 /* ── fetch transfer ──────────────────────────────────────────────── */
@@ -5653,6 +6096,381 @@ static void sf_teardown(void) {
     sf_signal_drop_reason(sf_reason_signals);
   }
   sf_proxy_snapshot_free();
+}
+
+/* ── navigator.locks.request ─────────────────────────────────────────
+ * Exclusive and shared locks. A free lock runs its callback before
+ * request() returns; a callback promise holds the lock until it settles.
+ * The returned promise is already settled for a sync callback result. */
+
+typedef struct SfLockState SfLockState;
+typedef struct SfLockWaiter SfLockWaiter;
+
+struct SfLockWaiter {
+  bool shared;
+  ScrDyn *callback;
+  ScrPromise *promise;
+  SfLockWaiter *next;
+};
+
+struct SfLockState {
+  ScrStr *name;
+  int exclusive;
+  int shared;
+  bool pumping;
+  SfLockWaiter *queue;
+  SfLockState *next;
+};
+
+static SfLockState *sf_lock_states;
+static bool sf_lock_atexit;
+
+typedef struct SfLockHold {
+  int rc;
+  bool shared;
+  bool holding;
+  bool settled;
+  SfLockState *state;
+  ScrPromise *outer;
+} SfLockHold;
+
+static void sf_lock_pump(SfLockState *state);
+
+static void sf_lock_teardown(void) {
+  while (sf_lock_states) {
+    SfLockState *state = sf_lock_states;
+    sf_lock_states = state->next;
+    while (state->queue) {
+      SfLockWaiter *waiter = state->queue;
+      state->queue = waiter->next;
+      scr_dyn_release(waiter->callback);
+      scr_promise_release(waiter->promise);
+      free(waiter);
+    }
+    scr_str_release(state->name);
+    free(state);
+  }
+}
+
+static SfLockState *sf_lock_state(ScrStr *name) {
+  for (SfLockState *state = sf_lock_states; state; state = state->next) {
+    if (state->name->len == name->len &&
+        memcmp(state->name->data, name->data, name->len) == 0)
+      return state;
+  }
+  SfLockState *state = calloc(1, sizeof *state);
+  if (!state) sf_oom();
+  state->name = scr_str_retain(name);
+  state->next = sf_lock_states;
+  sf_lock_states = state;
+  return state;
+}
+
+static bool sf_lock_truthy(const ScrDyn *value) {
+  if (!value) return false;
+  switch (value->kind) {
+  case SCR_DYN_UNDEF:
+  case SCR_DYN_NULL:
+    return false;
+  case SCR_DYN_BOOL:
+    return value->v.b;
+  case SCR_DYN_NUM:
+    return value->v.num != 0 && !isnan(value->v.num);
+  case SCR_DYN_STR:
+    return value->v.str->len != 0;
+  default:
+    return true;
+  }
+}
+
+/* Node rejects the returned promise. It does not throw before request()
+ * returns, so a missing callback must not stay pending on the caller. */
+static ScrPromise *sf_lock_failed(void) {
+  ScrPromise *outer = scr_promise_new();
+  if (!scr_exc_pending()) sf_type_error("LockManager.request failed");
+  scr_promise_reject_pending(outer);
+  return outer;
+}
+
+static void sf_lock_bad_callback(const ScrDyn *callback) {
+  const char *received = "an instance of Object";
+  char detail[80];
+  if (!callback || callback->kind == SCR_DYN_UNDEF) received = "undefined";
+  else if (callback->kind == SCR_DYN_NULL) received = "null";
+  else if (callback->kind == SCR_DYN_ARR) received = "an instance of Array";
+  else if (callback->kind == SCR_DYN_BOOL) {
+    snprintf(detail, sizeof detail, "type boolean (%s)", callback->v.b ? "true" : "false");
+    received = detail;
+  } else if (callback->kind == SCR_DYN_NUM) {
+    char num[32];
+    size_t n = scr_f64_to_str(callback->v.num, num);
+    snprintf(detail, sizeof detail, "type number (%.*s)", (int)n, num);
+    received = detail;
+  } else if (callback->kind == SCR_DYN_STR) {
+    size_t n = callback->v.str->len < 24 ? callback->v.str->len : 24;
+    snprintf(detail, sizeof detail, "type string ('%.*s')", (int)n, callback->v.str->data);
+    received = detail;
+  }
+  char buf[180];
+  int n = snprintf(buf, sizeof buf,
+                   "The \"callback\" argument must be of type function. Received %s",
+                   received);
+  scr_throw_error_msg_code(SCR_ERR_TYPE, buf, n > 0 ? (size_t)n : 0, "ERR_INVALID_ARG_TYPE");
+}
+
+static bool sf_lock_signal_aborted(const ScrDyn *signal, bool *aborted) {
+  *aborted = false;
+  if (!signal || signal->kind == SCR_DYN_UNDEF) return true;
+  if (signal->kind != SCR_DYN_OBJ && signal->kind != SCR_DYN_ARR &&
+      signal->kind != SCR_DYN_FUNC && signal->kind != SCR_DYN_HANDLE &&
+      signal->kind != SCR_DYN_PROXY) {
+    sf_type_error("signal is not an object.");
+    return false;
+  }
+  if (signal->kind != SCR_DYN_HANDLE || signal->v.handle.tag != SCR_DYNH_ABORT_SIGNAL) {
+    sf_type_error(
+        "The \"options.signal\" property must be an instance of AbortSignal. "
+        "Received an instance of Object");
+    return false;
+  }
+  *aborted = ((SfSignal *)signal->v.handle.ptr)->aborted;
+  return true;
+}
+
+static SfLockHold *sf_lock_hold_retain(SfLockHold *hold) {
+  hold->rc++;
+  return hold;
+}
+
+static void sf_lock_hold_release(SfLockHold *hold) {
+  if (--hold->rc > 0) return;
+  scr_promise_release(hold->outer);
+  free(hold);
+}
+
+static void *sf_lock_hold_retain_v(void *ptr) { return sf_lock_hold_retain(ptr); }
+static void sf_lock_hold_release_v(void *ptr) { sf_lock_hold_release(ptr); }
+
+static void sf_lock_release_hold(SfLockState *state, bool shared) {
+  if (shared) {
+    if (state->shared > 0) state->shared--;
+  } else state->exclusive = 0;
+  sf_lock_pump(state);
+}
+
+static ScrDyn *sf_lock_on_fulfill(ScrClosure *cb, ScrDyn *const *args, size_t argc) {
+  SfLockHold *hold = scr_box_get_ref(cb->caps[0]);
+  if (!hold->settled) {
+    hold->settled = true;
+    ScrDyn *value = argc && args[0] ? scr_dyn_retain(args[0]) : scr_dyn_retain(scr_dyn_undefined());
+    scr_promise_resolve_dyn(hold->outer, value);
+    if (hold->holding) sf_lock_release_hold(hold->state, hold->shared);
+  }
+  return scr_dyn_retain(scr_dyn_undefined());
+}
+
+static ScrDyn *sf_lock_on_reject(ScrClosure *cb, ScrDyn *const *args, size_t argc) {
+  SfLockHold *hold = scr_box_get_ref(cb->caps[0]);
+  if (!hold->settled) {
+    hold->settled = true;
+    sf_reject_promise_reason(hold->outer, argc && args[0] ? args[0] : scr_dyn_undefined());
+    if (hold->holding) sf_lock_release_hold(hold->state, hold->shared);
+  }
+  return scr_dyn_retain(scr_dyn_undefined());
+}
+
+static void sf_lock_follow(SfLockState *state, bool shared, bool holding,
+                           ScrPromise *outer, ScrDyn *result) {
+  SfLockHold *hold = calloc(1, sizeof *hold);
+  if (!hold) sf_oom();
+  hold->rc = 1;
+  hold->shared = shared;
+  hold->holding = holding;
+  hold->state = state;
+  hold->outer = scr_promise_retain(outer);
+  ScrClosure *ok_cb = scr_closure_new((void *)sf_lock_on_fulfill, 1);
+  ok_cb->caps[0] = scr_box_new_obj(&sf_lock_hold_retain_v, &sf_lock_hold_release_v, NULL);
+  scr_box_set_ref(ok_cb->caps[0], sf_lock_hold_retain(hold));
+  ScrDyn *onf = scr_dyn_new_func(ok_cb, sf_lock_on_fulfill, 1, "(value)", "resolve");
+  ScrClosure *bad_cb = scr_closure_new((void *)sf_lock_on_reject, 1);
+  bad_cb->caps[0] = scr_box_new_obj(&sf_lock_hold_retain_v, &sf_lock_hold_release_v, NULL);
+  scr_box_set_ref(bad_cb->caps[0], sf_lock_hold_retain(hold));
+  ScrDyn *onr = scr_dyn_new_func(bad_cb, sf_lock_on_reject, 1, "(reason)", "reject");
+  ScrDyn *reaction = scr_dyn_promise_then(result->v.promise, onf, onr, NULL);
+  scr_dyn_release(reaction);
+  scr_dyn_release(onf);
+  scr_dyn_release(onr);
+  scr_dyn_release(result);
+  sf_lock_hold_release(hold);
+}
+
+static ScrDyn *sf_lock_object(const SfLockState *state, bool shared) {
+  ScrDyn *object = scr_dyn_new_obj();
+  scr_dyn_obj_set(object, "name", 4, scr_dyn_new_str(state->name));
+  const char *mode = shared ? "shared" : "exclusive";
+  ScrStr *mode_str = scr_str_new(mode, strlen(mode));
+  scr_dyn_obj_set(object, "mode", 4, scr_dyn_new_str(mode_str));
+  scr_str_release(mode_str);
+  return object;
+}
+
+static void sf_lock_invoke(SfLockState *state, bool shared, bool holding,
+                           ScrDyn *callback, ScrDyn *lock_arg, ScrPromise *outer) {
+  ScrDyn *args[1] = {lock_arg};
+  ScrDyn *result = scr_dyn_call(callback, args, 1, "LockManager.request callback");
+  scr_dyn_release(lock_arg);
+  if (!result) {
+    if (holding) sf_lock_release_hold(state, shared);
+    scr_promise_reject_pending(outer);
+    return;
+  }
+  if (result->kind == SCR_DYN_PROMISE) {
+    sf_lock_follow(state, shared, holding, outer, result);
+    return;
+  }
+  scr_promise_resolve_dyn(outer, result);
+  if (holding) sf_lock_release_hold(state, shared);
+}
+
+static bool sf_lock_available(const SfLockState *state, bool shared) {
+  if (shared) return state->exclusive == 0;
+  return state->exclusive == 0 && state->shared == 0;
+}
+
+static void sf_lock_grant(SfLockState *state, bool shared, ScrDyn *callback, ScrPromise *outer) {
+  if (shared) state->shared++;
+  else state->exclusive = 1;
+  sf_lock_invoke(state, shared, true, callback, sf_lock_object(state, shared), outer);
+}
+
+static void sf_lock_pump(SfLockState *state) {
+  if (state->pumping) return;
+  state->pumping = true;
+  while (state->queue) {
+    SfLockWaiter *waiter = state->queue;
+    if (!sf_lock_available(state, waiter->shared)) break;
+    state->queue = waiter->next;
+    sf_lock_grant(state, waiter->shared, waiter->callback, waiter->promise);
+    scr_dyn_release(waiter->callback);
+    scr_promise_release(waiter->promise);
+    free(waiter);
+  }
+  state->pumping = false;
+}
+
+ScrPromise *scr_navigator_locks_request(ScrDyn *name_value, ScrDyn *second, ScrDyn *third) {
+  if (!sf_lock_atexit) {
+    sf_lock_atexit = true;
+    scr_atexit(sf_lock_teardown);
+  }
+  ScrDyn *options = scr_dyn_undefined();
+  ScrDyn *callback = scr_dyn_undefined();
+  if (third && third->kind != SCR_DYN_UNDEF) {
+    options = second ? second : scr_dyn_undefined();
+    callback = third;
+  } else if (second && second->kind == SCR_DYN_FUNC) {
+    callback = second;
+  } else if (second && second->kind != SCR_DYN_UNDEF) {
+    options = second;
+  }
+  if (!callback || callback->kind != SCR_DYN_FUNC) {
+    sf_lock_bad_callback(callback);
+    return sf_lock_failed();
+  }
+  bool shared = false;
+  bool if_available = false;
+  const ScrDyn *signal = NULL;
+  ScrDyn *mode = NULL;
+  ScrDyn *signal_value = NULL;
+  ScrDyn *if_value = NULL;
+  ScrDyn *steal = NULL;
+  if (options && options->kind != SCR_DYN_UNDEF && options->kind != SCR_DYN_NULL) {
+    if (options->kind != SCR_DYN_OBJ && options->kind != SCR_DYN_TYPED_REF &&
+        options->kind != SCR_DYN_PROXY) {
+      sf_type_error("The \"options\" argument must be of type object.");
+      return sf_lock_failed();
+    }
+    mode = scr_dyn_obj_read(options, "mode", 4);
+    if (mode && mode->kind != SCR_DYN_UNDEF) {
+      ScrStr *text = scr_dyn_string_coerce_js(mode);
+      if (!text) {
+        scr_dyn_release(mode);
+        return sf_lock_failed();
+      }
+      bool exclusive = text->len == 9 && memcmp(text->data, "exclusive", 9) == 0;
+      shared = text->len == 6 && memcmp(text->data, "shared", 6) == 0;
+      if (!exclusive && !shared) {
+        char buf[160];
+        int n = snprintf(buf, sizeof buf,
+                         "mode '%.*s' is not a valid enum value of type LockMode.",
+                         (int)(text->len < 80 ? text->len : 80), text->data);
+        scr_str_release(text);
+        scr_dyn_release(mode);
+        scr_throw_error_msg(SCR_ERR_TYPE, buf, n > 0 ? (size_t)n : 0);
+        return sf_lock_failed();
+      }
+      scr_str_release(text);
+    }
+    signal_value = scr_dyn_obj_read(options, "signal", 6);
+    if (signal_value && signal_value->kind != SCR_DYN_UNDEF) signal = signal_value;
+    if_value = scr_dyn_obj_read(options, "ifAvailable", 11);
+    if_available = sf_lock_truthy(if_value);
+    steal = scr_dyn_obj_read(options, "steal", 5);
+    if (sf_lock_truthy(steal)) {
+      scr_dyn_release(mode);
+      scr_dyn_release(signal_value);
+      scr_dyn_release(if_value);
+      scr_dyn_release(steal);
+      sf_type_error("LockManager.request steal is not supported");
+      return sf_lock_failed();
+    }
+  }
+  bool aborted = false;
+  if (signal && !sf_lock_signal_aborted(signal, &aborted)) {
+    scr_dyn_release(mode);
+    scr_dyn_release(signal_value);
+    scr_dyn_release(if_value);
+    scr_dyn_release(steal);
+    return sf_lock_failed();
+  }
+  scr_dyn_release(mode);
+  scr_dyn_release(signal_value);
+  scr_dyn_release(if_value);
+  scr_dyn_release(steal);
+  if (scr_exc_pending()) return sf_lock_failed();
+  ScrStr *name = name_value ? scr_dyn_string_coerce_js(name_value) : NULL;
+  if (!name) {
+    if (!scr_exc_pending()) sf_type_error("The \"name\" argument must be a string.");
+    return sf_lock_failed();
+  }
+  SfLockState *state = sf_lock_state(name);
+  scr_str_release(name);
+  ScrPromise *outer = scr_promise_new();
+  if (aborted) {
+    scr_throw_domex("AbortError", "This operation was aborted");
+    scr_promise_reject_pending(outer);
+    return outer;
+  }
+  if (if_available && !sf_lock_available(state, shared)) {
+    sf_lock_invoke(state, shared, false, callback, scr_dyn_retain(scr_dyn_new_null()), outer);
+    return outer;
+  }
+  if (!sf_lock_available(state, shared)) {
+    SfLockWaiter *waiter = calloc(1, sizeof *waiter);
+    if (!waiter) sf_oom();
+    waiter->shared = shared;
+    waiter->callback = scr_dyn_retain(callback);
+    waiter->promise = scr_promise_retain(outer);
+    if (!state->queue) state->queue = waiter;
+    else {
+      SfLockWaiter *tail = state->queue;
+      while (tail->next) tail = tail->next;
+      tail->next = waiter;
+    }
+    return outer;
+  }
+  sf_lock_grant(state, shared, callback, outer);
+  return outer;
 }
 
 void scr_fetch_install(void) {

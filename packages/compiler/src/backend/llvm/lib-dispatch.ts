@@ -316,6 +316,7 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
     case "fetch":
     case "abort":
     case "json":
+    case "navigator":
       return host.emitWebLibCall(e);
     case "dyn":
     case "global":

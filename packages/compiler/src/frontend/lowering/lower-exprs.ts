@@ -1618,18 +1618,24 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       const ns = lowerNsIdentifierValue(lowerer, expr);
       if (ns) return ns;
     }
-    // A free name in JavaScript is a global lookup. The fixed library set
-    // has no DOM `location`, so the checker has no symbol, and Node throws
-    // ReferenceError if the read runs. Effect guards it with
-    // `"location" in globalThis`, which is false on Node.
-    if (isJsSourceFile(expr.getSourceFile()) && lowerer.resolveValueSymbol(expr) === null) {
-      return {
-        kind: "libCall",
-        fn: "global.undefRead",
-        args: [{ kind: "strLit", value: expr.text, type: STRING, loc }],
-        type: DYN,
-        loc,
-      };
+    // A free name in JavaScript is a global lookup. Node has no DOM
+    // `location`: a bare read throws ReferenceError, and Effect guards it
+    // with `"location" in globalThis`, which is false on Node. @types/node
+    // still declares the name, so a stdlib symbol must take the same
+    // missing-global read as a name the checker does not know.
+    if (isJsSourceFile(expr.getSourceFile())) {
+      const resolved = lowerer.resolveValueSymbol(expr);
+      const domLocation =
+        expr.text === "location" && (resolved === null || lowerer.isStdlibSymbol(resolved));
+      if (resolved === null || domLocation) {
+        return {
+          kind: "libCall",
+          fn: "global.undefRead",
+          args: [{ kind: "strLit", value: expr.text, type: STRING, loc }],
+          type: DYN,
+          loc,
+        };
+      }
     }
     // Preflight guarantees no unresolved identifiers; anything else here
     // is a blocked declaration's binding (the SC2004 cascade) or a
@@ -1985,6 +1991,19 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
     }
     if (lowerer.stdlibGlobalMember(expr, "globalThis") === "console") {
       return { kind: "libCall", fn: "console.native", args: [], type: DYN, loc };
+    }
+    // `crypto.subtle` and `globalThis.crypto.subtle`, including Effect's
+    // optional `globalThis.crypto?.subtle`. The crypto global is the
+    // native WebCrypto object, whose subtle member is the digest object.
+    // A destructure of the same member still binds the identity token.
+    if (expr.name.text === "subtle" && lowerer.isStdlibGlobal(expr.expression, "crypto")) {
+      return {
+        kind: "dynKeyGet",
+        value: { kind: "libCall", fn: "crypto.native", args: [], type: DYN, loc },
+        key: { kind: "strLit", value: "subtle", type: STRING, loc },
+        type: DYN,
+        loc,
+      };
     }
     if (lowerer.stdlibGlobalMember(expr, "globalThis") === "Array") {
       return { kind: "libCall", fn: "dyn.arrayConstructor", args: [], type: DYN, loc };

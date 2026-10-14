@@ -676,7 +676,12 @@ export function lowerStaticResponseCall(lowerer: Lowerer, call: ts.CallExpressio
   const member = staticResponseMemberName(lowerer, access);
   if (
     access.questionDotToken ||
-    (member !== "json" && member !== "text" && member !== "bytes" && member !== "arrayBuffer") ||
+    (member !== "json" &&
+      member !== "text" &&
+      member !== "bytes" &&
+      member !== "arrayBuffer" &&
+      member !== "clone" &&
+      member !== "formData") ||
     call.arguments.length !== 0
   ) {
     return null;
@@ -686,8 +691,26 @@ export function lowerStaticResponseCall(lowerer: Lowerer, call: ts.CallExpressio
   if (!sym || sym.name !== "Response" || !lowerer.isStdlibSymbol(sym)) return null;
   const recv = lowerer.lowerExpr(access.expression);
   if (recv.type.kind !== "dyn") return null;
-  return lowerStaticFixedFetchMethodCall(lowerer, call, access, member, recv, [], (receiver) =>
-    member === "text" || member === "bytes"
+  return lowerStaticFixedFetchMethodCall(lowerer, call, access, member, recv, [], (receiver) => {
+    if (member === "clone") {
+      return {
+        kind: "libCall",
+        fn: "fetch.responseClone",
+        args: [receiver],
+        type: DYN,
+        loc: locOf(call),
+      };
+    }
+    if (member === "formData") {
+      return {
+        kind: "libCall",
+        fn: "fetch.responseFormData",
+        args: [receiver],
+        type: { kind: "promise", inner: DYN },
+        loc: locOf(call),
+      };
+    }
+    return member === "text" || member === "bytes"
       ? {
           kind: "libCall",
           fn: member === "text" ? "fetch.responseText" : "fetch.responseBytes",
@@ -704,8 +727,8 @@ export function lowerStaticResponseCall(lowerer: Lowerer, call: ts.CallExpressio
           args: [receiver],
           type: { kind: "promise", inner: DYN },
           loc: locOf(call),
-        },
-  );
+        };
+  });
 }
 
 type StaticResponseAccess = ts.PropertyAccessExpression | ts.ElementAccessExpression;
@@ -2127,6 +2150,82 @@ export function lowerStaticReadableStreamNew(
   };
 }
 
+/** `globalThis.Function(...)` builds a function from source text. That is
+ * the eval stance: the call throws, and Effect's schema JIT treats the
+ * throw as "compilation unavailable" and keeps the interpreted parser.
+ * Interpreted and JIT results match for the public decode probes. */
+export function lowerBlockedFunctionCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
+  if (access.questionDotToken || call.questionDotToken) return null;
+  if (stdlibGlobalNameOf(lowerer, access) !== "Function") return null;
+  const loc = locOf(call);
+  if (call.arguments.some(ts.isSpreadElement)) {
+    lowerer.noLowering("Function with spread arguments", call);
+  }
+  const args = call.arguments.map((argument) => lowerer.lowerExpr(argument));
+  const refused = nodeThrowExpr(1, "", "Function is not available", DYN, loc);
+  if (args.length === 0) return refused;
+  return {
+    kind: "seqExpr",
+    stmts: args.map((expr): IrStmt => ({ kind: "exprStmt", expr, loc: expr.loc })),
+    result: refused,
+    type: DYN,
+    loc,
+  };
+}
+
+/** `navigator.locks.request(name, callback)` and the options form.
+ * Effect's indexed-db journal calls the three-argument shape. Missing
+ * arguments are undefined so the runtime can throw Node's callback error. */
+export function lowerNavigatorLocksRequest(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+): IrExpr | null {
+  if (access.questionDotToken || call.questionDotToken) return null;
+  if (access.name.text !== "request") return null;
+  const locks = access.expression;
+  if (
+    !ts.isPropertyAccessExpression(locks) ||
+    locks.questionDotToken ||
+    locks.name.text !== "locks" ||
+    !lowerer.isStdlibGlobal(locks.expression, "navigator")
+  ) {
+    return null;
+  }
+  const loc = locOf(call);
+  if (call.arguments.some(ts.isSpreadElement) || call.arguments.length > 3) {
+    lowerer.noLowering(
+      "navigator.locks.request with this argument list",
+      call,
+      "request(name, callback) and request(name, options, callback) are the lowered forms",
+    );
+  }
+  const asDyn = (node: ts.Expression | undefined): IrExpr => {
+    if (!node) return dynUndefinedExpr(loc);
+    const value = lowerer.lowerExpr(node);
+    if (value.type.kind === "dyn") return value;
+    const coerced = lowerer.coerceToExpected(value, DYN);
+    if (coerced.type.kind !== "dyn") {
+      lowerer.noLowering(
+        `navigator.locks.request with a '${lowerer.fmt(value.type)}' argument`,
+        node,
+      );
+    }
+    return coerced;
+  };
+  return {
+    kind: "libCall",
+    fn: "navigator.locksRequest",
+    args: [asDyn(call.arguments[0]), asDyn(call.arguments[1]), asDyn(call.arguments[2])],
+    type: { kind: "promise", inner: DYN },
+    loc,
+  };
+}
+
 /** Evaluate constructor arguments, then refuse. These globals typecheck
  * under `@types/node` and Effect mentions them from uncalled callbacks.
  * Opening a socket or a compression stream has no native lowering. */
@@ -2140,10 +2239,10 @@ function lowerRefusedWebConstructor(
   const args = expr.arguments ?? [];
   if (args.length > 2 || args.some((argument) => ts.isSpreadElement(argument))) return null;
   const loc = locOf(expr);
-  const lowered = args.map((argument) =>
-    lowerer.coerceToExpected(lowerer.lowerExpr(argument), DYN),
-  );
-  if (lowered.some((value) => value.type.kind !== "dyn")) return null;
+  // Arguments keep their real types. `new globalThis.WebSocket(url, protocols)`
+  // passes a string URL; requiring a dyn argument dropped the refusal and
+  // the generic constructor path then reported `new undefined`.
+  const lowered = args.map((argument) => lowerer.lowerExpr(argument));
   const refused = nodeThrowExpr(1, "", message, DYN, loc);
   if (lowered.length === 0) return refused;
   return {

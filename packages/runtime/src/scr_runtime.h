@@ -5892,6 +5892,10 @@ ScrPromise *scr_fetch_response_json(ScrDyn *response); /* +1 promise<dyn> */
 ScrPromise *scr_fetch_response_text(ScrDyn *response); /* +1 promise<dyn> */
 ScrPromise *scr_fetch_response_array_buffer(ScrDyn *response); /* +1 promise<dyn> */
 ScrPromise *scr_fetch_response_bytes(ScrDyn *response); /* +1 promise<dyn> */
+ScrDyn *scr_fetch_response_clone(ScrDyn *response); /* +1 Response handle, or NULL pending */
+ScrPromise *scr_fetch_response_form_data(ScrDyn *response); /* +1 promise<dyn> */
+/* +1 promise, or NULL with a pending exception (bad callback / signal). */
+ScrPromise *scr_navigator_locks_request(ScrDyn *name, ScrDyn *second, ScrDyn *third);
 ScrDyn *scr_fetch_abort_controller_new(void); /* +1 AbortController handle */
 /* Borrowed number; +1 AbortSignal handle or NULL pending. */
 ScrDyn *scr_fetch_abort_timeout(ScrDyn *delay);

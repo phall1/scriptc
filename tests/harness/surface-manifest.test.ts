@@ -455,7 +455,7 @@ test("unimplemented Response and ReadableStream calls stay fenced", () => {
     const coverage = analyze(file, {}).coverage;
     expect(coverage.preflightFailed).toBe(false);
     expect([...new Set(coverage.diagnostics.map((d) => d.code))]).toEqual(["SC2020"]);
-    expect(coverage.diagnostics.filter((d) => d.code === "SC2020")).toHaveLength(5);
+    expect(coverage.diagnostics.filter((d) => d.code === "SC2020")).toHaveLength(3);
   }
 });
 
