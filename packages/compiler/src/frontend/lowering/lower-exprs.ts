@@ -1608,6 +1608,19 @@ function lowerExprInner(lowerer: Lowerer, expr: ts.Expression): IrExpr {
       const ns = lowerNsIdentifierValue(lowerer, expr);
       if (ns) return ns;
     }
+    // A free name in JavaScript is a global lookup. The fixed library set
+    // has no DOM `location`, so the checker has no symbol, and Node throws
+    // ReferenceError if the read runs. Effect guards it with
+    // `"location" in globalThis`, which is false on Node.
+    if (isJsSourceFile(expr.getSourceFile()) && lowerer.resolveValueSymbol(expr) === null) {
+      return {
+        kind: "libCall",
+        fn: "global.undefRead",
+        args: [{ kind: "strLit", value: expr.text, type: STRING, loc }],
+        type: DYN,
+        loc,
+      };
+    }
     // Preflight guarantees no unresolved identifiers; anything else here
     // is a blocked declaration's binding (the SC2004 cascade) or a
     // binding form we don't model yet.

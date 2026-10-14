@@ -1108,3 +1108,30 @@ for (const bytes of [[0x05], [0x80, 0x01], [0x01], [0xff, 0x01]]) {
 test("a while-true bigint decoder keeps its return kind", async () => {
   await matchesNode("reader-varint-fixture", readerVarintProbe, readerVarintProgram);
 });
+
+const locationProbe = `
+export function baseUrl() {
+  if ("location" in globalThis && globalThis.location !== undefined && globalThis.location.origin !== undefined && globalThis.location.pathname !== undefined) {
+    return location.origin + location.pathname;
+  }
+  return undefined;
+}
+export function readLocation() {
+  try {
+    return String(location);
+  } catch (error) {
+    return error.name + ":" + error.message;
+  }
+}
+`;
+
+const locationProgram = `
+import { baseUrl, readLocation } from "location-fixture/probe.js";
+
+console.log(String(baseUrl()));
+console.log(readLocation());
+`;
+
+test("a guarded bare location matches Node", async () => {
+  await matchesNode("location-fixture", locationProbe, locationProgram);
+});
