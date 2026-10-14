@@ -462,6 +462,29 @@ test("a conditional spread omits an optional any field", async () => {
   await matchesNode("prompt-max-fixture", promptMaxProbe, promptMaxProgram);
 });
 
+const shorthandCaptureProbe = `
+export function formatObj(value, options) {
+  return String(value) + ":" + String(options.space);
+}
+export function run(n) {
+  const format = (quoteValue, space) => (value) => {
+    const formatUnknown = (v) => typeof v === "string" ? v : formatObj(v, { space });
+    return formatUnknown(value) + quoteValue("q");
+  };
+  return format((s) => "[" + s + "]", n)(1);
+}
+`;
+
+const shorthandCaptureProgram = `
+import { run } from "shorthand-capture-fixture/probe.js";
+
+console.log(run("-"));
+`;
+
+test("a shorthand property captures an outer parameter", async () => {
+  await matchesNode("shorthand-capture-fixture", shorthandCaptureProbe, shorthandCaptureProgram);
+});
+
 const searchProgram = `
 console.log("a.b".search("."));
 console.log("abc".search("b"));

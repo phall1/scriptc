@@ -1989,7 +1989,13 @@ export function implicitLocalFnNodeOf(
         return;
       }
       if (ts.isIdentifier(n)) {
-        const s = lowerer.checker.getSymbolAtLocation(n);
+        // `{ space }` names the property. The value binding is the captured
+        // parameter; the property symbol's declaration sits inside this
+        // initializer and would hide the capture.
+        let s = lowerer.checker.getSymbolAtLocation(n);
+        if (n.parent && ts.isShorthandPropertyAssignment(n.parent) && n.parent.name === n) {
+          s = lowerer.checker.getShorthandAssignmentValueSymbol(n.parent) ?? s;
+        }
         const d = s ? lowerer.checker.valueDeclarationOf(s) : undefined;
         if (
           d &&
